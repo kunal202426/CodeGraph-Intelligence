@@ -1,1 +1,323 @@
-"""Python parser via tree-sitter. Lands at T1.3."""
+"""Python parser — tree-sitter recursive walk → UIREntity stream.
+
+Emits one Module entity per file plus one Function/Class/Method per top-level
+or class-scoped definition. Nested functions inside other functions are NOT
+emitted (deliberate MVP scope; revisit in Phase 2+).
+
+The accompanying `queries/python.scm` documents the node types we care about
+but is not executed — recursive walk is cleaner for tracking the parent-class
+scope chain that drives qualified-name and parent_id.
+"""
+
+from __future__ import annotations
+
+import inspect
+import warnings
+from pathlib import Path
+from typing import ClassVar
+
+# tree-sitter-languages internally calls a deprecated tree-sitter API; the
+# FutureWarning is noisy and unactionable until upstream migrates.
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", category=FutureWarning)
+    from tree_sitter import Node, Parser
+    from tree_sitter_languages import get_language
+
+from codegraph.parsers.base import ParseResult
+from codegraph.uir import (
+    Edge,
+    EntityType,
+    Language,
+    UIREntity,
+    hash_source,
+    make_entity_id,
+)
+
+
+class PythonParser:
+    """Tree-sitter Python parser. Stateless; safe to reuse across files."""
+
+    language: ClassVar[Language] = Language.PYTHON
+    _parser: ClassVar[Parser | None] = None
+
+    @classmethod
+    def _ts_parser(cls) -> Parser:
+        if cls._parser is None:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", category=FutureWarning)
+                lang = get_language("python")
+            p = Parser()
+            p.set_language(lang)
+            cls._parser = p
+        return cls._parser
+
+    # ------------------------------------------------------------------
+    # Public API
+
+    def parse(self, path: Path, source: str) -> ParseResult:
+        rel_path = str(path).replace("\\", "/")
+        source_bytes = source.encode("utf-8")
+        tree = self._ts_parser().parse(source_bytes)
+        root = tree.root_node
+
+        entities: list[UIREntity] = []
+        edges: list[Edge] = []
+        errors: list[str] = []
+
+        # Module entity for the whole file.
+        module_name = self._module_name_from_path(rel_path)
+        module_qname = module_name
+        module_id = make_entity_id(Language.PYTHON, rel_path, module_qname)
+        module_docstring = self._docstring_from_block(root, source_bytes)
+        entities.append(
+            UIREntity(
+                entity_id=module_id,
+                type=EntityType.MODULE,
+                name=module_name,
+                qualified_name=module_qname,
+                language=Language.PYTHON,
+                file=rel_path,
+                start_line=1,
+                end_line=max(root.end_point[0] + 1, 1),
+                start_col=0,
+                end_col=root.end_point[1],
+                raw_source=source,
+                docstring=module_docstring,
+                signature=None,
+                is_exported=not module_name.startswith("_"),
+                is_async=False,
+                parent_id=None,
+                hash=hash_source(source),
+            )
+        )
+
+        if root.has_error:
+            errors.append("tree-sitter reported parse errors (entities still emitted)")
+
+        self._walk(
+            root,
+            source_bytes,
+            rel_path,
+            scope=[],
+            parent_id=module_id,
+            entities=entities,
+        )
+
+        return ParseResult(entities=entities, edges=edges, errors=errors)
+
+    # ------------------------------------------------------------------
+    # Tree walk
+
+    def _walk(
+        self,
+        node: Node,
+        source: bytes,
+        file: str,
+        *,
+        scope: list[str],
+        parent_id: str | None,
+        entities: list[UIREntity],
+    ) -> None:
+        """Walk top-level children. Descends into class bodies only — not function bodies."""
+        for child in node.children:
+            kind = child.type
+            if kind == "decorated_definition":
+                inner = child.child_by_field_name("definition")
+                if inner is None:
+                    continue
+                emitted_id = self._emit(
+                    inner_def=inner,
+                    span_node=child,
+                    source=source,
+                    file=file,
+                    scope=scope,
+                    parent_id=parent_id,
+                    entities=entities,
+                )
+                if inner.type == "class_definition" and emitted_id is not None:
+                    self._descend_into_class(inner, source, file, scope, emitted_id, entities)
+            elif kind == "class_definition":
+                emitted_id = self._emit(
+                    inner_def=child,
+                    span_node=child,
+                    source=source,
+                    file=file,
+                    scope=scope,
+                    parent_id=parent_id,
+                    entities=entities,
+                )
+                if emitted_id is not None:
+                    self._descend_into_class(child, source, file, scope, emitted_id, entities)
+            elif kind == "function_definition":
+                self._emit(
+                    inner_def=child,
+                    span_node=child,
+                    source=source,
+                    file=file,
+                    scope=scope,
+                    parent_id=parent_id,
+                    entities=entities,
+                )
+            elif kind == "block":
+                # `block` wraps a class/function body's statements — recurse.
+                self._walk(
+                    child,
+                    source,
+                    file,
+                    scope=scope,
+                    parent_id=parent_id,
+                    entities=entities,
+                )
+            # Other top-level statements (assignments, imports, if-blocks, …)
+            # are ignored at T1.3; imports are extracted in T2.1.
+
+    def _descend_into_class(
+        self,
+        class_def: Node,
+        source: bytes,
+        file: str,
+        scope: list[str],
+        class_entity_id: str,
+        entities: list[UIREntity],
+    ) -> None:
+        name = self._text(class_def.child_by_field_name("name"), source)
+        if not name:
+            return
+        new_scope = [*scope, name]
+        body = class_def.child_by_field_name("body")
+        if body is None:
+            return
+        self._walk(
+            body,
+            source,
+            file,
+            scope=new_scope,
+            parent_id=class_entity_id,
+            entities=entities,
+        )
+
+    # ------------------------------------------------------------------
+    # Emit one entity
+
+    def _emit(
+        self,
+        *,
+        inner_def: Node,
+        span_node: Node,
+        source: bytes,
+        file: str,
+        scope: list[str],
+        parent_id: str | None,
+        entities: list[UIREntity],
+    ) -> str | None:
+        name = self._text(inner_def.child_by_field_name("name"), source)
+        if not name:
+            return None
+
+        qname = ".".join([*scope, name]) if scope else name
+        entity_type = self._entity_type(inner_def, scope)
+
+        raw_source = source[span_node.start_byte : span_node.end_byte].decode(
+            "utf-8", errors="replace"
+        )
+        signature = self._signature(inner_def, source)
+        docstring = self._docstring_from_def(inner_def, source)
+        is_async = self._is_async(inner_def)
+        entity_id = make_entity_id(Language.PYTHON, file, qname)
+
+        entities.append(
+            UIREntity(
+                entity_id=entity_id,
+                type=entity_type,
+                name=name,
+                qualified_name=qname,
+                language=Language.PYTHON,
+                file=file,
+                start_line=span_node.start_point[0] + 1,
+                end_line=span_node.end_point[0] + 1,
+                start_col=span_node.start_point[1],
+                end_col=span_node.end_point[1],
+                raw_source=raw_source,
+                docstring=docstring,
+                signature=signature,
+                is_exported=not name.startswith("_"),
+                is_async=is_async,
+                parent_id=parent_id,
+                hash=hash_source(raw_source),
+            )
+        )
+        return entity_id
+
+    # ------------------------------------------------------------------
+    # Helpers
+
+    @staticmethod
+    def _entity_type(inner_def: Node, scope: list[str]) -> EntityType:
+        if inner_def.type == "class_definition":
+            return EntityType.CLASS
+        # function_definition
+        return EntityType.METHOD if scope else EntityType.FUNCTION
+
+    @staticmethod
+    def _is_async(inner_def: Node) -> bool:
+        if inner_def.type != "function_definition":
+            return False
+        return any(c.type == "async" for c in inner_def.children)
+
+    @staticmethod
+    def _text(node: Node | None, source: bytes) -> str | None:
+        if node is None:
+            return None
+        return source[node.start_byte : node.end_byte].decode("utf-8", errors="replace")
+
+    @staticmethod
+    def _signature(def_node: Node, source: bytes) -> str | None:
+        """Signature = everything from the def keyword up to (but not including) the body."""
+        body = def_node.child_by_field_name("body")
+        if body is None:
+            return None
+        raw = source[def_node.start_byte : body.start_byte].decode("utf-8", errors="replace")
+        return raw.rstrip().rstrip(":").rstrip()
+
+    @classmethod
+    def _docstring_from_def(cls, def_node: Node, source: bytes) -> str | None:
+        body = def_node.child_by_field_name("body")
+        return cls._docstring_from_block(body, source) if body is not None else None
+
+    @staticmethod
+    def _docstring_from_block(block: Node, source: bytes) -> str | None:
+        """Return the docstring if the first statement of `block` is a bare string."""
+        for child in block.children:
+            if child.type == "expression_statement":
+                for cc in child.children:
+                    if cc.type == "string":
+                        text = source[cc.start_byte : cc.end_byte].decode("utf-8", errors="replace")
+                        return _strip_string_literal(text)
+                return None
+            if child.type in ("comment", "decorator"):
+                continue
+            # First non-comment statement is not a bare string → no docstring.
+            return None
+        return None
+
+    @staticmethod
+    def _module_name_from_path(rel_path: str) -> str:
+        # Strip extension; convert path separators to dots.
+        # e.g. "auth/login.py" → "auth.login"
+        stem = rel_path.removesuffix(".py").removesuffix(".pyi")
+        return stem.replace("/", ".")
+
+
+def _strip_string_literal(text: str) -> str:
+    """Remove Python string prefix + outer quotes, then dedent via inspect.cleandoc."""
+    s = text.strip()
+    # Strip string prefix (r, b, u, f, and combinations).
+    i = 0
+    while i < len(s) and s[i] in "rRbBuUfF":
+        i += 1
+    s = s[i:]
+    for quote in ('"""', "'''", '"', "'"):
+        if s.startswith(quote) and s.endswith(quote) and len(s) >= 2 * len(quote):
+            inner = s[len(quote) : -len(quote)]
+            return inspect.cleandoc(inner)
+    return inspect.cleandoc(s)
