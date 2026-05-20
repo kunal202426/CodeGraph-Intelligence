@@ -3,7 +3,7 @@
 ## Current
 
 - **Phase:** 1 — Thin Vertical Slice
-- **Next task:** T1.2 — IParser protocol (`packages/codegraph/parsers/base.py`)
+- **Next task:** T1.3 — Python parser emits entities via tree-sitter
 - **Last session:** 2026-05-21
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -17,10 +17,10 @@
 - [x] T0.5 — Pytest skeleton + GitHub Actions CI (3 smoke tests passing)
 - [x] T0.6 — Per-phase plan files in `plan/` (10 files, 3.5KB avg, 8.5KB max)
 
-### Phase 1 — Thin Vertical Slice [IN PROGRESS 1/9]
+### Phase 1 — Thin Vertical Slice [IN PROGRESS 2/9]
 - [x] T1.1 — UIREntity, Edge, EntityType, Language, make_entity_id, hash_source (19 tests)
-- [ ] T1.2 — IParser protocol + ParseResult                       ← NEXT
-- [ ] T1.3 — Python parser emits entities via tree-sitter
+- [x] T1.2 — IParser Protocol + ParseResult envelope
+- [ ] T1.3 — Python parser emits entities via tree-sitter         ← NEXT
 - [ ] T1.4 — DuckDB schema + GraphStore
 - [ ] T1.5 — Bulk + idempotent writer
 - [ ] T1.6 — Walker with .gitignore + language detection
