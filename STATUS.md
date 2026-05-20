@@ -3,7 +3,7 @@
 ## Current
 
 - **Phase:** 1 — Thin Vertical Slice
-- **Next task:** T1.1 — UIR dataclasses (`packages/codegraph/uir.py`)
+- **Next task:** T1.2 — IParser protocol (`packages/codegraph/parsers/base.py`)
 - **Last session:** 2026-05-21
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -17,8 +17,16 @@
 - [x] T0.5 — Pytest skeleton + GitHub Actions CI (3 smoke tests passing)
 - [x] T0.6 — Per-phase plan files in `plan/` (10 files, 3.5KB avg, 8.5KB max)
 
-### Phase 1 — Thin Vertical Slice [PENDING]
-9 atomic tasks (T1.1–T1.9). See BUILD_PLAN.md.
+### Phase 1 — Thin Vertical Slice [IN PROGRESS 1/9]
+- [x] T1.1 — UIREntity, Edge, EntityType, Language, make_entity_id, hash_source (19 tests)
+- [ ] T1.2 — IParser protocol + ParseResult                       ← NEXT
+- [ ] T1.3 — Python parser emits entities via tree-sitter
+- [ ] T1.4 — DuckDB schema + GraphStore
+- [ ] T1.5 — Bulk + idempotent writer
+- [ ] T1.6 — Walker with .gitignore + language detection
+- [ ] T1.7 — Wire CLI `index` end-to-end
+- [ ] T1.8 — Wire CLI `search` (literal)
+- [ ] T1.9 — E2E smoke test
 
 ### Phase 2 — Multi-file + TypeScript [PENDING]
 ### Phase 3 — Embeddings + Semantic Search [PENDING]
