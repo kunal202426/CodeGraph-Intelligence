@@ -2,20 +2,20 @@
 
 ## Current
 
-- **Phase:** 0 — Project Setup
-- **Next task:** T0.6 — Per-phase plan files in `plan/` directory
+- **Phase:** 1 — Thin Vertical Slice
+- **Next task:** T1.1 — UIR dataclasses (`packages/codegraph/uir.py`)
 - **Last session:** 2026-05-21
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
 ## Phase progress
 
-### Phase 0 — Setup [IN PROGRESS 5/6]
+### Phase 0 — Setup [DONE 6/6]
 - [x] T0.1 — Init Python project with uv (pyproject.toml, .gitignore, .python-version, uv.lock)
 - [x] T0.2 — AGENTS.md, STATUS.md, BUILD_PLAN.md, source spec at root
 - [x] T0.3 — Scaffold package layout (25 stub modules under packages/codegraph/)
 - [x] T0.4 — CLI entry point with 8 command stubs + --version
 - [x] T0.5 — Pytest skeleton + GitHub Actions CI (3 smoke tests passing)
-- [ ] T0.6 — Per-phase plan files in `plan/` directory             ← NEXT
+- [x] T0.6 — Per-phase plan files in `plan/` (10 files, 3.5KB avg, 8.5KB max)
 
 ### Phase 1 — Thin Vertical Slice [PENDING]
 9 atomic tasks (T1.1–T1.9). See BUILD_PLAN.md.

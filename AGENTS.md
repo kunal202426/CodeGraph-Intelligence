@@ -11,11 +11,12 @@ Full rationale in [BUILD_PLAN.md](BUILD_PLAN.md) §1.
 ## Resume protocol (do this first in every session)
 
 1. Read [STATUS.md](STATUS.md) — current phase + next atomic task.
-2. Read [BUILD_PLAN.md](BUILD_PLAN.md) §"PHASE-BY-PHASE DETAIL" for the next task's block (files, verify cmd, commit msg).
+2. Read `plan/<NN>-*.md` for the current phase — task definitions (files, verify cmd, commit msg). Each plan file is 1–8KB and self-contained. **Do NOT load BUILD_PLAN.md** unless you need full rationale.
 3. Run `uv run pytest -x` to confirm green baseline.
 4. Execute exactly that one task — no scope creep.
 5. Update [STATUS.md](STATUS.md): mark task done, set next task, note blockers.
 6. Commit: message MUST start with task ID (e.g. `T2.4: ...`).
+7. `git push` to origin/main.
 
 ## Conventions
 
@@ -33,7 +34,8 @@ Full rationale in [BUILD_PLAN.md](BUILD_PLAN.md) §1.
 | What | Where |
 |---|---|
 | Progress + next task | [STATUS.md](STATUS.md) |
-| Full build plan (the source of truth for tasks) | [BUILD_PLAN.md](BUILD_PLAN.md) |
+| Current phase tasks (small, load this) | `plan/<NN>-*.md` |
+| Full build plan (only for full rationale / replan) | [BUILD_PLAN.md](BUILD_PLAN.md) |
 | Original 89KB spec (DO NOT re-read unless replanning) | [CodeGraph_Intelligence_Platform_Detailed.md](CodeGraph_Intelligence_Platform_Detailed.md) |
 | UIR schema (the contract) | `packages/codegraph/uir.py` (lands at T1.1) |
 | DuckDB schema (DDL) | `packages/codegraph/graph/schema.sql` (lands at T1.4) |
