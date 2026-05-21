@@ -15,6 +15,7 @@ from codegraph.graph.queries import search_literal
 from codegraph.graph.resolver import resolve_symbols
 from codegraph.graph.store import GraphStore
 from codegraph.parsers.python import PythonParser
+from codegraph.parsers.typescript import TypeScriptParser
 from codegraph.uir import Language, hash_source
 from codegraph.walker import walk
 
@@ -28,10 +29,13 @@ console = Console()
 
 DEFAULT_DB = Path(".codegraph/graph.duckdb")
 
-# Map Language → parser instance. PythonParser is stateless; one instance is fine.
-# TypeScript parser is added at T2.4.
+# Map Language → parser instance. Parsers are stateless; one instance each.
+# TypeScriptParser handles TS / TSX / JS / JSX via per-file grammar selection.
+_TS_PARSER = TypeScriptParser()
 _LANGUAGE_PARSERS = {
     Language.PYTHON: PythonParser(),
+    Language.TYPESCRIPT: _TS_PARSER,
+    Language.JAVASCRIPT: _TS_PARSER,
 }
 
 
@@ -164,10 +168,7 @@ def index(
             f"{stats.external} external, {stats.wildcard} wildcard.[/dim]"
         )
     if skipped_lang:
-        console.print(
-            f"[dim]Skipped {skipped_lang} files with unsupported languages "
-            f"(TypeScript lands at T2.4).[/dim]"
-        )
+        console.print(f"[dim]Skipped {skipped_lang} files with unsupported languages.[/dim]")
     if parse_errors:
         console.print(f"[yellow]{parse_errors} files had errors (see above).[/yellow]")
     if parsed_files == 0 and unchanged_files == 0 and skipped_lang == 0:

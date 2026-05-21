@@ -66,25 +66,31 @@ def test_index_is_idempotent(runner: CliRunner, tmp_path: Path) -> None:
         store.close()
 
 
-def test_index_skips_unsupported_languages(runner: CliRunner, tmp_path: Path) -> None:
+def test_index_indexes_python_and_typescript(runner: CliRunner, tmp_path: Path) -> None:
+    """T2.4: TS files index alongside Python files in the same DB."""
     repo = tmp_path / "repo"
     _make_pyrepo(
         repo,
         {
             "main.py": "def foo(): return 1\n",
-            "front/index.ts": "export const x = 1;\n",
+            "front/index.ts": "export function bar() { return 1; }\n",
         },
     )
     db = tmp_path / "graph.duckdb"
     result = runner.invoke(app, ["index", str(repo), "--db", str(db)])
     assert result.exit_code == 0
-    assert "Skipped 1 files" in result.stdout
     store = GraphStore(db)
     try:
-        # Only the Python file landed.
-        files = [row[0] for row in store.conn.execute("SELECT path FROM files").fetchall()]
+        files = {row[0] for row in store.conn.execute("SELECT path FROM files").fetchall()}
         assert "main.py" in files
-        assert "front/index.ts" not in files
+        assert "front/index.ts" in files
+        # Both should produce entities (modules + decls).
+        langs = {
+            row[0]
+            for row in store.conn.execute("SELECT DISTINCT language FROM entities").fetchall()
+        }
+        assert "python" in langs
+        assert "typescript" in langs
     finally:
         store.close()
 
