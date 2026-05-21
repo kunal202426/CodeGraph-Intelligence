@@ -3,7 +3,7 @@
 ## Current
 
 - **Phase:** 1 — Thin Vertical Slice
-- **Next task:** T1.5 — Bulk + idempotent writer (extend GraphStore)
+- **Next task:** T1.6 — Walker with .gitignore + language detection
 - **Last session:** 2026-05-21
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -22,7 +22,8 @@
 - [x] T1.2 — IParser Protocol + ParseResult envelope
 - [x] T1.3 — Python parser via tree-sitter (13 tests; fixture sample_repo_py)
 - [x] T1.4 — DuckDB schema + GraphStore (15 tests; files/entities/edges with FK + idempotent upserts)
-- [ ] T1.5 — Bulk + idempotent writer extension (already partially covered)  ← NEXT
+- [x] T1.5 — Bulk-at-scale stress tests (50 entities, 100 edges; perf note logged)
+- [ ] T1.6 — Walker with .gitignore + language detection           ← NEXT
 - [ ] T1.5 — Bulk + idempotent writer
 - [ ] T1.6 — Walker with .gitignore + language detection
 - [ ] T1.7 — Wire CLI `index` end-to-end
@@ -55,6 +56,7 @@
 - **Commit email fixed to kunal.levitate2024@gmail.com**: Earlier commits used `mathurkunal000@gmail.com` (unverified on GitHub), which prevented the Contributors graph from rendering. All 4 prior commits rewritten via `git filter-branch --env-filter`, local repo config now hardcodes the author. Force-pushed to origin/main. SHAs changed: T1.2 a9b9a91 → cbc7c42, T1.1 eafe8a6 → 084e748, T0.6 cb56645 → 67f4f9d, initial 0f052a8 → 8d00ebc. (workflow fix, post-T1.2)
 - **`tree-sitter-languages` FutureWarning suppressed**: The package internally calls a deprecated `Language(path, name)` form; warning is noisy and unactionable until upstream migrates. Suppressed via `warnings.catch_warnings()` around the import + first call in `parsers/python.py`. Revisit if/when we move to tree-sitter ≥ 0.22 (will need API migration). (T1.3)
 - **`tests/fixtures/` excluded from ruff**: Fixture files may intentionally carry "bad" code patterns (cycles, dead code, god classes) for future test cases. Added `extend-exclude = ["tests/fixtures"]` in pyproject. (T1.3)
+- **DuckDB bulk-insert perf is ~25 ms/row** (T1.5): Parameterized `executemany` and multi-VALUES single-statement INSERT both bottleneck at this rate in DuckDB 1.5.x via the Python binding. The documented fast paths (`db.append(df)`, `db.from_arrow(...)`) require `pandas` or `pyarrow` — neither pulled at MVP. Bulk-test scale dropped from 100→50 entities so CI doesn't drag. Real-repo perf re-evaluated at T2.7 (fastapi smoke); if 90s+ on ~3K entities is too slow, add `pandas` and switch writes to `db.append()`. Tracked but not blocking. (T1.5)
 
 ## Future (defer until MVP shipped)
 

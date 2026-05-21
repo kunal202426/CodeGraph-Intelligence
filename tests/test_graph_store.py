@@ -156,6 +156,61 @@ def test_edges_with_same_dst_diff_line_both_kept(store: GraphStore) -> None:
     assert store.count_edges() == 2
 
 
+# ---------- bulk at scale (T1.5) ----------
+#
+# NOTE: kept at N=50 entities / N=100 edges deliberately. DuckDB's
+# parameterized executemany has ~25 ms/row overhead in this version (1.5.x)
+# and the fast paths (Arrow / DataFrame) require pandas or pyarrow as deps,
+# which we don't pull at MVP. Larger sizes would just slow CI without adding
+# coverage. See STATUS.md "Plan deviations" for the perf note.
+
+
+def test_bulk_upsert_50_entities_then_reinsert(store: GraphStore) -> None:
+    store.upsert_file("bulk/mod.py", Language.PYTHON, "h", loc=50)
+    entities = [_sample_entity(name=f"func_{i:03d}", file="bulk/mod.py") for i in range(50)]
+    store.upsert_entities(entities)
+    assert store.count_entities() == 50
+    store.upsert_entities(entities)
+    assert store.count_entities() == 50
+
+
+def test_bulk_upsert_replaces_subset_raw_source(store: GraphStore) -> None:
+    store.upsert_file("bulk/mod.py", Language.PYTHON, "h", loc=50)
+    originals = [_sample_entity(name=f"func_{i:03d}", file="bulk/mod.py") for i in range(50)]
+    store.upsert_entities(originals)
+
+    # Mutate every 5th entity: 10 of 50.
+    mutated_indices = set(range(0, 50, 5))
+    new_batch = [
+        e.model_copy(update={"raw_source": f"def {e.name}(): return 'changed'\n"})
+        if i in mutated_indices
+        else e
+        for i, e in enumerate(originals)
+    ]
+    store.upsert_entities(new_batch)
+    assert store.count_entities() == 50
+
+    rows = store.conn.execute("SELECT name, raw_source FROM entities ORDER BY name").fetchall()
+    changed_count = sum(1 for _, raw in rows if "changed" in raw)
+    assert changed_count == len(mutated_indices) == 10
+
+
+def test_bulk_upsert_100_edges_idempotent(store: GraphStore) -> None:
+    edges = [
+        Edge(
+            src_id=f"py:a.py:f_{i:03d}",
+            dst_id=f"py:b.py:g_{(i % 25):03d}",
+            type="calls",
+            line=(i % 30) + 1,
+        )
+        for i in range(100)
+    ]
+    store.upsert_edges(edges)
+    first = store.count_edges()
+    store.upsert_edges(edges)
+    assert store.count_edges() == first
+
+
 # ---------- lifecycle ----------
 
 
