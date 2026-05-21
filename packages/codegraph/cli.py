@@ -12,6 +12,7 @@ from rich.table import Table
 
 from codegraph import __version__
 from codegraph.graph.queries import search_literal
+from codegraph.graph.resolver import resolve_symbols
 from codegraph.graph.store import GraphStore
 from codegraph.parsers.python import PythonParser
 from codegraph.uir import Language, hash_source
@@ -126,6 +127,9 @@ def index(
             parsed_files += 1
             progress.advance(task)
 
+    # Cross-file symbol resolution (T2.2): rewrites `py:?:...` edges in place.
+    stats = resolve_symbols(store)
+
     elapsed = time.monotonic() - start
     n_entities = store.count_entities()
     n_edges = store.count_edges()
@@ -136,6 +140,11 @@ def index(
         f"[green]Indexed[/green] [bold]{n_entities}[/bold] entities across "
         f"[bold]{n_files}[/bold] files ({n_edges} edges) in [bold]{elapsed:.1f}s[/bold]"
     )
+    if stats.inspected:
+        console.print(
+            f"[dim]Resolved {stats.resolved}/{stats.inspected} imports; "
+            f"{stats.external} external, {stats.wildcard} wildcard.[/dim]"
+        )
     if skipped_lang:
         console.print(
             f"[dim]Skipped {skipped_lang} files with unsupported languages "

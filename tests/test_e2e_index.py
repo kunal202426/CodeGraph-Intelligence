@@ -147,21 +147,26 @@ def test_search_via_docstring(indexed: Path) -> None:
 # ---------- imports persisted (T2.1) ----------
 
 
-def test_import_edges_persisted_for_fixture(indexed: Path) -> None:
-    """main.py imports from auth.login and api.users → edges land in DB."""
+def test_import_edges_persisted_and_resolved_for_fixture(indexed: Path) -> None:
+    """After T2.2 the resolver closes provisional dst_ids to real entity_ids."""
     store = GraphStore(indexed)
     try:
         rows = store.conn.execute(
-            "SELECT src_id, dst_id, type, line FROM edges WHERE type = 'imports' ORDER BY src_id, line, dst_id"
+            "SELECT src_id, dst_id FROM edges WHERE type = 'imports'"
         ).fetchall()
     finally:
         store.close()
-    # main.py imports: UserController, authenticate, LoginForm
-    main_imports = [r for r in rows if "main.py:main" in r[0]]
-    dst_ids = {r[1] for r in main_imports}
-    assert "py:?:api.users.UserController" in dst_ids
-    assert "py:?:auth.login.LoginForm" in dst_ids
-    assert "py:?:auth.login.authenticate" in dst_ids
+    # No `py:?` placeholders should remain after the resolver pass.
+    assert not any(dst.startswith("py:?") for _src, dst in rows)
+
+    main_dsts = {dst for src, dst in rows if "main.py:main" in src}
+    # In-repo imports resolve to real entity_ids:
+    assert "py:api/users.py:UserController" in main_dsts
+    assert "py:auth/login.py:LoginForm" in main_dsts
+    assert "py:auth/login.py:authenticate" in main_dsts
+    # The dataclasses import in db/models.py becomes external:
+    all_dsts = {dst for _src, dst in rows}
+    assert "external:dataclasses.dataclass" in all_dsts
 
 
 # ---------- idempotency at e2e level ----------
