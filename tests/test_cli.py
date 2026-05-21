@@ -103,6 +103,73 @@ def test_index_missing_repo_errors(runner: CliRunner, tmp_path: Path) -> None:
     assert result.exit_code != 0  # typer rejects missing path via exists=True
 
 
+# ---------- search ----------
+
+
+@pytest.fixture
+def indexed_db(runner: CliRunner, tmp_path: Path) -> Path:
+    """Index the sample fixture into a fresh DB and return the path."""
+    db = tmp_path / "graph.duckdb"
+    result = runner.invoke(app, ["index", str(SAMPLE_REPO), "--db", str(db)])
+    assert result.exit_code == 0, result.stdout
+    return db
+
+
+def test_search_finds_entity_by_name(runner: CliRunner, indexed_db: Path) -> None:
+    result = runner.invoke(app, ["search", "authenticate", "--db", str(indexed_db)])
+    assert result.exit_code == 0
+    assert "authenticate" in result.stdout
+    assert "auth/login.py" in result.stdout
+    assert "Results for" in result.stdout
+
+
+def test_search_case_insensitive(runner: CliRunner, indexed_db: Path) -> None:
+    result = runner.invoke(app, ["search", "AUTHENTICATE", "--db", str(indexed_db)])
+    assert result.exit_code == 0
+    assert "authenticate" in result.stdout
+
+
+def test_search_finds_by_docstring(runner: CliRunner, indexed_db: Path) -> None:
+    # The fixture's authenticate() docstring contains "Validate user credentials"
+    result = runner.invoke(app, ["search", "credentials", "--db", str(indexed_db)])
+    assert result.exit_code == 0
+    assert "authenticate" in result.stdout
+
+
+def test_search_partial_match(runner: CliRunner, indexed_db: Path) -> None:
+    result = runner.invoke(app, ["search", "Login", "--db", str(indexed_db)])
+    assert result.exit_code == 0
+    assert "LoginForm" in result.stdout
+
+
+def test_search_no_results_yellow_message(runner: CliRunner, indexed_db: Path) -> None:
+    result = runner.invoke(
+        app, ["search", "definitely_no_such_symbol_xyzzy", "--db", str(indexed_db)]
+    )
+    assert result.exit_code == 0
+    assert "No results" in result.stdout
+
+
+def test_search_limit_flag_caps_output(runner: CliRunner, indexed_db: Path) -> None:
+    result = runner.invoke(app, ["search", "form", "--db", str(indexed_db), "--limit", "1"])
+    assert result.exit_code == 0
+    # "form" matches both LoginForm and _PrivateForm; with limit 1 only the better-ranked one appears.
+    assert result.stdout.count("Form") <= 2  # may show in row + title
+
+
+def test_search_missing_db_exits_nonzero(runner: CliRunner, tmp_path: Path) -> None:
+    result = runner.invoke(app, ["search", "x", "--db", str(tmp_path / "nope.duckdb")])
+    assert result.exit_code == 1
+    assert "No graph database" in result.stdout
+
+
+def test_search_semantic_flag_falls_back_with_notice(runner: CliRunner, indexed_db: Path) -> None:
+    result = runner.invoke(app, ["search", "authenticate", "--semantic", "--db", str(indexed_db)])
+    assert result.exit_code == 0
+    assert "T3.4" in result.stdout  # the deferral notice
+    assert "authenticate" in result.stdout  # but it still returned results
+
+
 # ---------- --version (sanity) ----------
 
 

@@ -3,7 +3,7 @@
 ## Current
 
 - **Phase:** 1 — Thin Vertical Slice
-- **Next task:** T1.8 — Wire CLI `search` (literal substring on name + docstring)
+- **Next task:** T1.9 — E2E smoke test (tests/test_e2e_index.py)
 - **Last session:** 2026-05-21
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -25,7 +25,8 @@
 - [x] T1.5 — Bulk-at-scale stress tests (50 entities, 100 edges; perf note logged)
 - [x] T1.6 — Walker with .gitignore + language detection (27 tests)
 - [x] T1.7 — Wire CLI `index` end-to-end (Rich progress, 6 CLI tests, real-fixture demo)
-- [ ] T1.8 — Wire CLI `search` (literal substring on name + docstring)  ← NEXT
+- [x] T1.8 — Wire CLI `search` literal (ranked ILIKE on name + docstring, Rich Table, 8 tests)
+- [ ] T1.9 — E2E smoke test in tests/test_e2e_index.py                ← NEXT
 - [ ] T1.5 — Bulk + idempotent writer
 - [ ] T1.6 — Walker with .gitignore + language detection
 - [ ] T1.7 — Wire CLI `index` end-to-end

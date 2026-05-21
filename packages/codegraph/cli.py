@@ -8,8 +8,10 @@ from pathlib import Path
 import typer
 from rich.console import Console
 from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
+from rich.table import Table
 
 from codegraph import __version__
+from codegraph.graph.queries import search_literal
 from codegraph.graph.store import GraphStore
 from codegraph.parsers.python import PythonParser
 from codegraph.uir import Language, hash_source
@@ -160,7 +162,40 @@ def search(
     db: Path = typer.Option(DEFAULT_DB, "--db", help="DuckDB graph file path."),
 ) -> None:
     """Search the indexed codebase. [T1.8 literal / T3.4 hybrid]"""
-    _stub("search", "T1.8 (literal) / T3.4 (semantic)")
+    # Vector + hybrid land at T3.4. Until then, fall back to literal regardless of flags.
+    if semantic:
+        console.print(
+            "[yellow]--semantic lands at T3.4 (embeddings); falling back to literal search.[/yellow]"
+        )
+
+    if not db.exists():
+        console.print(
+            f"[red]No graph database at {db}.[/red] Run [bold]codegraph index <repo>[/bold] first."
+        )
+        raise typer.Exit(code=1)
+
+    with GraphStore(db) as store:
+        hits = search_literal(store.conn, query, limit=limit)
+
+    if not hits:
+        console.print(f"[yellow]No results for {query!r}.[/yellow]")
+        return
+
+    table = Table(title=f"Results for [bold]{query}[/bold]  ({len(hits)} match)")
+    table.add_column("Type", style="cyan", no_wrap=True)
+    table.add_column("Name", style="bold")
+    table.add_column("Qualified", style="dim")
+    table.add_column("Location", style="dim", no_wrap=True)
+    table.add_column("Doc", overflow="fold", max_width=60)
+
+    for hit in hits:
+        loc = f"{hit.file}:{hit.start_line}"
+        qname = hit.qualified_name if hit.qualified_name != hit.name else ""
+        doc = (hit.docstring or "").split("\n", 1)[0].strip()
+        table.add_row(hit.type, hit.name, qname, loc, doc)
+
+    console.print(table)
+    _ = hybrid  # silence unused-arg lint until T3.4 wires it up
 
 
 @app.command()
