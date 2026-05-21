@@ -2,8 +2,8 @@
 
 ## Current
 
-- **Phase:** 1 — Thin Vertical Slice
-- **Next task:** T1.9 — E2E smoke test (tests/test_e2e_index.py)
+- **Phase:** 2 — Multi-file + Symbol Resolution + TypeScript
+- **Next task:** T2.1 — Python import statement extraction
 - **Last session:** 2026-05-21
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -17,7 +17,7 @@
 - [x] T0.5 — Pytest skeleton + GitHub Actions CI (3 smoke tests passing)
 - [x] T0.6 — Per-phase plan files in `plan/` (10 files, 3.5KB avg, 8.5KB max)
 
-### Phase 1 — Thin Vertical Slice [IN PROGRESS 4/9]
+### Phase 1 — Thin Vertical Slice [DONE 9/9]
 - [x] T1.1 — UIREntity, Edge, EntityType, Language, make_entity_id, hash_source (19 tests)
 - [x] T1.2 — IParser Protocol + ParseResult envelope
 - [x] T1.3 — Python parser via tree-sitter (13 tests; fixture sample_repo_py)
@@ -25,15 +25,24 @@
 - [x] T1.5 — Bulk-at-scale stress tests (50 entities, 100 edges; perf note logged)
 - [x] T1.6 — Walker with .gitignore + language detection (27 tests)
 - [x] T1.7 — Wire CLI `index` end-to-end (Rich progress, 6 CLI tests, real-fixture demo)
-- [x] T1.8 — Wire CLI `search` literal (ranked ILIKE on name + docstring, Rich Table, 8 tests)
-- [ ] T1.9 — E2E smoke test in tests/test_e2e_index.py                ← NEXT
+- [x] T1.8 — Wire CLI `search` literal (ranked ILIKE, Rich Table, 8 tests)
+- [x] T1.9 — E2E smoke test (multi-file fixture; 11 acceptance tests)
+
+**Phase 1 result: 28 entities across 7 fixture files indexed in 0.9s. End-to-end `index` + `search` working. 105 tests passing in ~56s.**
 - [ ] T1.5 — Bulk + idempotent writer
 - [ ] T1.6 — Walker with .gitignore + language detection
 - [ ] T1.7 — Wire CLI `index` end-to-end
 - [ ] T1.8 — Wire CLI `search` (literal)
 - [ ] T1.9 — E2E smoke test
 
-### Phase 2 — Multi-file + TypeScript [PENDING]
+### Phase 2 — Multi-file + Symbol Resolution + TypeScript [IN PROGRESS 0/7]
+- [ ] T2.1 — Python import statement extraction                       ← NEXT
+- [ ] T2.2 — Symbol resolver (cross-file)
+- [ ] T2.3 — Incremental hash-based skip
+- [ ] T2.4 — TypeScript parser
+- [ ] T2.5 — TypeScript import resolution
+- [ ] T2.6 — CLI `deps` command
+- [ ] T2.7 — Real-repo smoke (fastapi)
 ### Phase 3 — Embeddings + Semantic Search [PENDING]
 ### Phase 4 — Call Graph + Impact + Smells [PENDING]
 ### Phase 5 — GraphRAG + Anthropic LLM [PENDING]
