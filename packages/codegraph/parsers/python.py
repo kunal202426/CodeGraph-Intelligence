@@ -100,7 +100,9 @@ class PythonParser:
             rel_path,
             scope=[],
             parent_id=module_id,
+            module_id=module_id,
             entities=entities,
+            edges=edges,
         )
 
         return ParseResult(entities=entities, edges=edges, errors=errors)
@@ -116,7 +118,9 @@ class PythonParser:
         *,
         scope: list[str],
         parent_id: str | None,
+        module_id: str,
         entities: list[UIREntity],
+        edges: list[Edge],
     ) -> None:
         """Walk top-level children. Descends into class bodies only — not function bodies."""
         for child in node.children:
@@ -135,7 +139,9 @@ class PythonParser:
                     entities=entities,
                 )
                 if inner.type == "class_definition" and emitted_id is not None:
-                    self._descend_into_class(inner, source, file, scope, emitted_id, entities)
+                    self._descend_into_class(
+                        inner, source, file, scope, emitted_id, module_id, entities, edges
+                    )
             elif kind == "class_definition":
                 emitted_id = self._emit(
                     inner_def=child,
@@ -147,7 +153,9 @@ class PythonParser:
                     entities=entities,
                 )
                 if emitted_id is not None:
-                    self._descend_into_class(child, source, file, scope, emitted_id, entities)
+                    self._descend_into_class(
+                        child, source, file, scope, emitted_id, module_id, entities, edges
+                    )
             elif kind == "function_definition":
                 self._emit(
                     inner_def=child,
@@ -166,10 +174,16 @@ class PythonParser:
                     file,
                     scope=scope,
                     parent_id=parent_id,
+                    module_id=module_id,
                     entities=entities,
+                    edges=edges,
                 )
-            # Other top-level statements (assignments, imports, if-blocks, …)
-            # are ignored at T1.3; imports are extracted in T2.1.
+            elif kind == "import_statement" and not scope:
+                self._emit_bare_import(child, source, module_id, edges)
+            elif kind == "import_from_statement" and not scope:
+                self._emit_from_import(child, source, module_id, edges)
+            # Other top-level statements (assignments, if-blocks, …) ignored at T2.1.
+            # Call edges land at T4.1.
 
     def _descend_into_class(
         self,
@@ -178,7 +192,9 @@ class PythonParser:
         file: str,
         scope: list[str],
         class_entity_id: str,
+        module_id: str,
         entities: list[UIREntity],
+        edges: list[Edge],
     ) -> None:
         name = self._text(class_def.child_by_field_name("name"), source)
         if not name:
@@ -193,8 +209,106 @@ class PythonParser:
             file,
             scope=new_scope,
             parent_id=class_entity_id,
+            module_id=module_id,
             entities=entities,
+            edges=edges,
         )
+
+    # ------------------------------------------------------------------
+    # Import extraction (T2.1) — emit edges with provisional dst_ids
+    # that the symbol resolver (T2.2) closes.
+    #
+    # Encoding:
+    #   absolute  `from x.y import z`  → dst = "py:?:x.y.z"
+    #   relative  `from . import z`    → dst = "py:?rel1:z"
+    #   relative  `from ..pkg import z`→ dst = "py:?rel2:pkg.z"
+    #   wildcard  `from x import *`    → dst = "py:?:x.*"
+    #   bare      `import x.y`         → dst = "py:?:x.y"
+
+    def _emit_bare_import(
+        self,
+        stmt: Node,
+        source: bytes,
+        module_id: str,
+        edges: list[Edge],
+    ) -> None:
+        line = stmt.start_point[0] + 1
+        for name_node in stmt.children_by_field_name("name"):
+            target = name_node
+            if name_node.type == "aliased_import":
+                inner = name_node.child_by_field_name("name")
+                if inner is None:
+                    continue
+                target = inner
+            path = self._text(target, source)
+            if not path:
+                continue
+            edges.append(
+                Edge(
+                    src_id=module_id,
+                    dst_id=f"py:?:{path}",
+                    type="imports",
+                    line=line,
+                )
+            )
+
+    def _emit_from_import(
+        self,
+        stmt: Node,
+        source: bytes,
+        module_id: str,
+        edges: list[Edge],
+    ) -> None:
+        line = stmt.start_point[0] + 1
+        module_name_node = stmt.child_by_field_name("module_name")
+        if module_name_node is None:
+            return
+        rel_depth, module_part = self._parse_module_path(module_name_node, source)
+        prefix = f"py:?rel{rel_depth}:" if rel_depth > 0 else "py:?:"
+
+        # Wildcard import has no `name:` field — it's a plain child.
+        for c in stmt.children:
+            if c.type == "wildcard_import":
+                dst = f"{prefix}{module_part}.*" if module_part else f"{prefix}*"
+                edges.append(Edge(src_id=module_id, dst_id=dst, type="imports", line=line))
+                return
+
+        for name_node in stmt.children_by_field_name("name"):
+            target = name_node
+            if name_node.type == "aliased_import":
+                inner = name_node.child_by_field_name("name")
+                if inner is None:
+                    continue
+                target = inner
+            name = self._text(target, source)
+            if not name:
+                continue
+            dst = f"{prefix}{module_part}.{name}" if module_part else f"{prefix}{name}"
+            edges.append(Edge(src_id=module_id, dst_id=dst, type="imports", line=line))
+
+    @staticmethod
+    def _parse_module_path(node: Node, source: bytes) -> tuple[int, str]:
+        """Return (relative_depth, dotted_name_part) for the module_name node.
+
+        Absolute imports → (0, "auth.login").
+        Relative imports → (depth, optional_subpath).
+        """
+        if node.type == "dotted_name":
+            return 0, source[node.start_byte : node.end_byte].decode("utf-8", errors="replace")
+        if node.type == "relative_import":
+            depth = 0
+            name_part = ""
+            for c in node.children:
+                if c.type == "import_prefix":
+                    depth = (
+                        source[c.start_byte : c.end_byte]
+                        .decode("utf-8", errors="replace")
+                        .count(".")
+                    )
+                elif c.type == "dotted_name":
+                    name_part = source[c.start_byte : c.end_byte].decode("utf-8", errors="replace")
+            return depth, name_part
+        return 0, ""
 
     # ------------------------------------------------------------------
     # Emit one entity

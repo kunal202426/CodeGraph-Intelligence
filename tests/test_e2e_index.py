@@ -144,6 +144,26 @@ def test_search_via_docstring(indexed: Path) -> None:
     assert "authenticate" in result.stdout
 
 
+# ---------- imports persisted (T2.1) ----------
+
+
+def test_import_edges_persisted_for_fixture(indexed: Path) -> None:
+    """main.py imports from auth.login and api.users → edges land in DB."""
+    store = GraphStore(indexed)
+    try:
+        rows = store.conn.execute(
+            "SELECT src_id, dst_id, type, line FROM edges WHERE type = 'imports' ORDER BY src_id, line, dst_id"
+        ).fetchall()
+    finally:
+        store.close()
+    # main.py imports: UserController, authenticate, LoginForm
+    main_imports = [r for r in rows if "main.py:main" in r[0]]
+    dst_ids = {r[1] for r in main_imports}
+    assert "py:?:api.users.UserController" in dst_ids
+    assert "py:?:auth.login.LoginForm" in dst_ids
+    assert "py:?:auth.login.authenticate" in dst_ids
+
+
 # ---------- idempotency at e2e level ----------
 
 

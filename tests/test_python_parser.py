@@ -163,6 +163,113 @@ def test_no_docstring_when_first_stmt_is_code(parser: PythonParser) -> None:
     assert fn.docstring is None
 
 
+# ---------- imports (T2.1) ----------
+
+
+def _import_edges(result):
+    return [e for e in result.edges if e.type == "imports"]
+
+
+def test_import_bare_module(parser: PythonParser) -> None:
+    result = parser.parse(Path("x.py"), "import os\n")
+    edges = _import_edges(result)
+    assert len(edges) == 1
+    assert edges[0].dst_id == "py:?:os"
+    assert edges[0].src_id == "py:x.py:x"
+    assert edges[0].line == 1
+
+
+def test_import_dotted_module(parser: PythonParser) -> None:
+    result = parser.parse(Path("x.py"), "import os.path\n")
+    edges = _import_edges(result)
+    assert [e.dst_id for e in edges] == ["py:?:os.path"]
+
+
+def test_import_multiple_on_one_line(parser: PythonParser) -> None:
+    result = parser.parse(Path("x.py"), "import os, sys\n")
+    edges = _import_edges(result)
+    assert {e.dst_id for e in edges} == {"py:?:os", "py:?:sys"}
+
+
+def test_import_with_alias_records_target_not_alias(parser: PythonParser) -> None:
+    result = parser.parse(Path("x.py"), "import os.path as op\n")
+    edges = _import_edges(result)
+    assert [e.dst_id for e in edges] == ["py:?:os.path"]
+
+
+def test_from_import_single_name(parser: PythonParser) -> None:
+    result = parser.parse(Path("x.py"), "from auth.login import authenticate\n")
+    edges = _import_edges(result)
+    assert [e.dst_id for e in edges] == ["py:?:auth.login.authenticate"]
+
+
+def test_from_import_multiple_names(parser: PythonParser) -> None:
+    result = parser.parse(Path("x.py"), "from auth.login import authenticate, fetch_user\n")
+    edges = _import_edges(result)
+    assert {e.dst_id for e in edges} == {
+        "py:?:auth.login.authenticate",
+        "py:?:auth.login.fetch_user",
+    }
+
+
+def test_from_import_aliased_records_real_name(parser: PythonParser) -> None:
+    result = parser.parse(Path("x.py"), "from auth.login import authenticate as auth\n")
+    edges = _import_edges(result)
+    assert [e.dst_id for e in edges] == ["py:?:auth.login.authenticate"]
+
+
+def test_from_import_wildcard(parser: PythonParser) -> None:
+    result = parser.parse(Path("x.py"), "from auth.login import *\n")
+    edges = _import_edges(result)
+    assert [e.dst_id for e in edges] == ["py:?:auth.login.*"]
+
+
+def test_from_import_relative_single_dot(parser: PythonParser) -> None:
+    result = parser.parse(Path("pkg/x.py"), "from . import sibling\n")
+    edges = _import_edges(result)
+    assert [e.dst_id for e in edges] == ["py:?rel1:sibling"]
+
+
+def test_from_import_relative_two_dots(parser: PythonParser) -> None:
+    result = parser.parse(Path("pkg/sub/x.py"), "from .. import parent\n")
+    edges = _import_edges(result)
+    assert [e.dst_id for e in edges] == ["py:?rel2:parent"]
+
+
+def test_from_import_relative_with_subpkg(parser: PythonParser) -> None:
+    result = parser.parse(Path("pkg/sub/x.py"), "from ..pkg.sub import y\n")
+    edges = _import_edges(result)
+    assert [e.dst_id for e in edges] == ["py:?rel2:pkg.sub.y"]
+
+
+def test_import_line_numbers_correct(parser: PythonParser) -> None:
+    src = "\n\nimport os\n\nfrom sys import argv\n"
+    result = parser.parse(Path("x.py"), src)
+    edges = _import_edges(result)
+    lines = {e.dst_id: e.line for e in edges}
+    assert lines["py:?:os"] == 3
+    assert lines["py:?:sys.argv"] == 5
+
+
+def test_no_import_edges_when_no_imports(parser: PythonParser) -> None:
+    result = parser.parse(Path("x.py"), "def f(): return 1\n")
+    assert _import_edges(result) == []
+
+
+def test_import_edge_src_is_module_entity(parser: PythonParser) -> None:
+    """src_id must be the file's module entity_id, not None or some other value."""
+    result = parser.parse(Path("auth/login.py"), "import os\n")
+    [edge] = _import_edges(result)
+    assert edge.src_id == "py:auth/login.py:auth.login"
+
+
+def test_import_edges_have_confidence_one_not_dynamic(parser: PythonParser) -> None:
+    result = parser.parse(Path("x.py"), "from os import path\n")
+    [edge] = _import_edges(result)
+    assert edge.confidence == 1.0
+    assert edge.is_dynamic is False
+
+
 # ---------- fixture end-to-end ----------
 
 

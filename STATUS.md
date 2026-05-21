@@ -3,7 +3,7 @@
 ## Current
 
 - **Phase:** 2 — Multi-file + Symbol Resolution + TypeScript
-- **Next task:** T2.1 — Python import statement extraction
+- **Next task:** T2.2 — Symbol resolver (closes `py:?:` placeholders to real entity_ids)
 - **Last session:** 2026-05-21
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -35,9 +35,9 @@
 - [ ] T1.8 — Wire CLI `search` (literal)
 - [ ] T1.9 — E2E smoke test
 
-### Phase 2 — Multi-file + Symbol Resolution + TypeScript [IN PROGRESS 0/7]
-- [ ] T2.1 — Python import statement extraction                       ← NEXT
-- [ ] T2.2 — Symbol resolver (cross-file)
+### Phase 2 — Multi-file + Symbol Resolution + TypeScript [IN PROGRESS 1/7]
+- [x] T2.1 — Python import statement extraction (15 tests; 7 fixture import edges)
+- [ ] T2.2 — Symbol resolver (closes py:?: placeholders)               ← NEXT
 - [ ] T2.3 — Incremental hash-based skip
 - [ ] T2.4 — TypeScript parser
 - [ ] T2.5 — TypeScript import resolution
