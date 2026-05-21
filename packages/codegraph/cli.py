@@ -1,13 +1,19 @@
-"""Typer CLI entry point. Commands are stubs until their target phase populates them."""
+"""Typer CLI entry point. Commands populated by their target phase."""
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
 
 from codegraph import __version__
+from codegraph.graph.store import GraphStore
+from codegraph.parsers.python import PythonParser
+from codegraph.uir import Language, hash_source
+from codegraph.walker import walk
 
 app = typer.Typer(
     name="codegraph",
@@ -18,6 +24,12 @@ app = typer.Typer(
 console = Console()
 
 DEFAULT_DB = Path(".codegraph/graph.duckdb")
+
+# Map Language → parser instance. PythonParser is stateless; one instance is fine.
+# TypeScript parser is added at T2.4.
+_LANGUAGE_PARSERS = {
+    Language.PYTHON: PythonParser(),
+}
 
 
 def _stub(name: str, lands_at: str) -> None:
@@ -60,7 +72,77 @@ def index(
     db: Path = typer.Option(DEFAULT_DB, "--db", help="DuckDB graph file path."),
 ) -> None:
     """Index a repository into the graph database. [T1.7]"""
-    _stub("index", "T1.7")
+    start = time.monotonic()
+    store = GraphStore(db)
+    store.init_schema()
+
+    files = list(walk(repo))
+    skipped_lang = 0
+    parse_errors = 0
+    parsed_files = 0
+
+    progress_cols = (
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("{task.completed}/{task.total}"),
+        TimeElapsedColumn(),
+    )
+    with Progress(*progress_cols, console=console, transient=True) as progress:
+        task = progress.add_task("Indexing", total=len(files))
+        for path, lang in files:
+            parser = _LANGUAGE_PARSERS.get(lang)
+            if parser is None:
+                skipped_lang += 1
+                progress.advance(task)
+                continue
+
+            try:
+                source = path.read_text(encoding="utf-8", errors="replace")
+            except OSError as exc:
+                console.print(f"[red]Skipping unreadable file {path}: {exc}[/red]")
+                parse_errors += 1
+                progress.advance(task)
+                continue
+
+            rel_path = path.relative_to(repo).as_posix()
+            try:
+                result = parser.parse(Path(rel_path), source)
+            except Exception as exc:  # noqa: BLE001 - log unexpected parser errors then continue
+                console.print(f"[red]Parser error on {rel_path}: {exc}[/red]")
+                parse_errors += 1
+                progress.advance(task)
+                continue
+
+            store.upsert_file(
+                path=rel_path,
+                language=lang,
+                hash_=hash_source(source),
+                loc=source.count("\n") + 1,
+            )
+            store.upsert_entities(result.entities)
+            store.upsert_edges(result.edges)
+            parsed_files += 1
+            progress.advance(task)
+
+    elapsed = time.monotonic() - start
+    n_entities = store.count_entities()
+    n_edges = store.count_edges()
+    n_files = store.count_files()
+    store.close()
+
+    console.print(
+        f"[green]Indexed[/green] [bold]{n_entities}[/bold] entities across "
+        f"[bold]{n_files}[/bold] files ({n_edges} edges) in [bold]{elapsed:.1f}s[/bold]"
+    )
+    if skipped_lang:
+        console.print(
+            f"[dim]Skipped {skipped_lang} files with unsupported languages "
+            f"(TypeScript lands at T2.4).[/dim]"
+        )
+    if parse_errors:
+        console.print(f"[yellow]{parse_errors} files had errors (see above).[/yellow]")
+    if parsed_files == 0 and skipped_lang == 0:
+        console.print("[yellow]No indexable files found.[/yellow]")
 
 
 @app.command()

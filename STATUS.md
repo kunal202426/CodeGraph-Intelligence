@@ -3,7 +3,7 @@
 ## Current
 
 - **Phase:** 1 — Thin Vertical Slice
-- **Next task:** T1.7 — Wire CLI `index` end-to-end
+- **Next task:** T1.8 — Wire CLI `search` (literal substring on name + docstring)
 - **Last session:** 2026-05-21
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -24,7 +24,8 @@
 - [x] T1.4 — DuckDB schema + GraphStore (15 tests; files/entities/edges with FK + idempotent upserts)
 - [x] T1.5 — Bulk-at-scale stress tests (50 entities, 100 edges; perf note logged)
 - [x] T1.6 — Walker with .gitignore + language detection (27 tests)
-- [ ] T1.7 — Wire CLI `index` end-to-end                          ← NEXT
+- [x] T1.7 — Wire CLI `index` end-to-end (Rich progress, 6 CLI tests, real-fixture demo)
+- [ ] T1.8 — Wire CLI `search` (literal substring on name + docstring)  ← NEXT
 - [ ] T1.5 — Bulk + idempotent writer
 - [ ] T1.6 — Walker with .gitignore + language detection
 - [ ] T1.7 — Wire CLI `index` end-to-end
@@ -58,6 +59,7 @@
 - **`tree-sitter-languages` FutureWarning suppressed**: The package internally calls a deprecated `Language(path, name)` form; warning is noisy and unactionable until upstream migrates. Suppressed via `warnings.catch_warnings()` around the import + first call in `parsers/python.py`. Revisit if/when we move to tree-sitter ≥ 0.22 (will need API migration). (T1.3)
 - **`tests/fixtures/` excluded from ruff**: Fixture files may intentionally carry "bad" code patterns (cycles, dead code, god classes) for future test cases. Added `extend-exclude = ["tests/fixtures"]` in pyproject. (T1.3)
 - **DuckDB bulk-insert perf is ~25 ms/row** (T1.5): Parameterized `executemany` and multi-VALUES single-statement INSERT both bottleneck at this rate in DuckDB 1.5.x via the Python binding. The documented fast paths (`db.append(df)`, `db.from_arrow(...)`) require `pandas` or `pyarrow` — neither pulled at MVP. Bulk-test scale dropped from 100→50 entities so CI doesn't drag. Real-repo perf re-evaluated at T2.7 (fastapi smoke); if 90s+ on ~3K entities is too slow, add `pandas` and switch writes to `db.append()`. Tracked but not blocking. (T1.5)
+- **No Unicode in CLI text output**: Windows cp1252 console can't encode chars like `✓` (U+2713) and crashes with `UnicodeEncodeError` even when stdout is captured by typer.CliRunner inside a UTF-8 buffer (the test environment hides this). Stick to ASCII text in console.print() messages. Rich style tags (`[green]...[/green]`) are fine. (T1.7)
 
 ## Future (defer until MVP shipped)
 
