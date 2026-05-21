@@ -83,6 +83,7 @@ def index(
     skipped_lang = 0
     parse_errors = 0
     parsed_files = 0
+    unchanged_files = 0  # T2.3: hash matched, skipped re-parse
 
     progress_cols = (
         TextColumn("[progress.description]{task.description}"),
@@ -108,6 +109,14 @@ def index(
                 continue
 
             rel_path = path.relative_to(repo).as_posix()
+            current_hash = hash_source(source)
+
+            # T2.3: skip re-parse when hash hasn't changed.
+            if store.get_file_hash(rel_path) == current_hash:
+                unchanged_files += 1
+                progress.advance(task)
+                continue
+
             try:
                 result = parser.parse(Path(rel_path), source)
             except Exception as exc:  # noqa: BLE001 - log unexpected parser errors then continue
@@ -116,10 +125,13 @@ def index(
                 progress.advance(task)
                 continue
 
+            # Drop stale rows for this file before writing the fresh parse so
+            # deleted functions / removed imports don't linger in the graph.
+            store.clear_file(rel_path)
             store.upsert_file(
                 path=rel_path,
                 language=lang,
-                hash_=hash_source(source),
+                hash_=current_hash,
                 loc=source.count("\n") + 1,
             )
             store.upsert_entities(result.entities)
@@ -133,12 +145,18 @@ def index(
     elapsed = time.monotonic() - start
     n_entities = store.count_entities()
     n_edges = store.count_edges()
-    n_files = store.count_files()
     store.close()
 
+    parse_targets = parsed_files + unchanged_files
+    re_parse_clause = (
+        f"Re-parsed [bold]{parsed_files}[/bold] of {parse_targets} files "
+        f"([dim]{unchanged_files} unchanged[/dim])"
+        if unchanged_files
+        else f"Parsed [bold]{parsed_files}[/bold] files"
+    )
     console.print(
-        f"[green]Indexed[/green] [bold]{n_entities}[/bold] entities across "
-        f"[bold]{n_files}[/bold] files ({n_edges} edges) in [bold]{elapsed:.1f}s[/bold]"
+        f"[green]Indexed[/green] [bold]{n_entities}[/bold] entities, "
+        f"[bold]{n_edges}[/bold] edges. {re_parse_clause} in [bold]{elapsed:.1f}s[/bold]."
     )
     if stats.inspected:
         console.print(
@@ -152,7 +170,7 @@ def index(
         )
     if parse_errors:
         console.print(f"[yellow]{parse_errors} files had errors (see above).[/yellow]")
-    if parsed_files == 0 and skipped_lang == 0:
+    if parsed_files == 0 and unchanged_files == 0 and skipped_lang == 0:
         console.print("[yellow]No indexable files found.[/yellow]")
 
 

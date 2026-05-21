@@ -130,6 +130,27 @@ class GraphStore:
         )
 
     # ------------------------------------------------------------------
+    # Per-file lookups + cleanup (T2.3 incremental)
+
+    def get_file_hash(self, path: str) -> str | None:
+        """Return the stored hash for `path`, or None if the file isn't indexed."""
+        row = self.conn.execute("SELECT hash FROM files WHERE path = ?", [path]).fetchone()
+        return row[0] if row else None
+
+    def clear_file(self, path: str) -> None:
+        """Delete all entities + outbound edges for `path`.
+
+        Used during incremental re-index when a file's hash has changed: drop the
+        stale rows before writing the fresh parse, so deleted functions / removed
+        imports don't linger in the graph.
+        """
+        # Outbound edges (anything whose src_id includes this file).
+        self.conn.execute("DELETE FROM edges WHERE src_id LIKE ?", [f"py:{path}:%"])
+        # Entities for this file. FK constraint cascades nothing automatically,
+        # but the file row stays so the upsert can update its hash.
+        self.conn.execute("DELETE FROM entities WHERE file = ?", [path])
+
+    # ------------------------------------------------------------------
     # Counts (useful for CLI summaries + tests)
 
     def count_files(self) -> int:

@@ -56,6 +56,8 @@ def test_index_is_idempotent(runner: CliRunner, tmp_path: Path) -> None:
 
     result = runner.invoke(app, ["index", str(SAMPLE_REPO), "--db", str(db)])
     assert result.exit_code == 0
+    # T2.3: every file should be reported as unchanged on second run.
+    assert "unchanged" in result.stdout
     store = GraphStore(db)
     try:
         assert store.count_entities() == first_entities

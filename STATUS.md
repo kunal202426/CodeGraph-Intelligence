@@ -3,7 +3,7 @@
 ## Current
 
 - **Phase:** 2 — Multi-file + Symbol Resolution + TypeScript
-- **Next task:** T2.3 — Incremental hash-based file skip
+- **Next task:** T2.4 — TypeScript parser via tree-sitter
 - **Last session:** 2026-05-21
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -38,7 +38,8 @@
 ### Phase 2 — Multi-file + Symbol Resolution + TypeScript [IN PROGRESS 1/7]
 - [x] T2.1 — Python import statement extraction (15 tests; 7 fixture import edges)
 - [x] T2.2 — Symbol resolver (13 tests; 6/7 fixture imports resolved, 1 external)
-- [ ] T2.3 — Incremental hash-based file skip                          ← NEXT
+- [x] T2.3 — Hash-based incremental skip (7 tests; 1.2s → 0.0s on re-index)
+- [ ] T2.4 — TypeScript parser via tree-sitter                          ← NEXT
 - [ ] T2.3 — Incremental hash-based skip
 - [ ] T2.4 — TypeScript parser
 - [ ] T2.5 — TypeScript import resolution
