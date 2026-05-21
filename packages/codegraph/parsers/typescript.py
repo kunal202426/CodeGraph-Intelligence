@@ -211,6 +211,9 @@ class TypeScriptParser:
                     edges=edges,
                 )
 
+            elif kind == "import_statement" and not scope:
+                self._emit_import(child, source, module_id, edges)
+
             elif kind == "statement_block":
                 # Don't descend into function bodies (we don't emit nested funcs).
                 continue
@@ -423,6 +426,79 @@ class TypeScriptParser:
             )
         )
         return entity_id
+
+    # ------------------------------------------------------------------
+    # Import extraction (T2.5) — emits provisional dst_ids the resolver closes.
+    #
+    # Encoding:
+    #   import { x }    from "./mod"    → "ts:?:./mod::x"
+    #   import { x as y } from "./mod"  → "ts:?:./mod::x"     (target name, not alias)
+    #   import x        from "./mod"    → "ts:?:./mod::default"
+    #   import * as A   from "./mod"    → "ts:?:./mod::*"
+    #   import           "./mod"        → "ts:?:./mod"        (side-effect only)
+    #   import { x }    from "react"    → "ts:?:react::x"     (bare; → external)
+
+    def _emit_import(
+        self,
+        stmt: Node,
+        source: bytes,
+        module_id: str,
+        edges: list[Edge],
+    ) -> None:
+        line = stmt.start_point[0] + 1
+        source_node = stmt.child_by_field_name("source")
+        if source_node is None:
+            return
+        specifier = self._text(source_node, source)
+        if specifier is None:
+            return
+        # Strip the surrounding quotes from the string literal.
+        specifier = specifier.strip().strip('"').strip("'").strip("`")
+        if not specifier:
+            return
+
+        prefix = f"ts:?:{specifier}"
+
+        clause = None
+        for c in stmt.children:
+            if c.type == "import_clause":
+                clause = c
+                break
+
+        if clause is None:
+            # Side-effect import: `import "./mod"`. Single edge to the module.
+            edges.append(Edge(src_id=module_id, dst_id=prefix, type="imports", line=line))
+            return
+
+        for c in clause.children:
+            kind = c.type
+            if kind == "identifier":
+                # Default import: `import auth from "./mod"`.
+                edges.append(
+                    Edge(src_id=module_id, dst_id=f"{prefix}::default", type="imports", line=line)
+                )
+            elif kind == "namespace_import":
+                # `import * as A from "./mod"`.
+                edges.append(
+                    Edge(src_id=module_id, dst_id=f"{prefix}::*", type="imports", line=line)
+                )
+            elif kind == "named_imports":
+                # `import { a, b as c } from "./mod"`.
+                for spec in c.children:
+                    if spec.type != "import_specifier":
+                        continue
+                    name_node = spec.child_by_field_name("name")
+                    name = self._text(name_node, source)
+                    if not name:
+                        continue
+                    edges.append(
+                        Edge(
+                            src_id=module_id,
+                            dst_id=f"{prefix}::{name}",
+                            type="imports",
+                            line=line,
+                        )
+                    )
 
     # ------------------------------------------------------------------
     # Helpers

@@ -173,6 +173,83 @@ def test_plain_js_file_uses_javascript_language(parser: TypeScriptParser) -> Non
     assert fn.entity_id.startswith("js:")
 
 
+# ---------- imports (T2.5) ----------
+
+
+def _import_edges(result):
+    return [e for e in result.edges if e.type == "imports"]
+
+
+def test_named_import_relative(parser: TypeScriptParser) -> None:
+    src = 'import { authenticate } from "./auth/login";\n'
+    result = parser.parse(Path("src/index.ts"), src)
+    edges = _import_edges(result)
+    assert [e.dst_id for e in edges] == ["ts:?:./auth/login::authenticate"]
+    assert edges[0].src_id == "ts:src/index.ts:src.index"
+
+
+def test_named_import_multiple(parser: TypeScriptParser) -> None:
+    src = 'import { a, b } from "./mod";\n'
+    edges = _import_edges(parser.parse(Path("x.ts"), src))
+    assert {e.dst_id for e in edges} == {"ts:?:./mod::a", "ts:?:./mod::b"}
+
+
+def test_named_aliased_import_uses_target_name(parser: TypeScriptParser) -> None:
+    src = 'import { authenticate as auth } from "./mod";\n'
+    edges = _import_edges(parser.parse(Path("x.ts"), src))
+    assert [e.dst_id for e in edges] == ["ts:?:./mod::authenticate"]
+
+
+def test_default_import(parser: TypeScriptParser) -> None:
+    src = 'import auth from "./mod";\n'
+    edges = _import_edges(parser.parse(Path("x.ts"), src))
+    assert [e.dst_id for e in edges] == ["ts:?:./mod::default"]
+
+
+def test_namespace_import(parser: TypeScriptParser) -> None:
+    src = 'import * as A from "./mod";\n'
+    edges = _import_edges(parser.parse(Path("x.ts"), src))
+    assert [e.dst_id for e in edges] == ["ts:?:./mod::*"]
+
+
+def test_side_effect_import(parser: TypeScriptParser) -> None:
+    src = 'import "./side-effects";\n'
+    edges = _import_edges(parser.parse(Path("x.ts"), src))
+    assert [e.dst_id for e in edges] == ["ts:?:./side-effects"]
+
+
+def test_default_plus_named_import(parser: TypeScriptParser) -> None:
+    src = 'import auth, { LoginForm } from "./mod";\n'
+    edges = _import_edges(parser.parse(Path("x.ts"), src))
+    assert {e.dst_id for e in edges} == {"ts:?:./mod::default", "ts:?:./mod::LoginForm"}
+
+
+def test_bare_specifier_import_passes_through(parser: TypeScriptParser) -> None:
+    """Resolver decides bare-vs-relative; parser only encodes the specifier."""
+    src = 'import { useState } from "react";\n'
+    edges = _import_edges(parser.parse(Path("x.tsx"), src))
+    assert [e.dst_id for e in edges] == ["ts:?:react::useState"]
+
+
+def test_relative_parent_dir_import(parser: TypeScriptParser) -> None:
+    src = 'import { helper } from "../shared/util";\n'
+    edges = _import_edges(parser.parse(Path("src/sub/x.ts"), src))
+    assert [e.dst_id for e in edges] == ["ts:?:../shared/util::helper"]
+
+
+def test_import_line_numbers_correct(parser: TypeScriptParser) -> None:
+    src = '\n\nimport { a } from "./mod";\n\nimport b from "./b";\n'
+    edges = _import_edges(parser.parse(Path("x.ts"), src))
+    lines = {e.dst_id: e.line for e in edges}
+    assert lines["ts:?:./mod::a"] == 3
+    assert lines["ts:?:./b::default"] == 5
+
+
+def test_no_import_edges_when_no_imports(parser: TypeScriptParser) -> None:
+    edges = _import_edges(parser.parse(Path("x.ts"), "export function f() { return 1; }\n"))
+    assert edges == []
+
+
 # ---------- fixture end-to-end ----------
 
 

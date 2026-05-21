@@ -3,7 +3,7 @@
 ## Current
 
 - **Phase:** 2 — Multi-file + Symbol Resolution + TypeScript
-- **Next task:** T2.5 — TypeScript import resolution
+- **Next task:** T2.6 — CLI `deps` command (transitive dependency tree)
 - **Last session:** 2026-05-21
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -40,7 +40,8 @@
 - [x] T2.2 — Symbol resolver (13 tests; 6/7 fixture imports resolved, 1 external)
 - [x] T2.3 — Hash-based incremental skip (7 tests; 1.2s → 0.0s on re-index)
 - [x] T2.4 — TypeScript / TSX / JS / JSX parser (18 tests; sample_repo_ts indexes)
-- [ ] T2.5 — TypeScript import resolution                                ← NEXT
+- [x] T2.5 — TypeScript import resolution (19 tests; named/default/namespace/side-effect + index file probing)
+- [ ] T2.6 — CLI `deps` command (transitive dependency tree)             ← NEXT
 - [ ] T2.3 — Incremental hash-based skip
 - [ ] T2.4 — TypeScript parser
 - [ ] T2.5 — TypeScript import resolution

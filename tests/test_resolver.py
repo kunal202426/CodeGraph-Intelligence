@@ -276,6 +276,146 @@ def test_resolution_stats_counts_make_sense(tmp_path: Path) -> None:
     assert stats.inspected == 0
 
 
+# ---------- TypeScript imports (T2.5) ----------
+
+
+def _ts_repo(tmp_path: Path, files: dict[str, str]) -> Path:
+    repo = tmp_path / "repo"
+    for rel, content in files.items():
+        p = repo / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+    db = tmp_path / "graph.duckdb"
+    result = CliRunner().invoke(app, ["index", str(repo), "--db", str(db)])
+    assert result.exit_code == 0, result.stdout
+    return db
+
+
+def test_ts_named_relative_resolves(tmp_path: Path) -> None:
+    db = _ts_repo(
+        tmp_path,
+        {
+            "src/index.ts": 'import { authenticate } from "./auth/login";\n',
+            "src/auth/login.ts": "export function authenticate() { return true; }\n",
+        },
+    )
+    store = GraphStore(db)
+    try:
+        dsts = {dst for _src, dst, _conf in _edges(store)}
+    finally:
+        store.close()
+    assert "ts:src/auth/login.ts:authenticate" in dsts
+
+
+def test_ts_default_import_resolves_to_module_entity(tmp_path: Path) -> None:
+    db = _ts_repo(
+        tmp_path,
+        {
+            "src/index.ts": 'import auth from "./auth";\n',
+            "src/auth.ts": "export default function() { return 1; }\n",
+        },
+    )
+    store = GraphStore(db)
+    try:
+        dsts = {dst for _src, dst, _conf in _edges(store)}
+    finally:
+        store.close()
+    # Module entity for src/auth.ts has name "src.auth"
+    assert "ts:src/auth.ts:src.auth" in dsts
+
+
+def test_ts_namespace_import_marked_wildcard(tmp_path: Path) -> None:
+    db = _ts_repo(
+        tmp_path,
+        {
+            "src/main.ts": 'import * as A from "./mod";\n',
+            "src/mod.ts": "export function x() { return 1; }\n",
+        },
+    )
+    store = GraphStore(db)
+    try:
+        dsts = {dst for _src, dst, _conf in _edges(store)}
+    finally:
+        store.close()
+    assert "wildcard:ts:src/mod.ts" in dsts
+
+
+def test_ts_bare_specifier_marked_external(tmp_path: Path) -> None:
+    db = _ts_repo(
+        tmp_path,
+        {"src/app.tsx": 'import { useState } from "react";\n'},
+    )
+    store = GraphStore(db)
+    try:
+        dsts = {dst for _src, dst, _conf in _edges(store)}
+    finally:
+        store.close()
+    assert "external:react.useState" in dsts
+
+
+def test_ts_resolves_through_index_file(tmp_path: Path) -> None:
+    """`import X from "./pkg"` matches `./pkg/index.ts`."""
+    db = _ts_repo(
+        tmp_path,
+        {
+            "src/main.ts": 'import { thing } from "./pkg";\n',
+            "src/pkg/index.ts": "export function thing() { return 1; }\n",
+        },
+    )
+    store = GraphStore(db)
+    try:
+        dsts = {dst for _src, dst, _conf in _edges(store)}
+    finally:
+        store.close()
+    assert "ts:src/pkg/index.ts:thing" in dsts
+
+
+def test_ts_resolves_parent_dir_specifier(tmp_path: Path) -> None:
+    db = _ts_repo(
+        tmp_path,
+        {
+            "src/sub/a.ts": 'import { helper } from "../util";\n',
+            "src/util.ts": "export function helper() { return 1; }\n",
+        },
+    )
+    store = GraphStore(db)
+    try:
+        dsts = {dst for _src, dst, _conf in _edges(store)}
+    finally:
+        store.close()
+    assert "ts:src/util.ts:helper" in dsts
+
+
+def test_ts_unknown_relative_path_external(tmp_path: Path) -> None:
+    db = _ts_repo(
+        tmp_path,
+        {"src/main.ts": 'import { x } from "./does-not-exist";\n'},
+    )
+    store = GraphStore(db)
+    try:
+        dsts = {dst for _src, dst, _conf in _edges(store)}
+    finally:
+        store.close()
+    assert "external:./does-not-exist::x" in dsts
+
+
+def test_ts_picks_tsx_over_missing_ts(tmp_path: Path) -> None:
+    """When `./Component.tsx` exists but no `.ts`, the resolver finds the .tsx."""
+    db = _ts_repo(
+        tmp_path,
+        {
+            "src/index.ts": 'import { App } from "./Component";\n',
+            "src/Component.tsx": "export function App() { return null; }\n",
+        },
+    )
+    store = GraphStore(db)
+    try:
+        dsts = {dst for _src, dst, _conf in _edges(store)}
+    finally:
+        store.close()
+    assert "ts:src/Component.tsx:App" in dsts
+
+
 # ---------- src_id preservation ----------
 
 

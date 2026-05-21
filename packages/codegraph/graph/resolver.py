@@ -21,12 +21,21 @@ with `py:?`.
 
 from __future__ import annotations
 
+import posixpath
 import re
 from dataclasses import dataclass
 
 from codegraph.graph.store import GraphStore
 
 _REL_RE = re.compile(r"^py:\?rel(\d+):(.*)$")
+
+# TS / JS module resolution candidates. Order matters: try .ts before .tsx
+# before .js etc., then directory-style `index.*` fallbacks.
+_TS_EXTENSIONS = (".ts", ".tsx", ".d.ts", ".js", ".mjs", ".cjs", ".jsx")
+_TS_INDEX_NAMES = ("index.ts", "index.tsx", "index.js", "index.jsx")
+
+# File extensions stripped when building the module-qname index.
+_MODULE_EXT_ORDER = (".tsx", ".ts", ".jsx", ".mjs", ".cjs", ".js", ".pyi", ".py")
 
 
 @dataclass(frozen=True)
@@ -51,16 +60,17 @@ def resolve_symbols(store: GraphStore) -> ResolutionStats:
 
     Reads from `entities` + `files`, mutates `edges`. Returns counts.
     """
-    by_file_name, by_module_qname = _build_indexes(store)
+    by_file_name, by_module_qname, known_files = _build_indexes(store)
 
     rows = store.conn.execute(
-        "SELECT src_id, dst_id, type, line FROM edges WHERE dst_id LIKE 'py:?%'"
+        "SELECT src_id, dst_id, type, line FROM edges "
+        "WHERE dst_id LIKE 'py:?%' OR dst_id LIKE 'ts:?%'"
     ).fetchall()
 
     resolved = external = wildcard = 0
 
     for src_id, dst_id, edge_type, line in rows:
-        new_dst, new_conf = _resolve_one(dst_id, src_id, by_file_name, by_module_qname)
+        new_dst, new_conf = _resolve_one(dst_id, src_id, by_file_name, by_module_qname, known_files)
         if new_dst == dst_id:
             external += 1  # nothing changed but we still count it
             continue
@@ -99,12 +109,15 @@ def resolve_symbols(store: GraphStore) -> ResolutionStats:
 # Indexes
 
 
-def _build_indexes(store: GraphStore) -> tuple[dict[tuple[str, str], str], dict[str, str]]:
-    """Build the two lookups the resolver needs.
+def _build_indexes(
+    store: GraphStore,
+) -> tuple[dict[tuple[str, str], str], dict[str, str], set[str]]:
+    """Build the lookups the resolver needs.
 
     Returns:
         by_file_name: (file_path, simple_name) → entity_id
         by_module_qname: module_qualified_name → file_path
+        known_files: set of all indexed file paths (for TS module probing)
     """
     by_file_name: dict[tuple[str, str], str] = {}
     for entity_id, file, name in store.conn.execute(
@@ -113,11 +126,22 @@ def _build_indexes(store: GraphStore) -> tuple[dict[tuple[str, str], str], dict[
         by_file_name[(file, name)] = entity_id
 
     by_module_qname: dict[str, str] = {}
+    known_files: set[str] = set()
     for (path,) in store.conn.execute("SELECT path FROM files").fetchall():
-        module_qname = path.removesuffix(".py").removesuffix(".pyi").replace("/", ".")
-        by_module_qname[module_qname] = path
+        known_files.add(path)
+        by_module_qname[_path_to_module_qname(path)] = path
 
-    return by_file_name, by_module_qname
+    return by_file_name, by_module_qname, known_files
+
+
+def _path_to_module_qname(path: str) -> str:
+    """`src/auth/login.ts` → `src.auth.login`."""
+    stem = path
+    for ext in _MODULE_EXT_ORDER:
+        if stem.endswith(ext):
+            stem = stem[: -len(ext)]
+            break
+    return stem.replace("/", ".")
 
 
 # ----------------------------------------------------------------------
@@ -129,6 +153,7 @@ def _resolve_one(
     src_id: str,
     by_file_name: dict[tuple[str, str], str],
     by_module_qname: dict[str, str],
+    known_files: set[str],
 ) -> tuple[str, float]:
     rel_match = _REL_RE.match(dst_id)
     if rel_match:
@@ -138,6 +163,9 @@ def _resolve_one(
 
     if dst_id.startswith("py:?:"):
         return _resolve_absolute(dst_id[len("py:?:") :], by_file_name, by_module_qname)
+
+    if dst_id.startswith("ts:?:"):
+        return _resolve_typescript(dst_id[len("ts:?:") :], src_id, by_file_name, known_files)
 
     # Already resolved (shouldn't reach here given the SQL filter, but defensive).
     return dst_id, 1.0
@@ -232,3 +260,81 @@ def _resolve_relative(
             return f"external:{module_qname}.{name}", 0.5
 
     return f"external:rel{depth}.{rest}", 0.5
+
+
+# ----------------------------------------------------------------------
+# TypeScript / JS resolution
+
+
+def _resolve_typescript(
+    rest: str,
+    src_id: str,
+    by_file_name: dict[tuple[str, str], str],
+    known_files: set[str],
+) -> tuple[str, float]:
+    """Resolve a `ts:?:<specifier>(::<name>)?` edge against the file system.
+
+    Behaviour:
+    - Bare specifier (no leading ./ or ../) → external.
+    - Relative specifier → walk extensions + index files to find the real file.
+      * `::<name>` named import → look up (file, name) in entities.
+      * `::default` → resolve to the module entity (we don't track default-export
+        targets explicitly), conf 0.7.
+      * `::*` → wildcard, conf 0.7.
+      * no `::` (side-effect-only import) → module entity, conf 0.7.
+    - tsconfig `paths` aliases (`@/`, etc.) are deferred — they go through the
+      bare branch and end up as external for now.
+    """
+    if "::" in rest:
+        specifier, name = rest.split("::", 1)
+    else:
+        specifier, name = rest, None
+
+    is_relative = specifier.startswith("./") or specifier.startswith("../")
+    if not is_relative:
+        # Bare specifier: lodash / react / @scope/pkg / TS-paths alias.
+        target = f"{specifier}.{name}" if name else specifier
+        return f"external:{target}", 0.5
+
+    src_parts = src_id.split(":", 2)
+    if len(src_parts) < 3:
+        return f"external:{specifier}{'::' + name if name else ''}", 0.5
+    src_file = src_parts[1]
+    src_dir = posixpath.dirname(src_file)
+    joined = posixpath.normpath(posixpath.join(src_dir, specifier))
+
+    target_file = _find_ts_file(joined, known_files)
+    if target_file is None:
+        return f"external:{specifier}{'::' + name if name else ''}", 0.5
+
+    if name == "*":
+        return f"wildcard:ts:{target_file}", 0.7
+
+    if name and name != "default":
+        # Named import — look up the entity directly.
+        hit = by_file_name.get((target_file, name))
+        if hit is not None:
+            return hit, 1.0
+        return f"external:{specifier}::{name}", 0.5
+
+    # default import OR side-effect import — point at the module entity.
+    module_qname = _path_to_module_qname(target_file)
+    module_eid = by_file_name.get((target_file, module_qname))
+    if module_eid is not None:
+        return module_eid, 0.7
+    return f"external:{specifier}{'::' + name if name else ''}", 0.5
+
+
+def _find_ts_file(joined_no_ext: str, known_files: set[str]) -> str | None:
+    """Probe `<joined>.ext` then `<joined>/index.ext` against the indexed files."""
+    if joined_no_ext in known_files:
+        return joined_no_ext  # specifier included the extension explicitly
+    for ext in _TS_EXTENSIONS:
+        candidate = f"{joined_no_ext}{ext}"
+        if candidate in known_files:
+            return candidate
+    for idx in _TS_INDEX_NAMES:
+        candidate = f"{joined_no_ext}/{idx}"
+        if candidate in known_files:
+            return candidate
+    return None

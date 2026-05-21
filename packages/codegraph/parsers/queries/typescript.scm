@@ -12,3 +12,9 @@
 ; Export wrappers
 (export_statement declaration: (_) @exported.decl) @exported.stmt
 
+; Imports (T2.5) — emit "imports" edges resolved against the file system in
+; the symbol resolver (./relative paths + .ts/.tsx/.js/.jsx + index.* lookup).
+(import_statement source: (string) @import.specifier) @import.stmt
+(import_specifier name: (identifier) @import.named_name) @import.named
+(namespace_import (identifier) @import.namespace_alias) @import.namespace
+
