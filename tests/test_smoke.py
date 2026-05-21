@@ -46,10 +46,20 @@ def test_all_scaffolded_modules_importable() -> None:
         importlib.import_module(name)
 
 
-def test_cli_app_exposes_eight_commands() -> None:
+def test_cli_app_exposes_expected_commands() -> None:
     from codegraph.cli import app
 
-    expected = {"index", "search", "ask", "impact", "cycles", "smells", "summarize", "serve"}
+    expected = {
+        "index",
+        "search",
+        "ask",
+        "deps",  # T2.6
+        "impact",
+        "cycles",
+        "smells",
+        "summarize",
+        "serve",
+    }
     # Typer stores explicit `name=` if given, else None — fall back to the function name.
     actual = {(cmd.name or cmd.callback.__name__) for cmd in app.registered_commands}
     assert actual == expected, f"unexpected CLI commands: {actual ^ expected}"

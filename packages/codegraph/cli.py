@@ -9,9 +9,16 @@ import typer
 from rich.console import Console
 from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
 from rich.table import Table
+from rich.tree import Tree
 
 from codegraph import __version__
-from codegraph.graph.queries import search_literal
+from codegraph.graph.queries import (
+    DepNode,
+    DepTree,
+    find_dependencies,
+    find_entity_by_name_or_id,
+    search_literal,
+)
 from codegraph.graph.resolver import resolve_symbols
 from codegraph.graph.store import GraphStore
 from codegraph.parsers.python import PythonParser
@@ -233,6 +240,78 @@ def ask(
 ) -> None:
     """Ask a natural-language question. Streams a grounded answer via GraphRAG. [T5.4]"""
     _stub("ask", "T5.4")
+
+
+@app.command()
+def deps(
+    entity: str = typer.Argument(
+        ..., help="Entity name, qualified_name, or entity_id to trace dependencies from."
+    ),
+    depth: int = typer.Option(3, "--depth", "-d", help="Max BFS depth over imports + calls."),
+    db: Path = typer.Option(DEFAULT_DB, "--db", help="DuckDB graph file path."),
+) -> None:
+    """Show transitive imports + calls outgoing from <entity>. [T2.6]"""
+    if not db.exists():
+        console.print(
+            f"[red]No graph database at {db}.[/red] Run [bold]codegraph index <repo>[/bold] first."
+        )
+        raise typer.Exit(code=1)
+
+    with GraphStore(db) as store:
+        hits = find_entity_by_name_or_id(store.conn, entity)
+        if not hits:
+            console.print(f"[yellow]No entity matching {entity!r}.[/yellow]")
+            raise typer.Exit(code=1)
+        if len(hits) > 1:
+            console.print(
+                f"[yellow]{len(hits)} entities match {entity!r}. Pass an entity_id instead:[/yellow]"
+            )
+            for h in hits[:10]:
+                console.print(f"  [dim]{h.entity_id}[/dim]  ({h.type}, {h.file}:{h.start_line})")
+            raise typer.Exit(code=1)
+
+        root_row = hits[0]
+        tree_data = find_dependencies(store.conn, root_row.entity_id, depth=depth)
+
+    root_label = (
+        f"[bold]{root_row.name}[/bold] "
+        f"[dim]({root_row.type}, {root_row.file}:{root_row.start_line})[/dim]"
+    )
+    tree = Tree(root_label)
+    _add_dep_subtree(tree, root_row.entity_id, tree_data, visited={root_row.entity_id})
+
+    if not tree_data.children:
+        tree.add("[dim](no outbound imports or calls)[/dim]")
+
+    console.print(tree)
+    if tree_data.truncated:
+        console.print(f"[dim]Tree truncated at depth {depth}. Use --depth to go deeper.[/dim]")
+
+
+def _add_dep_subtree(
+    branch: Tree,
+    parent_eid: str,
+    tree_data: DepTree,
+    visited: set[str],
+) -> None:
+    for child in tree_data.children.get(parent_eid, []):
+        label = _format_dep_label(child)
+        if child.is_external:
+            branch.add(label)
+            continue
+        if child.entity_id in visited:
+            branch.add(f"{label}  [dim](cycle)[/dim]")
+            continue
+        sub = branch.add(label)
+        _add_dep_subtree(sub, child.entity_id, tree_data, visited | {child.entity_id})
+
+
+def _format_dep_label(node: DepNode) -> str:
+    marker = f"[cyan]{node.edge_type}[/cyan]"
+    if node.is_external:
+        return f"{marker} [dim]{node.name}[/dim]  [dim]({node.type})[/dim]"
+    loc = f"{node.file}:{node.start_line}" if node.file else "?"
+    return f"{marker} [bold]{node.name}[/bold] [dim]({node.type}, {loc})[/dim]"
 
 
 @app.command()

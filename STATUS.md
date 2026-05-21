@@ -3,7 +3,7 @@
 ## Current
 
 - **Phase:** 2 — Multi-file + Symbol Resolution + TypeScript
-- **Next task:** T2.6 — CLI `deps` command (transitive dependency tree)
+- **Next task:** T2.7 — Real-repo smoke test (fastapi)
 - **Last session:** 2026-05-21
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -41,7 +41,8 @@
 - [x] T2.3 — Hash-based incremental skip (7 tests; 1.2s → 0.0s on re-index)
 - [x] T2.4 — TypeScript / TSX / JS / JSX parser (18 tests; sample_repo_ts indexes)
 - [x] T2.5 — TypeScript import resolution (19 tests; named/default/namespace/side-effect + index file probing)
-- [ ] T2.6 — CLI `deps` command (transitive dependency tree)             ← NEXT
+- [x] T2.6 — CLI `deps` command (17 tests; BFS imports+calls + Rich Tree)
+- [ ] T2.7 — Real-repo smoke test (fastapi)                              ← NEXT
 - [ ] T2.3 — Incremental hash-based skip
 - [ ] T2.4 — TypeScript parser
 - [ ] T2.5 — TypeScript import resolution
