@@ -3,7 +3,7 @@
 ## Current
 
 - **Phase:** 1 — Thin Vertical Slice
-- **Next task:** T1.4 — DuckDB schema + GraphStore
+- **Next task:** T1.5 — Bulk + idempotent writer (extend GraphStore)
 - **Last session:** 2026-05-21
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -17,11 +17,12 @@
 - [x] T0.5 — Pytest skeleton + GitHub Actions CI (3 smoke tests passing)
 - [x] T0.6 — Per-phase plan files in `plan/` (10 files, 3.5KB avg, 8.5KB max)
 
-### Phase 1 — Thin Vertical Slice [IN PROGRESS 3/9]
+### Phase 1 — Thin Vertical Slice [IN PROGRESS 4/9]
 - [x] T1.1 — UIREntity, Edge, EntityType, Language, make_entity_id, hash_source (19 tests)
 - [x] T1.2 — IParser Protocol + ParseResult envelope
 - [x] T1.3 — Python parser via tree-sitter (13 tests; fixture sample_repo_py)
-- [ ] T1.4 — DuckDB schema + GraphStore                           ← NEXT
+- [x] T1.4 — DuckDB schema + GraphStore (15 tests; files/entities/edges with FK + idempotent upserts)
+- [ ] T1.5 — Bulk + idempotent writer extension (already partially covered)  ← NEXT
 - [ ] T1.5 — Bulk + idempotent writer
 - [ ] T1.6 — Walker with .gitignore + language detection
 - [ ] T1.7 — Wire CLI `index` end-to-end
