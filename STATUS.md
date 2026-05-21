@@ -3,7 +3,7 @@
 ## Current
 
 - **Phase:** 1 — Thin Vertical Slice
-- **Next task:** T1.6 — Walker with .gitignore + language detection
+- **Next task:** T1.7 — Wire CLI `index` end-to-end
 - **Last session:** 2026-05-21
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -23,7 +23,8 @@
 - [x] T1.3 — Python parser via tree-sitter (13 tests; fixture sample_repo_py)
 - [x] T1.4 — DuckDB schema + GraphStore (15 tests; files/entities/edges with FK + idempotent upserts)
 - [x] T1.5 — Bulk-at-scale stress tests (50 entities, 100 edges; perf note logged)
-- [ ] T1.6 — Walker with .gitignore + language detection           ← NEXT
+- [x] T1.6 — Walker with .gitignore + language detection (27 tests)
+- [ ] T1.7 — Wire CLI `index` end-to-end                          ← NEXT
 - [ ] T1.5 — Bulk + idempotent writer
 - [ ] T1.6 — Walker with .gitignore + language detection
 - [ ] T1.7 — Wire CLI `index` end-to-end
