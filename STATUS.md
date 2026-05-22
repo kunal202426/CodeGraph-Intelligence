@@ -2,8 +2,8 @@
 
 ## Current
 
-- **Phase:** 2 — Multi-file + Symbol Resolution + TypeScript
-- **Next task:** T2.7 — Real-repo smoke test (fastapi)
+- **Phase:** 3 — Local Embeddings + Semantic Search
+- **Next task:** T3.1 — sentence-transformers wrapper
 - **Last session:** 2026-05-21
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -29,26 +29,26 @@
 - [x] T1.9 — E2E smoke test (multi-file fixture; 11 acceptance tests)
 
 **Phase 1 result: 28 entities across 7 fixture files indexed in 0.9s. End-to-end `index` + `search` working. 105 tests passing in ~56s.**
-- [ ] T1.5 — Bulk + idempotent writer
-- [ ] T1.6 — Walker with .gitignore + language detection
-- [ ] T1.7 — Wire CLI `index` end-to-end
-- [ ] T1.8 — Wire CLI `search` (literal)
-- [ ] T1.9 — E2E smoke test
 
-### Phase 2 — Multi-file + Symbol Resolution + TypeScript [IN PROGRESS 1/7]
+### Phase 2 — Multi-file + Symbol Resolution + TypeScript [DONE 7/7]
 - [x] T2.1 — Python import statement extraction (15 tests; 7 fixture import edges)
 - [x] T2.2 — Symbol resolver (13 tests; 6/7 fixture imports resolved, 1 external)
 - [x] T2.3 — Hash-based incremental skip (7 tests; 1.2s → 0.0s on re-index)
 - [x] T2.4 — TypeScript / TSX / JS / JSX parser (18 tests; sample_repo_ts indexes)
 - [x] T2.5 — TypeScript import resolution (19 tests; named/default/namespace/side-effect + index file probing)
 - [x] T2.6 — CLI `deps` command (17 tests; BFS imports+calls + Rich Tree)
-- [ ] T2.7 — Real-repo smoke test (fastapi)                              ← NEXT
+- [x] T2.7 — Real-repo smoke (fastapi) + pandas bulk-write perf fix
+
+**Phase 2 result: fastapi (1122 files) → 6057 entities, 4405 edges. Cold index 38.6s, warm re-index 0.8s. `search get_swagger_ui_html` and `deps APIRouter` work. 195 tests passing in ~21s.**
+
+### Phase 3 — Local Embeddings + Semantic Search [IN PROGRESS 0/5]
+- [ ] T3.1 — sentence-transformers wrapper                               ← NEXT
+- [ ] T3.2 — Embedding storage in DuckDB
+- [ ] T3.3 — Chunking + batch embed during index
+- [ ] T3.4 — Hybrid search (literal + vector + RRF)
+- [ ] T3.5 — Incremental re-embed
 - [ ] T2.3 — Incremental hash-based skip
 - [ ] T2.4 — TypeScript parser
-- [ ] T2.5 — TypeScript import resolution
-- [ ] T2.6 — CLI `deps` command
-- [ ] T2.7 — Real-repo smoke (fastapi)
-### Phase 3 — Embeddings + Semantic Search [PENDING]
 ### Phase 4 — Call Graph + Impact + Smells [PENDING]
 ### Phase 5 — GraphRAG + Anthropic LLM [PENDING]
 ### Phase 6 — Minimal Web UI [PENDING]
@@ -73,7 +73,7 @@
 - **Commit email fixed to kunal.levitate2024@gmail.com**: Earlier commits used `mathurkunal000@gmail.com` (unverified on GitHub), which prevented the Contributors graph from rendering. All 4 prior commits rewritten via `git filter-branch --env-filter`, local repo config now hardcodes the author. Force-pushed to origin/main. SHAs changed: T1.2 a9b9a91 → cbc7c42, T1.1 eafe8a6 → 084e748, T0.6 cb56645 → 67f4f9d, initial 0f052a8 → 8d00ebc. (workflow fix, post-T1.2)
 - **`tree-sitter-languages` FutureWarning suppressed**: The package internally calls a deprecated `Language(path, name)` form; warning is noisy and unactionable until upstream migrates. Suppressed via `warnings.catch_warnings()` around the import + first call in `parsers/python.py`. Revisit if/when we move to tree-sitter ≥ 0.22 (will need API migration). (T1.3)
 - **`tests/fixtures/` excluded from ruff**: Fixture files may intentionally carry "bad" code patterns (cycles, dead code, god classes) for future test cases. Added `extend-exclude = ["tests/fixtures"]` in pyproject. (T1.3)
-- **DuckDB bulk-insert perf is ~25 ms/row** (T1.5): Parameterized `executemany` and multi-VALUES single-statement INSERT both bottleneck at this rate in DuckDB 1.5.x via the Python binding. The documented fast paths (`db.append(df)`, `db.from_arrow(...)`) require `pandas` or `pyarrow` — neither pulled at MVP. Bulk-test scale dropped from 100→50 entities so CI doesn't drag. Real-repo perf re-evaluated at T2.7 (fastapi smoke); if 90s+ on ~3K entities is too slow, add `pandas` and switch writes to `db.append()`. Tracked but not blocking. (T1.5)
+- **DuckDB bulk-insert perf — RESOLVED at T2.7**: `executemany` was ~30 ms/row (per-call overhead), making the first fastapi index take 439s. Added `pandas` and switched `GraphStore._bulk_insert` to a registered-DataFrame `INSERT … SELECT` (~1000x faster: 6000 rows in 0.09s). Also batched the resolver from per-edge DELETE+INSERT (2N round-trips) into one bulk DELETE + one bulk insert, and skipped `clear_file` on cold index. Result: fastapi 439s → 38.6s cold, 0.8s warm. (T1.5 → T2.7)
 - **No Unicode in CLI text output**: Windows cp1252 console can't encode chars like `✓` (U+2713) and crashes with `UnicodeEncodeError` even when stdout is captured by typer.CliRunner inside a UTF-8 buffer (the test environment hides this). Stick to ASCII text in console.print() messages. Rich style tags (`[green]...[/green]`) are fine. (T1.7)
 
 ## Future (defer until MVP shipped)
@@ -82,9 +82,10 @@
 
 ## Metrics (filled at end of each phase)
 
-- Phase 0 setup time: TBD at T0.6 completion
-- Phase 1 fixture index time: TBD
-- Phase 2 real repo (fastapi) index time: TBD
+- Phase 1 fixture (7 files / 28 entities): index 0.9s
+- Phase 2 fastapi (1122 files / 6057 entities / 4405 edges): cold 38.6s, warm re-index 0.8s
+  - resolver: 287 in-repo imports resolved, 4118 external (stdlib + pydantic/starlette etc.), 0 wildcard
+  - search `get_swagger_ui_html` → fastapi/openapi/docs.py:40 ✓
 - Phase 3 embedding throughput: TBD
 - Phase 5 ask latency (p50): TBD
 - Phase 8 final benchmarks: TBD

@@ -212,9 +212,7 @@ def test_cli_deps_missing_db_errors(runner: CliRunner, tmp_path: Path) -> None:
     assert "No graph database" in result.stdout
 
 
-def test_cli_deps_depth_flag_is_wired(
-    runner: CliRunner, tmp_path: Path
-) -> None:
+def test_cli_deps_depth_flag_is_wired(runner: CliRunner, tmp_path: Path) -> None:
     """A real chain: depth 1 truncates with a note; depth 2 walks the full chain."""
     repo = tmp_path / "repo"
     _make_repo(

@@ -26,6 +26,7 @@ import re
 from dataclasses import dataclass
 
 from codegraph.graph.store import GraphStore
+from codegraph.uir import Edge
 
 _REL_RE = re.compile(r"^py:\?rel(\d+):(.*)$")
 
@@ -68,34 +69,26 @@ def resolve_symbols(store: GraphStore) -> ResolutionStats:
     ).fetchall()
 
     resolved = external = wildcard = 0
+    resolved_edges: list[Edge] = []
 
     for src_id, dst_id, edge_type, line in rows:
         new_dst, new_conf = _resolve_one(dst_id, src_id, by_file_name, by_module_qname, known_files)
-        if new_dst == dst_id:
-            external += 1  # nothing changed but we still count it
-            continue
-
-        # DELETE + INSERT OR IGNORE rather than UPDATE: on re-index, the parser
-        # re-emits the provisional edge and the resolved counterpart already
-        # exists in the table, so a naive UPDATE would hit the composite PK.
-        store.conn.execute(
-            "DELETE FROM edges WHERE src_id = ? AND dst_id = ? AND type = ? AND line = ?",
-            [src_id, dst_id, edge_type, line],
+        resolved_edges.append(
+            Edge(src_id=src_id, dst_id=new_dst, type=edge_type, line=line, confidence=new_conf)
         )
-        store.conn.execute(
-            """
-            INSERT OR IGNORE INTO edges (src_id, dst_id, type, line, confidence, is_dynamic)
-            VALUES (?, ?, ?, ?, ?, FALSE)
-            """,
-            [src_id, new_dst, edge_type, line, new_conf],
-        )
-
         if new_dst.startswith("wildcard:"):
             wildcard += 1
         elif new_dst.startswith("external:"):
             external += 1
         else:
             resolved += 1
+
+    if rows:
+        # Two bulk statements instead of 2*N per-edge round-trips: drop every
+        # provisional edge, then re-insert the resolved versions. INSERT OR
+        # IGNORE dedupes when a resolved counterpart already exists (re-index).
+        store.conn.execute("DELETE FROM edges WHERE dst_id LIKE 'py:?%' OR dst_id LIKE 'ts:?%'")
+        store.upsert_edges(resolved_edges)
 
     return ResolutionStats(
         inspected=len(rows),

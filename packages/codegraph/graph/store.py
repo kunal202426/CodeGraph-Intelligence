@@ -16,14 +16,41 @@ the entities, then the edges.
 
 from __future__ import annotations
 
+import itertools
 from pathlib import Path
 from types import TracebackType
 
 import duckdb
+import pandas as pd
 
 from codegraph.uir import Edge, Language, UIREntity
 
 _SCHEMA_PATH = Path(__file__).with_name("schema.sql")
+
+_ENTITY_COLUMNS = (
+    "entity_id",
+    "type",
+    "name",
+    "qualified_name",
+    "language",
+    "file",
+    "start_line",
+    "end_line",
+    "start_col",
+    "end_col",
+    "raw_source",
+    "docstring",
+    "signature",
+    "is_exported",
+    "is_async",
+    "parent_id",
+    "hash",
+    "summary",
+)
+_EDGE_COLUMNS = ("src_id", "dst_id", "type", "line", "confidence", "is_dynamic")
+
+# Monotonic counter so concurrent staging registrations never collide.
+_stage_counter = itertools.count()
 
 
 class GraphStore:
@@ -77,7 +104,13 @@ class GraphStore:
         )
 
     def upsert_entities(self, entities: list[UIREntity]) -> None:
-        """Bulk insert-or-replace entities. Idempotent on entity_id."""
+        """Bulk insert-or-replace entities. Idempotent on entity_id.
+
+        Uses a registered pandas DataFrame + ``INSERT … SELECT`` rather than
+        ``executemany``: DuckDB's parameterised executemany has high per-call
+        overhead (~30 ms/row in 1.5.x), which made real-repo indexing take
+        minutes. The DataFrame path is ~1000x faster (T2.7).
+        """
         if not entities:
             return
         rows = [
@@ -103,31 +136,40 @@ class GraphStore:
             )
             for e in entities
         ]
-        self.conn.executemany(
-            """
-            INSERT OR REPLACE INTO entities (
-                entity_id, type, name, qualified_name, language,
-                file, start_line, end_line, start_col, end_col,
-                raw_source, docstring, signature,
-                is_exported, is_async, parent_id, hash, summary
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            rows,
-        )
+        self._bulk_insert("entities", _ENTITY_COLUMNS, rows, on_conflict="replace")
 
     def upsert_edges(self, edges: list[Edge]) -> None:
         """Bulk insert edges. Duplicates (same src+dst+type+line) are dropped."""
         if not edges:
             return
         rows = [(e.src_id, e.dst_id, e.type, e.line, e.confidence, e.is_dynamic) for e in edges]
-        self.conn.executemany(
-            """
-            INSERT OR IGNORE INTO edges (
-                src_id, dst_id, type, line, confidence, is_dynamic
-            ) VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            rows,
-        )
+        self._bulk_insert("edges", _EDGE_COLUMNS, rows, on_conflict="ignore")
+
+    def _bulk_insert(
+        self,
+        table: str,
+        columns: tuple[str, ...],
+        rows: list[tuple],
+        *,
+        on_conflict: str,
+    ) -> None:
+        """Insert `rows` into `table` via a registered DataFrame (fast path).
+
+        `on_conflict` is "replace" (INSERT OR REPLACE) or "ignore"
+        (INSERT OR IGNORE). The DataFrame is registered under a unique name
+        and unregistered afterwards so connections stay clean.
+        """
+        if not rows:
+            return
+        verb = "INSERT OR REPLACE" if on_conflict == "replace" else "INSERT OR IGNORE"
+        col_list = ", ".join(columns)
+        df = pd.DataFrame(rows, columns=list(columns))  # noqa: F841 — referenced by name in SQL
+        staging = f"_staging_{table}_{next(_stage_counter)}"
+        self.conn.register(staging, df)
+        try:
+            self.conn.execute(f"{verb} INTO {table} ({col_list}) SELECT {col_list} FROM {staging}")
+        finally:
+            self.conn.unregister(staging)
 
     # ------------------------------------------------------------------
     # Per-file lookups + cleanup (T2.3 incremental)

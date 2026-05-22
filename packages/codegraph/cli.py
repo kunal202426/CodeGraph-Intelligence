@@ -121,9 +121,10 @@ def index(
 
             rel_path = path.relative_to(repo).as_posix()
             current_hash = hash_source(source)
+            prev_hash = store.get_file_hash(rel_path)
 
             # T2.3: skip re-parse when hash hasn't changed.
-            if store.get_file_hash(rel_path) == current_hash:
+            if prev_hash == current_hash:
                 unchanged_files += 1
                 progress.advance(task)
                 continue
@@ -136,9 +137,11 @@ def index(
                 progress.advance(task)
                 continue
 
-            # Drop stale rows for this file before writing the fresh parse so
-            # deleted functions / removed imports don't linger in the graph.
-            store.clear_file(rel_path)
+            # Drop stale rows only when the file was indexed before (changed
+            # content). On first index there is nothing to clear — skipping the
+            # DELETE scans avoids O(files * edges) work on a cold index.
+            if prev_hash is not None:
+                store.clear_file(rel_path)
             store.upsert_file(
                 path=rel_path,
                 language=lang,
