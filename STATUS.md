@@ -56,11 +56,7 @@
 - [ ] T4.3 — CLI `impact` (reverse-call BFS)
 - [ ] T4.4 — Cycle detection (Tarjan SCC)
 - [ ] T4.5 — God-class / coupling smells
-- [ ] T3.3 — Chunking + batch embed during index
-- [ ] T3.4 — Hybrid search (literal + vector + RRF)
-- [ ] T3.5 — Incremental re-embed
-- [ ] T2.3 — Incremental hash-based skip
-- [ ] T2.4 — TypeScript parser
+
 ### Phase 5 — GraphRAG + Anthropic LLM [PENDING]
 ### Phase 6 — Minimal Web UI [PENDING]
 ### Phase 7 — MCP Server (killer demo) [PENDING]
