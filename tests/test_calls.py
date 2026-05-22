@@ -8,12 +8,18 @@ import pytest
 from codegraph.cli import app
 from codegraph.graph.store import GraphStore
 from codegraph.parsers.python import PythonParser
+from codegraph.parsers.typescript import TypeScriptParser
 from typer.testing import CliRunner
 
 
 @pytest.fixture
 def parser() -> PythonParser:
     return PythonParser()
+
+
+@pytest.fixture
+def ts_parser() -> TypeScriptParser:
+    return TypeScriptParser()
 
 
 @pytest.fixture
@@ -154,3 +160,97 @@ def test_no_py_call_placeholders_remain(runner: CliRunner, tmp_path: Path) -> No
     finally:
         store.close()
     assert leftover == 0
+
+
+# ---------- T4.2: TypeScript parser-level call extraction ----------
+
+
+def test_ts_simple_call_emits_provisional_edge(ts_parser: TypeScriptParser) -> None:
+    src = "function login() {\n  authenticate('a', 'b');\n}\n"
+    edges = _call_edges(ts_parser.parse(Path("a.ts"), src))
+    assert any(e.dst_id == "ts:?call:authenticate" for e in edges)
+    edge = next(e for e in edges if e.dst_id == "ts:?call:authenticate")
+    assert edge.src_id == "ts:a.ts:login"
+    assert edge.type == "calls"
+    assert edge.line == 2
+    assert edge.confidence == 0.7
+
+
+def test_ts_member_call_uses_last_property(ts_parser: TypeScriptParser) -> None:
+    src = "function run() {\n  this.validate();\n  obj.helper.process();\n}\n"
+    edges = _call_edges(ts_parser.parse(Path("a.ts"), src))
+    dsts = {e.dst_id for e in edges}
+    assert "ts:?call:validate" in dsts
+    assert "ts:?call:process" in dsts
+
+
+def test_ts_nested_call_in_arguments_captured(ts_parser: TypeScriptParser) -> None:
+    src = "function f() {\n  outer(inner(x));\n}\n"
+    edges = _call_edges(ts_parser.parse(Path("a.ts"), src))
+    dsts = {e.dst_id for e in edges}
+    assert "ts:?call:outer" in dsts
+    assert "ts:?call:inner" in dsts
+
+
+def test_ts_method_calls_attributed_to_method_entity(ts_parser: TypeScriptParser) -> None:
+    src = "class C {\n  m() {\n    helper();\n  }\n}\n"
+    edges = _call_edges(ts_parser.parse(Path("a.ts"), src))
+    edge = next(e for e in edges if e.dst_id == "ts:?call:helper")
+    assert edge.src_id == "ts:a.ts:C.m"
+
+
+def test_ts_arrow_block_body_calls_captured(ts_parser: TypeScriptParser) -> None:
+    src = "const handler = () => {\n  process();\n};\n"
+    edges = _call_edges(ts_parser.parse(Path("a.ts"), src))
+    edge = next(e for e in edges if e.dst_id == "ts:?call:process")
+    assert edge.src_id == "ts:a.ts:handler"
+
+
+def test_ts_arrow_expression_body_call_captured(ts_parser: TypeScriptParser) -> None:
+    src = "const f = (x) => foo(x);\n"
+    edges = _call_edges(ts_parser.parse(Path("a.ts"), src))
+    assert any(e.dst_id == "ts:?call:foo" for e in edges)
+
+
+def test_ts_no_calls_in_body_yields_no_call_edges(ts_parser: TypeScriptParser) -> None:
+    src = "function f() {\n  return 1;\n}\n"
+    assert _call_edges(ts_parser.parse(Path("a.ts"), src)) == []
+
+
+# ---------- T4.2: TypeScript call resolution (same-file / imported) ----------
+
+
+def test_ts_call_resolves_to_same_file_function(runner: CliRunner, tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _make_repo(
+        repo,
+        {"a.ts": "function helper() {\n  return 1;\n}\nfunction main() {\n  return helper();\n}\n"},
+    )
+    db = tmp_path / "g.duckdb"
+    assert runner.invoke(app, ["index", str(repo), "--db", str(db), "--no-embed"]).exit_code == 0
+    store = GraphStore(db)
+    try:
+        calls = _edges(store)
+    finally:
+        store.close()
+    assert ("ts:a.ts:main", "ts:a.ts:helper", "calls") in calls
+    assert not any(dst.startswith("ts:?call:") for _s, dst, _t in calls)
+
+
+def test_ts_call_resolves_to_imported_symbol(runner: CliRunner, tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _make_repo(
+        repo,
+        {
+            "lib.ts": "export function compute() {\n  return 1;\n}\n",
+            "main.ts": "import { compute } from './lib';\nfunction run() {\n  return compute();\n}\n",
+        },
+    )
+    db = tmp_path / "g.duckdb"
+    assert runner.invoke(app, ["index", str(repo), "--db", str(db), "--no-embed"]).exit_code == 0
+    store = GraphStore(db)
+    try:
+        calls = _edges(store)
+    finally:
+        store.close()
+    assert ("ts:main.ts:run", "ts:lib.ts:compute", "calls") in calls

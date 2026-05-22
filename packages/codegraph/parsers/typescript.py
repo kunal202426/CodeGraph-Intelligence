@@ -13,7 +13,8 @@ declarations without `export` are `is_exported=False`. Arrow functions are
 captured only when assigned to a `const`/`let` at module or class scope —
 expression-level arrows are out of MVP scope.
 
-Imports / call edges land in T2.5 + T4.2 respectively.
+Import edges land in T2.5; call edges in T4.2 — both emit provisional
+dst_ids the resolver closes.
 """
 
 from __future__ import annotations
@@ -245,6 +246,7 @@ class TypeScriptParser:
                 parent_id=parent_id,
                 emit_lang=emit_lang,
                 entities=entities,
+                edges=edges,
                 entity_type=EntityType.METHOD if scope else EntityType.FUNCTION,
                 is_async=any(c.type == "async" for c in decl.children),
                 is_exported=is_exported,
@@ -260,6 +262,7 @@ class TypeScriptParser:
                 parent_id=parent_id,
                 emit_lang=emit_lang,
                 entities=entities,
+                edges=edges,
                 entity_type=EntityType.CLASS,
                 is_async=False,
                 is_exported=is_exported,
@@ -287,6 +290,7 @@ class TypeScriptParser:
                 parent_id=parent_id,
                 emit_lang=emit_lang,
                 entities=entities,
+                edges=edges,
                 entity_type=EntityType.INTERFACE,
                 is_async=False,
                 is_exported=is_exported,
@@ -309,6 +313,7 @@ class TypeScriptParser:
                     parent_id=parent_id,
                     emit_lang=emit_lang,
                     entities=entities,
+                    edges=edges,
                     entity_type=EntityType.METHOD if scope else EntityType.FUNCTION,
                     is_async=any(c.type == "async" for c in value.children),
                     is_exported=is_exported,
@@ -338,6 +343,7 @@ class TypeScriptParser:
                     parent_id=parent_id,
                     emit_lang=emit_lang,
                     entities=entities,
+                    edges=edges,
                     entity_type=EntityType.METHOD,
                     is_async=any(c.type == "async" for c in child.children),
                     is_exported=True,  # all instance/static methods are part of the class API
@@ -388,6 +394,7 @@ class TypeScriptParser:
         parent_id: str | None,
         emit_lang: Language,
         entities: list[UIREntity],
+        edges: list[Edge],
         entity_type: EntityType,
         is_async: bool,
         is_exported: bool,
@@ -425,7 +432,73 @@ class TypeScriptParser:
                 hash=hash_source(raw_source),
             )
         )
+
+        # Call edges (T4.2): scan a function/method/arrow body for call expressions.
+        if entity_type in (EntityType.FUNCTION, EntityType.METHOD):
+            body = self._call_body_node(decl)
+            if body is not None:
+                self._emit_calls(body, source, src_id=entity_id, edges=edges)
+
         return entity_id
+
+    # ------------------------------------------------------------------
+    # Call extraction (T4.2) — emit a provisional `calls` edge per call
+    # expression in a body. dst is `ts:?call:<name>`; the resolver closes it
+    # against same-file entities and the file's imports.
+    #
+    #   foo()           → ts:?call:foo
+    #   obj.method()    → ts:?call:method   (last property identifier, like Python)
+    #   a.b.process()   → ts:?call:process
+
+    def _emit_calls(self, body: Node, source: bytes, *, src_id: str, edges: list[Edge]) -> None:
+        for call in self._iter_call_nodes(body):
+            callee = self._callee_name(call, source)
+            if not callee:
+                continue
+            edges.append(
+                Edge(
+                    src_id=src_id,
+                    dst_id=f"ts:?call:{callee}",
+                    type="calls",
+                    line=call.start_point[0] + 1,
+                    confidence=0.7,
+                )
+            )
+
+    def _iter_call_nodes(self, node: Node):
+        """Yield every `call_expression` at/under `node` (incl. nested in args)."""
+        if node.type == "call_expression":
+            yield node
+        for child in node.children:
+            yield from self._iter_call_nodes(child)
+
+    @staticmethod
+    def _call_body_node(decl: Node) -> Node | None:
+        """Body subtree to scan for calls, by declaration kind.
+
+        function_declaration / method_definition expose a `body` field directly;
+        an arrow declarator (`const f = () => ...`) carries its body on the
+        arrow_function value (which may be a statement block or a bare expression).
+        """
+        if decl.type == "variable_declarator":
+            value = decl.child_by_field_name("value")
+            if value is not None and value.type == "arrow_function":
+                return value.child_by_field_name("body")
+            return None
+        return decl.child_by_field_name("body")
+
+    @staticmethod
+    def _callee_name(call_node: Node, source: bytes) -> str | None:
+        fn = call_node.child_by_field_name("function")
+        if fn is None:
+            return None
+        if fn.type == "identifier":
+            return source[fn.start_byte : fn.end_byte].decode("utf-8", errors="replace")
+        if fn.type == "member_expression":
+            prop = fn.child_by_field_name("property")
+            if prop is not None:
+                return source[prop.start_byte : prop.end_byte].decode("utf-8", errors="replace")
+        return None
 
     # ------------------------------------------------------------------
     # Import extraction (T2.5) — emits provisional dst_ids the resolver closes.
