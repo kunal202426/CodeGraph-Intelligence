@@ -61,24 +61,51 @@ def resolve_symbols(store: GraphStore) -> ResolutionStats:
 
     Reads from `entities` + `files`, mutates `edges`. Returns counts.
     """
-    by_file_name, by_module_qname, known_files = _build_indexes(store)
+    idx = _build_indexes(store)
 
     rows = store.conn.execute(
         "SELECT src_id, dst_id, type, line FROM edges "
         "WHERE dst_id LIKE 'py:?%' OR dst_id LIKE 'ts:?%'"
     ).fetchall()
 
+    # Calls are resolved after imports (they may reference imported names), so
+    # partition the work. Both Python (py:?call:) and TS (ts:?call:, T4.2) use
+    # the same suffix convention.
+    call_rows = [r for r in rows if ":?call:" in r[1]]
+    import_rows = [r for r in rows if ":?call:" not in r[1]]
+
     resolved = external = wildcard = 0
     resolved_edges: list[Edge] = []
+    # file → {imported_name: resolved_target_id} — built from resolved imports,
+    # used to resolve calls to imported symbols.
+    imports_by_file: dict[str, dict[str, str]] = {}
 
-    for src_id, dst_id, edge_type, line in rows:
-        new_dst, new_conf = _resolve_one(dst_id, src_id, by_file_name, by_module_qname, known_files)
+    # Phase 1 — imports.
+    for src_id, dst_id, edge_type, line in import_rows:
+        new_dst, new_conf = _resolve_one(
+            dst_id, src_id, idx.by_file_name, idx.by_module_qname, idx.known_files
+        )
         resolved_edges.append(
             Edge(src_id=src_id, dst_id=new_dst, type=edge_type, line=line, confidence=new_conf)
         )
         if new_dst.startswith("wildcard:"):
             wildcard += 1
         elif new_dst.startswith("external:"):
+            external += 1
+        else:
+            resolved += 1
+            target_name = idx.name_by_id.get(new_dst)
+            if target_name:
+                file = src_id.split(":", 2)[1]
+                imports_by_file.setdefault(file, {})[target_name] = new_dst
+
+    # Phase 2 — calls (now that imports_by_file is populated).
+    for src_id, dst_id, edge_type, line in call_rows:
+        new_dst, new_conf = _resolve_call(dst_id, src_id, idx.entities_by_file, imports_by_file)
+        resolved_edges.append(
+            Edge(src_id=src_id, dst_id=new_dst, type=edge_type, line=line, confidence=new_conf)
+        )
+        if new_dst.startswith("external:"):
             external += 1
         else:
             resolved += 1
@@ -102,21 +129,30 @@ def resolve_symbols(store: GraphStore) -> ResolutionStats:
 # Indexes
 
 
-def _build_indexes(
-    store: GraphStore,
-) -> tuple[dict[tuple[str, str], str], dict[str, str], set[str]]:
-    """Build the lookups the resolver needs.
+@dataclass(frozen=True)
+class _Indexes:
+    by_file_name: dict[tuple[str, str], str]  # (file, name) → entity_id
+    by_module_qname: dict[str, str]  # module qname → file path
+    known_files: set[str]  # all indexed file paths (TS module probing)
+    name_by_id: dict[str, str]  # entity_id → name (import-target naming)
+    entities_by_file: dict[str, dict[str, str]]  # file → {name: entity_id}
 
-    Returns:
-        by_file_name: (file_path, simple_name) → entity_id
-        by_module_qname: module_qualified_name → file_path
-        known_files: set of all indexed file paths (for TS module probing)
-    """
+
+def _build_indexes(store: GraphStore) -> _Indexes:
     by_file_name: dict[tuple[str, str], str] = {}
-    for entity_id, file, name in store.conn.execute(
-        "SELECT entity_id, file, name FROM entities"
+    name_by_id: dict[str, str] = {}
+    entities_by_file: dict[str, dict[str, str]] = {}
+    for entity_id, file, name, qname in store.conn.execute(
+        "SELECT entity_id, file, name, qualified_name FROM entities"
     ).fetchall():
         by_file_name[(file, name)] = entity_id
+        name_by_id[entity_id] = name
+        fmap = entities_by_file.setdefault(file, {})
+        # On a name collision within a file (e.g. two classes' `validate`
+        # methods), prefer the top-level definition (qualified_name == name),
+        # which is what a bare `validate()` call most likely targets.
+        if name not in fmap or qname == name:
+            fmap[name] = entity_id
 
     by_module_qname: dict[str, str] = {}
     known_files: set[str] = set()
@@ -124,7 +160,40 @@ def _build_indexes(
         known_files.add(path)
         by_module_qname[_path_to_module_qname(path)] = path
 
-    return by_file_name, by_module_qname, known_files
+    return _Indexes(
+        by_file_name=by_file_name,
+        by_module_qname=by_module_qname,
+        known_files=known_files,
+        name_by_id=name_by_id,
+        entities_by_file=entities_by_file,
+    )
+
+
+def _resolve_call(
+    dst_id: str,
+    src_id: str,
+    entities_by_file: dict[str, dict[str, str]],
+    imports_by_file: dict[str, dict[str, str]],
+) -> tuple[str, float]:
+    """Resolve a `<lang>:?call:<callee>` edge.
+
+    Order: a same-file entity named `<callee>` (conf 1.0) → a name the caller's
+    file imports (conf 0.9) → external (conf 0.5). Method-call precision (typed
+    receivers) is out of MVP scope; we match on the simple callee name.
+    """
+    _, _, callee = dst_id.partition(":?call:")
+    parts = src_id.split(":", 2)
+    file = parts[1] if len(parts) >= 3 else ""
+
+    same_file = entities_by_file.get(file, {})
+    if callee in same_file:
+        return same_file[callee], 1.0
+
+    imported = imports_by_file.get(file, {})
+    if callee in imported:
+        return imported[callee], 0.9
+
+    return f"external:{callee}", 0.5
 
 
 def _path_to_module_qname(path: str) -> str:

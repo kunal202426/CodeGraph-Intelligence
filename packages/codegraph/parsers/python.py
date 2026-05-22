@@ -137,6 +137,7 @@ class PythonParser:
                     scope=scope,
                     parent_id=parent_id,
                     entities=entities,
+                    edges=edges,
                 )
                 if inner.type == "class_definition" and emitted_id is not None:
                     self._descend_into_class(
@@ -151,6 +152,7 @@ class PythonParser:
                     scope=scope,
                     parent_id=parent_id,
                     entities=entities,
+                    edges=edges,
                 )
                 if emitted_id is not None:
                     self._descend_into_class(
@@ -165,6 +167,7 @@ class PythonParser:
                     scope=scope,
                     parent_id=parent_id,
                     entities=entities,
+                    edges=edges,
                 )
             elif kind == "block":
                 # `block` wraps a class/function body's statements — recurse.
@@ -323,6 +326,7 @@ class PythonParser:
         scope: list[str],
         parent_id: str | None,
         entities: list[UIREntity],
+        edges: list[Edge] | None = None,
     ) -> str | None:
         name = self._text(inner_def.child_by_field_name("name"), source)
         if not name:
@@ -360,7 +364,55 @@ class PythonParser:
                 hash=hash_source(raw_source),
             )
         )
+
+        # Call edges (T4.1): scan a function/method body for call expressions.
+        if edges is not None and inner_def.type == "function_definition":
+            body = inner_def.child_by_field_name("body")
+            if body is not None:
+                self._emit_calls(body, source, src_id=entity_id, edges=edges)
+
         return entity_id
+
+    def _emit_calls(self, body: Node, source: bytes, *, src_id: str, edges: list[Edge]) -> None:
+        """Emit a provisional `calls` edge per call expression in `body`.
+
+        Callee is the simple name (`foo` from `foo()`, `m` from `obj.m()`).
+        dst is `py:?call:<name>`; the resolver (T2.2) closes it against
+        same-file entities and the file's imports.
+        """
+        for call in self._iter_call_nodes(body):
+            callee = self._callee_name(call, source)
+            if not callee:
+                continue
+            edges.append(
+                Edge(
+                    src_id=src_id,
+                    dst_id=f"py:?call:{callee}",
+                    type="calls",
+                    line=call.start_point[0] + 1,
+                    confidence=0.7,
+                )
+            )
+
+    def _iter_call_nodes(self, node: Node):
+        """Yield every `call` node under `node` (including nested in arguments)."""
+        for child in node.children:
+            if child.type == "call":
+                yield child
+            yield from self._iter_call_nodes(child)
+
+    @staticmethod
+    def _callee_name(call_node: Node, source: bytes) -> str | None:
+        fn = call_node.child_by_field_name("function")
+        if fn is None:
+            return None
+        if fn.type == "identifier":
+            return source[fn.start_byte : fn.end_byte].decode("utf-8", errors="replace")
+        if fn.type == "attribute":
+            attr = fn.child_by_field_name("attribute")
+            if attr is not None:
+                return source[attr.start_byte : attr.end_byte].decode("utf-8", errors="replace")
+        return None
 
     # ------------------------------------------------------------------
     # Helpers
