@@ -53,6 +53,57 @@ def _stub(name: str, lands_at: str) -> None:
     console.print("Run `codegraph --help` to see all commands and their target phases.")
 
 
+def _embed_pending(store: GraphStore, batch_size: int = 256) -> tuple[int, str | None]:
+    """Embed every entity whose `embedding` is NULL.
+
+    Returns (count_embedded, error_message). On model load/encode failure the
+    error is returned (not raised) so indexing still succeeds with literal
+    search; the caller surfaces it as a warning.
+    """
+    from codegraph.embeddings.chunking import build_embed_input_from_fields, embed_input_hash
+
+    pending = store.conn.execute(
+        "SELECT entity_id, type, qualified_name, signature, docstring, raw_source "
+        "FROM entities WHERE embedding IS NULL"
+    ).fetchall()
+    if not pending:
+        return 0, None
+
+    try:
+        from codegraph.embeddings.pipeline import embed_batch
+    except Exception as exc:  # noqa: BLE001 - import/torch failure → skip
+        return 0, f"{type(exc).__name__}: {exc}"
+
+    ids = [r[0] for r in pending]
+    texts = [build_embed_input_from_fields(r[1], r[2], r[3], r[4], r[5]) for r in pending]
+
+    embedded = 0
+    progress_cols = (
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("{task.completed}/{task.total}"),
+        TimeElapsedColumn(),
+    )
+    try:
+        with Progress(*progress_cols, console=console, transient=True) as progress:
+            task = progress.add_task("Embedding", total=len(texts))
+            for start in range(0, len(texts), batch_size):
+                chunk_texts = texts[start : start + batch_size]
+                chunk_ids = ids[start : start + batch_size]
+                vectors = embed_batch(chunk_texts)
+                store.update_embeddings(
+                    [
+                        (chunk_ids[i], vectors[i].tolist(), embed_input_hash(chunk_texts[i]))
+                        for i in range(len(chunk_texts))
+                    ]
+                )
+                embedded += len(chunk_texts)
+                progress.advance(task, len(chunk_texts))
+    except Exception as exc:  # noqa: BLE001 - model download/encode failure mid-run
+        return embedded, f"{type(exc).__name__}: {exc}"
+    return embedded, None
+
+
 def _version_callback(value: bool) -> None:
     if value:
         console.print(f"codegraph {__version__}")
@@ -84,6 +135,11 @@ def index(
         help="Repository root to index.",
     ),
     db: Path = typer.Option(DEFAULT_DB, "--db", help="DuckDB graph file path."),
+    no_embed: bool = typer.Option(
+        False,
+        "--no-embed",
+        help="Skip computing semantic embeddings (faster, literal search only).",
+    ),
 ) -> None:
     """Index a repository into the graph database. [T1.7]"""
     start = time.monotonic()
@@ -156,6 +212,12 @@ def index(
     # Cross-file symbol resolution (T2.2): rewrites `py:?:...` edges in place.
     stats = resolve_symbols(store)
 
+    # Semantic embeddings (T3.3): embed entities that don't have a vector yet.
+    embedded = 0
+    embed_error: str | None = None
+    if not no_embed:
+        embedded, embed_error = _embed_pending(store)
+
     elapsed = time.monotonic() - start
     n_entities = store.count_entities()
     n_edges = store.count_edges()
@@ -176,6 +238,13 @@ def index(
         console.print(
             f"[dim]Resolved {stats.resolved}/{stats.inspected} imports; "
             f"{stats.external} external, {stats.wildcard} wildcard.[/dim]"
+        )
+    if embedded:
+        console.print(f"[dim]Embedded {embedded} entities for semantic search.[/dim]")
+    if embed_error:
+        console.print(
+            f"[yellow]Embeddings skipped ({embed_error}). "
+            f"Literal search still works; re-run to add semantic search.[/yellow]"
         )
     if skipped_lang:
         console.print(f"[dim]Skipped {skipped_lang} files with unsupported languages.[/dim]")
