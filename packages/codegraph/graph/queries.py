@@ -139,6 +139,85 @@ def vector_search(
 
 
 # ----------------------------------------------------------------------
+# Hybrid search — Reciprocal Rank Fusion of literal + vector (T3.4)
+
+
+@dataclass(frozen=True)
+class HybridHit:
+    """A fused search result. `retrievers` records which retrievers found it."""
+
+    entity_id: str
+    type: str
+    name: str
+    qualified_name: str
+    file: str
+    start_line: int
+    docstring: str | None
+    score: float
+    retrievers: tuple[str, ...]  # subset of ("literal", "semantic"), ordered
+
+
+def hybrid_search(
+    conn: duckdb.DuckDBPyConnection,
+    query_text: str,
+    query_vector: list[float] | None,
+    limit: int = 20,
+    pool: int = 20,
+    rrf_k: int = 60,
+) -> list[HybridHit]:
+    """Fuse literal + vector search via Reciprocal Rank Fusion.
+
+    Each retriever returns up to `pool` ranked results; an entity's fused score
+    is ``sum(1 / (rrf_k + rank))`` over the lists it appears in (rank is
+    1-indexed). Pass an empty `query_text` to skip literal, or `None`
+    `query_vector` to skip vector — so the three CLI modes share one path:
+
+        literal   → hybrid_search(text, None)
+        semantic  → hybrid_search("",   vec)
+        hybrid    → hybrid_search(text, vec)
+    """
+    literal_hits = search_literal(conn, query_text, limit=pool) if query_text else []
+    vector_hits = vector_search(conn, query_vector, limit=pool) if query_vector else []
+
+    scores: dict[str, float] = {}
+    retrievers: dict[str, list[str]] = {}
+    # Common metadata keyed by entity_id (both hit types share these fields).
+    meta: dict[str, tuple] = {}
+
+    def _accumulate(hits, label: str) -> None:
+        for rank, hit in enumerate(hits, start=1):
+            eid = hit.entity_id
+            scores[eid] = scores.get(eid, 0.0) + 1.0 / (rrf_k + rank)
+            retrievers.setdefault(eid, []).append(label)
+            meta.setdefault(
+                eid,
+                (hit.type, hit.name, hit.qualified_name, hit.file, hit.start_line, hit.docstring),
+            )
+
+    _accumulate(literal_hits, "literal")
+    _accumulate(vector_hits, "semantic")
+
+    ordered = sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))
+    results: list[HybridHit] = []
+    for eid, score in ordered[:limit]:
+        m = meta[eid]
+        results.append(
+            HybridHit(
+                entity_id=eid,
+                type=m[0],
+                name=m[1],
+                qualified_name=m[2],
+                file=m[3],
+                start_line=m[4],
+                docstring=m[5],
+                score=score,
+                retrievers=tuple(retrievers[eid]),
+            )
+        )
+    return results
+
+
+# ----------------------------------------------------------------------
 # Entity lookup + dependency BFS (T2.6 / T4.3)
 
 

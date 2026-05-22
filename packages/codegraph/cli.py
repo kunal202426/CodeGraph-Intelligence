@@ -17,7 +17,7 @@ from codegraph.graph.queries import (
     DepTree,
     find_dependencies,
     find_entity_by_name_or_id,
-    search_literal,
+    hybrid_search,
 )
 from codegraph.graph.resolver import resolve_symbols
 from codegraph.graph.store import GraphStore
@@ -268,41 +268,66 @@ def search(
     limit: int = typer.Option(20, "--limit", "-n", help="Max results."),
     db: Path = typer.Option(DEFAULT_DB, "--db", help="DuckDB graph file path."),
 ) -> None:
-    """Search the indexed codebase. [T1.8 literal / T3.4 hybrid]"""
-    # Vector + hybrid land at T3.4. Until then, fall back to literal regardless of flags.
-    if semantic:
-        console.print(
-            "[yellow]--semantic lands at T3.4 (embeddings); falling back to literal search.[/yellow]"
-        )
-
+    """Search the indexed codebase. Default is hybrid literal + semantic. [T3.4]"""
     if not db.exists():
         console.print(
             f"[red]No graph database at {db}.[/red] Run [bold]codegraph index <repo>[/bold] first."
         )
         raise typer.Exit(code=1)
 
+    # Mode: --semantic (vector only) > --no-hybrid (literal only) > default (hybrid).
+    mode = "semantic" if semantic else ("literal" if not hybrid else "hybrid")
+
+    query_vector: list[float] | None = None
+    if mode in ("semantic", "hybrid"):
+        try:
+            from codegraph.embeddings.pipeline import embed_one
+
+            query_vector = embed_one(query).tolist()
+        except Exception as exc:  # noqa: BLE001 - model unavailable → degrade to literal
+            console.print(
+                f"[yellow]Semantic search unavailable ({type(exc).__name__}); "
+                f"using literal search.[/yellow]"
+            )
+            mode = "literal"
+            query_vector = None
+
+    # All three modes route through hybrid_search; the args decide which
+    # retrievers actually run (empty text skips literal, None vector skips vector).
+    text_arg = "" if mode == "semantic" else query
     with GraphStore(db) as store:
-        hits = search_literal(store.conn, query, limit=limit)
+        hits = hybrid_search(store.conn, text_arg, query_vector, limit=limit)
+        # Likely indexed with --no-embed: no vectors to search semantically.
+        if (
+            mode == "semantic"
+            and query_vector is not None
+            and not hits
+            and store.count_embedded() == 0
+        ):
+            console.print(
+                "[yellow]No embeddings in this index. Re-run "
+                "[bold]codegraph index[/bold] without --no-embed.[/yellow]"
+            )
+            return
 
     if not hits:
         console.print(f"[yellow]No results for {query!r}.[/yellow]")
         return
 
-    table = Table(title=f"Results for [bold]{query}[/bold]  ({len(hits)} match)")
+    table = Table(title=f"Results for [bold]{query}[/bold]  ({mode}, {len(hits)} match)")
     table.add_column("Type", style="cyan", no_wrap=True)
-    table.add_column("Name", style="bold")
-    table.add_column("Qualified", style="dim")
+    table.add_column("Name", style="bold", no_wrap=True)  # keep names intact (no wrap)
     table.add_column("Location", style="dim", no_wrap=True)
-    table.add_column("Doc", overflow="fold", max_width=60)
+    table.add_column("Via", style="magenta", no_wrap=True)
+    table.add_column("Doc", overflow="fold", max_width=50)
 
     for hit in hits:
         loc = f"{hit.file}:{hit.start_line}"
-        qname = hit.qualified_name if hit.qualified_name != hit.name else ""
+        via = "+".join(hit.retrievers)
         doc = (hit.docstring or "").split("\n", 1)[0].strip()
-        table.add_row(hit.type, hit.name, qname, loc, doc)
+        table.add_row(hit.type, hit.name, loc, via, doc)
 
     console.print(table)
-    _ = hybrid  # silence unused-arg lint until T3.4 wires it up
 
 
 @app.command()

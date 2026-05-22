@@ -151,8 +151,11 @@ def test_search_partial_match(runner: CliRunner, indexed_db: Path) -> None:
 
 
 def test_search_no_results_yellow_message(runner: CliRunner, indexed_db: Path) -> None:
+    # Literal-only mode gives a crisp "no results"; hybrid/semantic always
+    # return nearest neighbours (standard vector-search behaviour).
     result = runner.invoke(
-        app, ["search", "definitely_no_such_symbol_xyzzy", "--db", str(indexed_db)]
+        app,
+        ["search", "definitely_no_such_symbol_xyzzy", "--no-hybrid", "--db", str(indexed_db)],
     )
     assert result.exit_code == 0
     assert "No results" in result.stdout
@@ -171,11 +174,12 @@ def test_search_missing_db_exits_nonzero(runner: CliRunner, tmp_path: Path) -> N
     assert "No graph database" in result.stdout
 
 
-def test_search_semantic_flag_falls_back_with_notice(runner: CliRunner, indexed_db: Path) -> None:
+def test_search_semantic_flag_runs(runner: CliRunner, indexed_db: Path) -> None:
+    # --semantic now performs real vector search (T3.4). If the model is
+    # unavailable it degrades to literal; either way the command succeeds.
     result = runner.invoke(app, ["search", "authenticate", "--semantic", "--db", str(indexed_db)])
     assert result.exit_code == 0
-    assert "T3.4" in result.stdout  # the deferral notice
-    assert "authenticate" in result.stdout  # but it still returned results
+    assert "authenticate" in result.stdout
 
 
 # ---------- --version (sanity) ----------
