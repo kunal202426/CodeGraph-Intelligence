@@ -3,7 +3,7 @@
 ## Current
 
 - **Phase:** 3 — Local Embeddings + Semantic Search
-- **Next task:** T3.1 — sentence-transformers wrapper
+- **Next task:** T3.2 — Embedding storage in DuckDB (FLOAT[384] column + cosine search)
 - **Last session:** 2026-05-21
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -41,9 +41,9 @@
 
 **Phase 2 result: fastapi (1122 files) → 6057 entities, 4405 edges. Cold index 38.6s, warm re-index 0.8s. `search get_swagger_ui_html` and `deps APIRouter` work. 195 tests passing in ~21s.**
 
-### Phase 3 — Local Embeddings + Semantic Search [IN PROGRESS 0/5]
-- [ ] T3.1 — sentence-transformers wrapper                               ← NEXT
-- [ ] T3.2 — Embedding storage in DuckDB
+### Phase 3 — Local Embeddings + Semantic Search [IN PROGRESS 1/5]
+- [x] T3.1 — sentence-transformers wrapper (all-MiniLM-L6-v2, 384d, 6 tests)
+- [ ] T3.2 — Embedding storage in DuckDB                                 ← NEXT
 - [ ] T3.3 — Chunking + batch embed during index
 - [ ] T3.4 — Hybrid search (literal + vector + RRF)
 - [ ] T3.5 — Incremental re-embed
@@ -75,6 +75,7 @@
 - **`tests/fixtures/` excluded from ruff**: Fixture files may intentionally carry "bad" code patterns (cycles, dead code, god classes) for future test cases. Added `extend-exclude = ["tests/fixtures"]` in pyproject. (T1.3)
 - **DuckDB bulk-insert perf — RESOLVED at T2.7**: `executemany` was ~30 ms/row (per-call overhead), making the first fastapi index take 439s. Added `pandas` and switched `GraphStore._bulk_insert` to a registered-DataFrame `INSERT … SELECT` (~1000x faster: 6000 rows in 0.09s). Also batched the resolver from per-edge DELETE+INSERT (2N round-trips) into one bulk DELETE + one bulk insert, and skipped `clear_file` on cold index. Result: fastapi 439s → 38.6s cold, 0.8s warm. (T1.5 → T2.7)
 - **No Unicode in CLI text output**: Windows cp1252 console can't encode chars like `✓` (U+2713) and crashes with `UnicodeEncodeError` even when stdout is captured by typer.CliRunner inside a UTF-8 buffer (the test environment hides this). Stick to ASCII text in console.print() messages. Rich style tags (`[green]...[/green]`) are fine. (T1.7)
+- **Embedding tests skip when model unavailable**: `test_embeddings.py` loads `all-MiniLM-L6-v2` (~80 MB, downloaded from HuggingFace on first use, cached at `~/.cache/huggingface/`). A module-scoped autouse fixture skips the whole module if the model can't load (no network + not cached) instead of failing. CI will download it fresh each run (~45s, occasionally flaky — first attempt 500'd, retry succeeded) until we add an HF cache step. (T3.1)
 
 ## Future (defer until MVP shipped)
 
