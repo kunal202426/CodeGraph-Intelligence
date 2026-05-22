@@ -80,6 +80,65 @@ def search_literal(
 
 
 # ----------------------------------------------------------------------
+# Vector search (T3.2)
+
+_EMBEDDING_DIM = 384
+
+
+@dataclass(frozen=True)
+class VectorHit:
+    """One row from a cosine-similarity vector search."""
+
+    entity_id: str
+    type: str
+    name: str
+    qualified_name: str
+    file: str
+    start_line: int
+    docstring: str | None
+    similarity: float
+
+
+def vector_search(
+    conn: duckdb.DuckDBPyConnection,
+    query_vector: list[float],
+    limit: int = 20,
+) -> list[VectorHit]:
+    """Cosine-similarity search over `entities.embedding`.
+
+    `query_vector` must be a list of EMBEDDING_DIM plain Python floats (call
+    `.tolist()` on the numpy array from the embedder). Entities without an
+    embedding are skipped. Results are ordered by descending similarity.
+    """
+    if not query_vector:
+        return []
+    rows = conn.execute(
+        f"""
+        SELECT entity_id, type, name, qualified_name, file, start_line, docstring,
+               array_cosine_similarity(embedding, ?::FLOAT[{_EMBEDDING_DIM}]) AS sim
+        FROM entities
+        WHERE embedding IS NOT NULL
+        ORDER BY sim DESC
+        LIMIT ?
+        """,
+        [query_vector, limit],
+    ).fetchall()
+    return [
+        VectorHit(
+            entity_id=r[0],
+            type=r[1],
+            name=r[2],
+            qualified_name=r[3],
+            file=r[4],
+            start_line=r[5],
+            docstring=r[6],
+            similarity=float(r[7]),
+        )
+        for r in rows
+    ]
+
+
+# ----------------------------------------------------------------------
 # Entity lookup + dependency BFS (T2.6 / T4.3)
 
 

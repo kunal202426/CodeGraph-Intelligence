@@ -49,6 +49,10 @@ _ENTITY_COLUMNS = (
 )
 _EDGE_COLUMNS = ("src_id", "dst_id", "type", "line", "confidence", "is_dynamic")
 
+# Must match the FLOAT[N] width in schema.sql and EMBEDDING_DIM in
+# embeddings/pipeline.py.
+_EMBEDDING_DIM = 384
+
 # Monotonic counter so concurrent staging registrations never collide.
 _stage_counter = itertools.count()
 
@@ -170,6 +174,48 @@ class GraphStore:
             self.conn.execute(f"{verb} INTO {table} ({col_list}) SELECT {col_list} FROM {staging}")
         finally:
             self.conn.unregister(staging)
+
+    # ------------------------------------------------------------------
+    # Embeddings (T3.2)
+
+    def update_embeddings(self, rows: list[tuple[str, list[float], str]]) -> None:
+        """Bulk-set `embedding` (FLOAT[384]) + `embedding_hash` for entities.
+
+        `rows` is a list of (entity_id, vector, embedding_hash) where `vector`
+        is a list of EMBEDDING_DIM plain Python floats. Entities not present in
+        `rows` keep their existing embedding. Uses a registered DataFrame +
+        ``UPDATE … FROM`` join, same fast path as the bulk inserts.
+        """
+        if not rows:
+            return
+        df = pd.DataFrame(
+            {
+                "entity_id": [r[0] for r in rows],
+                "emb": [r[1] for r in rows],
+                "emb_hash": [r[2] for r in rows],
+            }
+        )  # noqa: F841 — referenced by name in SQL
+        staging = f"_staging_emb_{next(_stage_counter)}"
+        self.conn.register(staging, df)
+        try:
+            self.conn.execute(
+                f"""
+                UPDATE entities
+                   SET embedding = {staging}.emb::FLOAT[{_EMBEDDING_DIM}],
+                       embedding_hash = {staging}.emb_hash
+                  FROM {staging}
+                 WHERE entities.entity_id = {staging}.entity_id
+                """
+            )
+        finally:
+            self.conn.unregister(staging)
+
+    def count_embedded(self) -> int:
+        """Number of entities that currently have an embedding."""
+        row = self.conn.execute(
+            "SELECT COUNT(*) FROM entities WHERE embedding IS NOT NULL"
+        ).fetchone()
+        return int(row[0]) if row else 0
 
     # ------------------------------------------------------------------
     # Per-file lookups + cleanup (T2.3 incremental)

@@ -3,7 +3,7 @@
 ## Current
 
 - **Phase:** 3 — Local Embeddings + Semantic Search
-- **Next task:** T3.2 — Embedding storage in DuckDB (FLOAT[384] column + cosine search)
+- **Next task:** T3.3 — Chunking + batch embed during index
 - **Last session:** 2026-05-21
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -43,7 +43,8 @@
 
 ### Phase 3 — Local Embeddings + Semantic Search [IN PROGRESS 1/5]
 - [x] T3.1 — sentence-transformers wrapper (all-MiniLM-L6-v2, 384d, 6 tests)
-- [ ] T3.2 — Embedding storage in DuckDB                                 ← NEXT
+- [x] T3.2 — Embedding storage + cosine vector_search (10 tests; real-embedding round-trip)
+- [ ] T3.3 — Chunking + batch embed during index                        ← NEXT
 - [ ] T3.3 — Chunking + batch embed during index
 - [ ] T3.4 — Hybrid search (literal + vector + RRF)
 - [ ] T3.5 — Incremental re-embed
