@@ -130,3 +130,72 @@ def test_semantic_search_after_index(runner: CliRunner, tmp_path: Path) -> None:
         assert "authenticate" in names
     finally:
         store.close()
+
+
+def _make_repo(root: Path, files: dict[str, str]) -> None:
+    for rel, content in files.items():
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+
+
+# ---------- T3.5: incremental re-embed ----------
+
+
+def test_reindex_reembeds_nothing(runner: CliRunner, tmp_path: Path) -> None:
+    db = tmp_path / "graph.duckdb"
+    first = runner.invoke(app, ["index", str(SAMPLE_REPO), "--db", str(db)])
+    assert first.exit_code == 0
+    if "Embeddings skipped" in first.stdout:
+        pytest.skip("embedding model unavailable in this environment")
+    assert "Embedded" in first.stdout
+
+    second = runner.invoke(app, ["index", str(SAMPLE_REPO), "--db", str(db)])
+    assert second.exit_code == 0
+    assert "0 re-embedded" in second.stdout
+
+
+def test_editing_one_file_reembeds_only_its_entities(runner: CliRunner, tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _make_repo(
+        repo,
+        {
+            "a.py": "def f():\n    '''original docstring'''\n    return 1\n",
+            "b.py": "def g():\n    '''unchanged'''\n    return 2\n",
+        },
+    )
+    db = tmp_path / "graph.duckdb"
+    first = runner.invoke(app, ["index", str(repo), "--db", str(db)])
+    assert first.exit_code == 0
+    if "Embeddings skipped" in first.stdout:
+        pytest.skip("embedding model unavailable in this environment")
+
+    # Change a.py's docstring → a.py module + f re-embed; b.py untouched.
+    (repo / "a.py").write_text(
+        "def f():\n    '''a totally different explanation'''\n    return 1\n",
+        encoding="utf-8",
+    )
+    second = runner.invoke(app, ["index", str(repo), "--db", str(db)])
+    assert second.exit_code == 0
+    # a.py yields 2 entities (module + f); both re-embed. b.py's 2 are skipped.
+    assert "Embedded 2 entities" in second.stdout
+
+
+def test_embedding_hash_matches_input(runner: CliRunner, tmp_path: Path) -> None:
+    db = tmp_path / "graph.duckdb"
+    result = runner.invoke(app, ["index", str(SAMPLE_REPO), "--db", str(db)])
+    assert result.exit_code == 0
+    if "Embeddings skipped" in result.stdout:
+        pytest.skip("embedding model unavailable in this environment")
+
+    store = GraphStore(db)
+    try:
+        row = store.conn.execute(
+            "SELECT type, qualified_name, signature, docstring, raw_source, embedding_hash "
+            "FROM entities WHERE name = 'authenticate'"
+        ).fetchone()
+    finally:
+        store.close()
+    assert row is not None
+    expected = embed_input_hash(build_embed_input_from_fields(*row[:5]))
+    assert row[5] == expected

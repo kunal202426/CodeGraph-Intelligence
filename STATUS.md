@@ -2,8 +2,8 @@
 
 ## Current
 
-- **Phase:** 3 — Local Embeddings + Semantic Search
-- **Next task:** T3.5 — Incremental re-embed (skip unchanged embedding inputs)
+- **Phase:** 4 — Call Graph + Impact + Smells
+- **Next task:** T4.1 — Python call-edge extraction
 - **Last session:** 2026-05-21
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -46,13 +46,21 @@
 - [x] T3.2 — Embedding storage + cosine vector_search (10 tests; real-embedding round-trip)
 - [x] T3.3 — Chunking + auto-embed during index (8 tests; --no-embed flag, graceful skip)
 - [x] T3.4 — Hybrid search literal+vector RRF (15 tests; "user authentication"→authenticate via semantic)
-- [ ] T3.5 — Incremental re-embed (skip unchanged embedding inputs)      ← NEXT
+- [x] T3.5 — Incremental re-embed via embedding_hash (3 tests; re-index 0.1s, 0 re-embedded)
+
+**Phase 3 result: local semantic search live. `search "user authentication"` → `authenticate` via meaning. First index embeds all; unchanged re-index re-embeds nothing (0.1s, no model load); editing a file re-embeds only its entities. 231 tests passing.**
+
+### Phase 4 — Call Graph + Impact + Smells [IN PROGRESS 0/5]
+- [ ] T4.1 — Python call-edge extraction                                 ← NEXT
+- [ ] T4.2 — TypeScript call-edge extraction
+- [ ] T4.3 — CLI `impact` (reverse-call BFS)
+- [ ] T4.4 — Cycle detection (Tarjan SCC)
+- [ ] T4.5 — God-class / coupling smells
 - [ ] T3.3 — Chunking + batch embed during index
 - [ ] T3.4 — Hybrid search (literal + vector + RRF)
 - [ ] T3.5 — Incremental re-embed
 - [ ] T2.3 — Incremental hash-based skip
 - [ ] T2.4 — TypeScript parser
-### Phase 4 — Call Graph + Impact + Smells [PENDING]
 ### Phase 5 — GraphRAG + Anthropic LLM [PENDING]
 ### Phase 6 — Minimal Web UI [PENDING]
 ### Phase 7 — MCP Server (killer demo) [PENDING]
