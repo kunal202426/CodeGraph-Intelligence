@@ -2,8 +2,8 @@
 
 ## Current
 
-- **Phase:** 4 — Call Graph + Impact + Smells
-- **Next task:** T4.5 — God-class / coupling smells
+- **Phase:** 5 — GraphRAG + Anthropic LLM
+- **Next task:** T5.1 — Anthropic SDK wrapper with prompt caching
 - **Last session:** 2026-05-23
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -50,12 +50,14 @@
 
 **Phase 3 result: local semantic search live. `search "user authentication"` → `authenticate` via meaning. First index embeds all; unchanged re-index re-embeds nothing (0.1s, no model load); editing a file re-embeds only its entities. 231 tests passing.**
 
-### Phase 4 — Call Graph + Impact + Smells [IN PROGRESS 4/5]
+### Phase 4 — Call Graph + Impact + Smells [DONE 5/5]
 - [x] T4.1 — Python call-edge extraction + resolution (10 tests; same-file/imported/external)
 - [x] T4.2 — TypeScript call-edge extraction (13 tests; identifier/member/arrow + same-file/imported resolution)
 - [x] T4.3 — CLI `impact` reverse-call BFS (9 tests; direct/transitive callers, cycle-safe, blast-radius count)
 - [x] T4.4 — Cycle detection via iterative Tarjan SCC (10 tests; file import graph, 3-file cycle, 5000-node chain no overflow)
-- [ ] T4.5 — God-class / coupling smells                                 ← NEXT
+- [x] T4.5 — God-class / large-class / high-coupling / complex-function smells (11 tests; configurable thresholds, severity-ranked)
+
+**Phase 4 result: full graph-analysis suite live — `search`, `deps`, `impact`, `cycles`, `smells`. impact gives reverse-call blast radius; cycles uses iterative Tarjan SCC (safe on 1000+ file repos); smells flags 4 heuristics ranked by how far over threshold. 280 tests passing.**
 
 ### Phase 5 — GraphRAG + Anthropic LLM [PENDING]
 ### Phase 6 — Minimal Web UI [PENDING]

@@ -528,9 +528,46 @@ def cycles(
 @app.command()
 def smells(
     db: Path = typer.Option(DEFAULT_DB, "--db", help="DuckDB graph file path."),
+    god_class: int = typer.Option(15, "--god-class", help="Max methods before god-class."),
+    large_class: int = typer.Option(500, "--large-class", help="Max LOC before large-class."),
+    coupling: int = typer.Option(20, "--coupling", help="Max imports before high-coupling."),
+    complexity: int = typer.Option(
+        15, "--complexity", help="Max cyclomatic complexity before complex-function."
+    ),
 ) -> None:
-    """Detect code smells: god-class, high coupling, complex functions. [T4.5]"""
-    _stub("smells", "T4.5")
+    """Detect code smells: god-class, large-class, high coupling, complex functions. [T4.5]"""
+    if not db.exists():
+        console.print(
+            f"[red]No graph database at {db}.[/red] Run [bold]codegraph index <repo>[/bold] first."
+        )
+        raise typer.Exit(code=1)
+
+    from codegraph.analysis.smells import detect_smells
+
+    with GraphStore(db) as store:
+        found = detect_smells(
+            store.conn,
+            god_class_methods=god_class,
+            large_class_loc=large_class,
+            high_coupling_imports=coupling,
+            complex_function=complexity,
+        )
+
+    if not found:
+        console.print("[green]No code smells detected.[/green]")
+        return
+
+    plural = "smell" if len(found) == 1 else "smells"
+    console.print(f"[yellow]Found {len(found)} code {plural}:[/yellow]")
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Smell", style="magenta", no_wrap=True)
+    table.add_column("Name", style="bold", no_wrap=True)
+    table.add_column("Location", style="dim", no_wrap=True)
+    table.add_column("Detail", overflow="fold")
+    for s in found:
+        loc = f"{s.file}:{s.line}" if s.line is not None else s.file
+        table.add_row(s.kind, s.name, loc, s.detail)
+    console.print(table)
 
 
 @app.command()
