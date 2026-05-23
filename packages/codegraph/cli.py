@@ -13,8 +13,11 @@ from rich.tree import Tree
 
 from codegraph import __version__
 from codegraph.graph.queries import (
+    CallerNode,
     DepNode,
     DepTree,
+    ImpactTree,
+    find_callers,
     find_dependencies,
     find_entity_by_name_or_id,
     hybrid_search,
@@ -424,12 +427,69 @@ def _format_dep_label(node: DepNode) -> str:
 
 @app.command()
 def impact(
-    entity: str = typer.Argument(..., help="Entity ID or name to analyze."),
+    entity: str = typer.Argument(..., help="Entity name, qualified_name, or entity_id to analyze."),
     depth: int = typer.Option(3, "--depth", "-d", help="Max BFS depth over reverse-call edges."),
     db: Path = typer.Option(DEFAULT_DB, "--db", help="DuckDB graph file path."),
 ) -> None:
     """Show blast radius — which entities would break if this one changes. [T4.3]"""
-    _stub("impact", "T4.3")
+    if not db.exists():
+        console.print(
+            f"[red]No graph database at {db}.[/red] Run [bold]codegraph index <repo>[/bold] first."
+        )
+        raise typer.Exit(code=1)
+
+    with GraphStore(db) as store:
+        hits = find_entity_by_name_or_id(store.conn, entity)
+        if not hits:
+            console.print(f"[yellow]No entity matching {entity!r}.[/yellow]")
+            raise typer.Exit(code=1)
+        if len(hits) > 1:
+            console.print(
+                f"[yellow]{len(hits)} entities match {entity!r}. Pass an entity_id instead:[/yellow]"
+            )
+            for h in hits[:10]:
+                console.print(f"  [dim]{h.entity_id}[/dim]  ({h.type}, {h.file}:{h.start_line})")
+            raise typer.Exit(code=1)
+
+        root_row = hits[0]
+        impact_data = find_callers(store.conn, root_row.entity_id, depth=depth)
+
+    root_label = (
+        f"[bold]{root_row.name}[/bold] "
+        f"[dim]({root_row.type}, {root_row.file}:{root_row.start_line})[/dim]"
+    )
+    tree = Tree(root_label)
+    _add_caller_subtree(tree, root_row.entity_id, impact_data, visited={root_row.entity_id})
+
+    if not impact_data.callers:
+        tree.add("[dim](no callers — nothing calls this entity)[/dim]")
+
+    console.print(tree)
+    summary = f"[bold]{impact_data.total}[/bold] entit{'y' if impact_data.total == 1 else 'ies'}"
+    console.print(f"[dim]Blast radius: {summary} across {depth} hop(s).[/dim]")
+    if impact_data.truncated:
+        console.print(f"[dim]Tree truncated at depth {depth}. Use --depth to go deeper.[/dim]")
+
+
+def _add_caller_subtree(
+    branch: Tree,
+    callee_eid: str,
+    impact_data: ImpactTree,
+    visited: set[str],
+) -> None:
+    for caller in impact_data.callers.get(callee_eid, []):
+        label = _format_caller_label(caller)
+        if caller.entity_id in visited:
+            branch.add(f"{label}  [dim](cycle)[/dim]")
+            continue
+        sub = branch.add(label)
+        _add_caller_subtree(sub, caller.entity_id, impact_data, visited | {caller.entity_id})
+
+
+def _format_caller_label(node: CallerNode) -> str:
+    marker = "[cyan]called by[/cyan]"
+    loc = f"{node.file}:{node.start_line}" if node.file else "?"
+    return f"{marker} [bold]{node.name}[/bold] [dim]({node.type}, {loc})[/dim]"
 
 
 @app.command()

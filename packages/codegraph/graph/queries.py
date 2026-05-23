@@ -359,3 +359,109 @@ def _classify_unresolved(dst_id: str) -> str:
     if dst_id.startswith("external:"):
         return "external"
     return "unresolved"
+
+
+# ----------------------------------------------------------------------
+# Reverse-call impact analysis (T4.3)
+
+
+@dataclass(frozen=True)
+class CallerNode:
+    """One entity that calls the parent entity (an inbound `calls` edge)."""
+
+    entity_id: str
+    name: str
+    type: str
+    file: str | None
+    start_line: int | None
+    confidence: float
+
+
+@dataclass
+class ImpactTree:
+    """Reverse-BFS result: map from a callee entity_id to its direct callers.
+
+    The root is the entity whose blast radius we asked for. Walking
+    `callers[root]` gives depth-1 callers; recursing gives the transitive set.
+    """
+
+    root: str
+    callers: dict[str, list[CallerNode]] = field(default_factory=dict)
+    truncated: bool = False  # True when at least one branch hit the depth limit
+    total: int = 0  # distinct entities in the blast radius (excluding root)
+
+
+def find_callers(
+    conn: duckdb.DuckDBPyConnection,
+    entity_id: str,
+    depth: int = 3,
+) -> ImpactTree:
+    """Breadth-first walk over inbound `calls` edges of `entity_id`.
+
+    Answers "what would break if this entity changed" by following call edges
+    backwards: every `src_id` of a `calls` edge pointing at the current entity
+    is a caller, then we recurse on those callers.
+
+    - Truncates each branch at `depth` hops.
+    - Cycle-safe: visits each entity at most once (recursion stops on revisit).
+    - A caller that calls the parent from several lines appears once per parent.
+    """
+    if depth <= 0:
+        return ImpactTree(root=entity_id, callers={}, truncated=True, total=0)
+
+    visited: set[str] = {entity_id}
+    callers: dict[str, list[CallerNode]] = {}
+    truncated = False
+    frontier: list[str] = [entity_id]
+
+    for level in range(depth):
+        next_frontier: list[str] = []
+        for callee in frontier:
+            rows = conn.execute(
+                """
+                SELECT e.src_id, e.confidence,
+                       ent.type, ent.name, ent.file, ent.start_line
+                FROM edges e
+                LEFT JOIN entities ent ON ent.entity_id = e.src_id
+                WHERE e.dst_id = ? AND e.type = 'calls'
+                ORDER BY ent.file, ent.start_line, e.src_id
+                """,
+                [callee],
+            ).fetchall()
+
+            kids: list[CallerNode] = []
+            seen_here: set[str] = set()  # dedupe multiple call sites from one caller
+            for src_id, conf, ent_type, ent_name, ent_file, ent_line in rows:
+                if src_id in seen_here:
+                    continue
+                seen_here.add(src_id)
+                kids.append(
+                    CallerNode(
+                        entity_id=src_id,
+                        name=ent_name if ent_name is not None else src_id,
+                        type=ent_type if ent_type is not None else "unresolved",
+                        file=ent_file,
+                        start_line=ent_line,
+                        confidence=conf,
+                    )
+                )
+                if src_id not in visited:
+                    visited.add(src_id)
+                    if level < depth - 1:
+                        next_frontier.append(src_id)
+                    else:
+                        truncated = True
+
+            if kids:
+                callers[callee] = kids
+
+        frontier = next_frontier
+        if not frontier:
+            break
+
+    return ImpactTree(
+        root=entity_id,
+        callers=callers,
+        truncated=truncated,
+        total=len(visited) - 1,  # exclude the root itself
+    )

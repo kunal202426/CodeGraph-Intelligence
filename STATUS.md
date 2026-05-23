@@ -3,8 +3,8 @@
 ## Current
 
 - **Phase:** 4 — Call Graph + Impact + Smells
-- **Next task:** T4.3 — CLI `impact` (reverse-call BFS)
-- **Last session:** 2026-05-22
+- **Next task:** T4.4 — Cycle detection (Tarjan SCC)
+- **Last session:** 2026-05-23
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
 ## Phase progress
@@ -50,11 +50,11 @@
 
 **Phase 3 result: local semantic search live. `search "user authentication"` → `authenticate` via meaning. First index embeds all; unchanged re-index re-embeds nothing (0.1s, no model load); editing a file re-embeds only its entities. 231 tests passing.**
 
-### Phase 4 — Call Graph + Impact + Smells [IN PROGRESS 2/5]
+### Phase 4 — Call Graph + Impact + Smells [IN PROGRESS 3/5]
 - [x] T4.1 — Python call-edge extraction + resolution (10 tests; same-file/imported/external)
 - [x] T4.2 — TypeScript call-edge extraction (13 tests; identifier/member/arrow + same-file/imported resolution)
-- [ ] T4.3 — CLI `impact` (reverse-call BFS)                             ← NEXT
-- [ ] T4.4 — Cycle detection (Tarjan SCC)
+- [x] T4.3 — CLI `impact` reverse-call BFS (9 tests; direct/transitive callers, cycle-safe, blast-radius count)
+- [ ] T4.4 — Cycle detection (Tarjan SCC)                                ← NEXT
 - [ ] T4.5 — God-class / coupling smells
 
 ### Phase 5 — GraphRAG + Anthropic LLM [PENDING]
