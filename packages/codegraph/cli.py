@@ -497,7 +497,32 @@ def cycles(
     db: Path = typer.Option(DEFAULT_DB, "--db", help="DuckDB graph file path."),
 ) -> None:
     """List import cycles (strongly connected components of size >= 2). [T4.4]"""
-    _stub("cycles", "T4.4")
+    if not db.exists():
+        console.print(
+            f"[red]No graph database at {db}.[/red] Run [bold]codegraph index <repo>[/bold] first."
+        )
+        raise typer.Exit(code=1)
+
+    from codegraph.analysis.cycles import find_cycles
+
+    with GraphStore(db) as store:
+        found = find_cycles(store.conn)
+
+    if not found:
+        console.print("[green]No import cycles found.[/green]")
+        return
+
+    plural = "cycle" if len(found) == 1 else "cycles"
+    console.print(f"[yellow]Found {len(found)} import {plural}:[/yellow]")
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("#", style="dim", no_wrap=True)
+    table.add_column("Files", style="cyan", no_wrap=True)
+    table.add_column("Cycle", overflow="fold")
+    for i, cycle in enumerate(found, start=1):
+        # Render as a closed chain to make the circularity legible.
+        chain = " -> ".join(cycle) + f" -> {cycle[0]}"
+        table.add_row(str(i), str(len(cycle)), chain)
+    console.print(table)
 
 
 @app.command()
