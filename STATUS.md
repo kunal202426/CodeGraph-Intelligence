@@ -3,8 +3,8 @@
 ## Current
 
 - **Phase:** 5 — GraphRAG + Anthropic LLM
-- **Next task:** T5.1 — Anthropic SDK wrapper with prompt caching
-- **Last session:** 2026-05-23
+- **Next task:** T5.2 — Hybrid retrieval for AI (graph + vector)
+- **Last session:** 2026-05-25
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
 ## Phase progress
@@ -59,7 +59,13 @@
 
 **Phase 4 result: full graph-analysis suite live — `search`, `deps`, `impact`, `cycles`, `smells`. impact gives reverse-call blast radius; cycles uses iterative Tarjan SCC (safe on 1000+ file repos); smells flags 4 heuristics ranked by how far over threshold. 280 tests passing.**
 
-### Phase 5 — GraphRAG + Anthropic LLM [PENDING]
+### Phase 5 — GraphRAG + Anthropic LLM [IN PROGRESS 1/5]
+- [x] T5.1 — Anthropic SDK wrapper (LLM.stream/complete, claude-sonnet-4-6, prompt-cached system block, SDK retries, LLMError wrapping; 9 tests, fake-client injection, no live calls)
+- [ ] T5.2 — Hybrid retrieval for AI (vector + 1-hop graph expansion, re-rank)   ← NEXT
+- [ ] T5.3 — Prompt template + context assembly for `ask`
+- [ ] T5.4 — CLI `ask` with streaming
+- [ ] T5.5 — Repo architecture summary (`summarize`)
+
 ### Phase 6 — Minimal Web UI [PENDING]
 ### Phase 7 — MCP Server (killer demo) [PENDING]
 ### Phase 8 — Polish & Demo Readiness [PENDING]
