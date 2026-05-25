@@ -3,7 +3,7 @@
 ## Current
 
 - **Phase:** 7 — MCP Server (killer demo)
-- **Next task:** T7.2 — Wire MCP tools to graph + AI engine
+- **Next task:** T7.3 — Document MCP install + record demo
 - **Last session:** 2026-05-25
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -83,8 +83,8 @@
 - [ ] T6.6 — `codegraph serve` packages frontend + opens browser
 ### Phase 7 — MCP Server (killer demo) [IN PROGRESS 1/3]
 - [x] T7.1 — MCP server skeleton (mcp 1.27 low-level Server): 4 tools declared (search_code/get_entity_context/impact_analysis/ask_codebase) via tool_definitions(); stdio runner `python -m codegraph.server.mcp_server --db ...`; get_db_path (--db > CODEGRAPH_DB > default). 7 tests + live stdio client roundtrip listed all 4 tools
-- [ ] T7.2 — Wire MCP tools to graph + AI engine   ← NEXT
-- [ ] T7.3 — Document MCP install + record demo
+- [x] T7.2 — call_tool wired: search_code→hybrid_search (embeds only if vectors exist), get_entity_context→entity+depends_on/called_by, impact_analysis→find_callers, ask_codebase→GraphRAG.ask_stream; sync handlers via anyio.to_thread, per-call read-only store, errors→{"error":...} JSON. 14 tests + live client roundtrip (search_code→authenticate, impact→3)
+- [ ] T7.3 — Document MCP install + record demo   ← NEXT
 ### Phase 8 — Polish & Demo Readiness [PENDING]
 ### Phase 9 — Stretch (optional, post-ship) [PENDING]
 

@@ -18,11 +18,16 @@ wired to the library in T7.2.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
+from typing import Any
 
 from mcp.server import Server
-from mcp.types import Tool
+from mcp.types import TextContent, Tool
+
+from codegraph.graph.queries import find_callers, hybrid_search
+from codegraph.graph.store import GraphStore
 
 DEFAULT_DB = Path(".codegraph/graph.duckdb")
 
@@ -102,6 +107,165 @@ def tool_definitions() -> list[Tool]:
 @server.list_tools()
 async def list_tools() -> list[Tool]:
     return tool_definitions()
+
+
+# ----------------------------------------------------------------------
+# Tool implementations (sync; run off the event loop via anyio.to_thread).
+# Each opens a read-only store, returns a JSON string, and never raises —
+# errors become {"error": ...} so the agent gets a usable message.
+
+_ENTITY_COLUMNS = (
+    "entity_id",
+    "type",
+    "name",
+    "qualified_name",
+    "language",
+    "file",
+    "start_line",
+    "end_line",
+    "signature",
+    "docstring",
+    "raw_source",
+)
+
+
+def _open_store() -> GraphStore:
+    db = get_db_path()
+    if not db.exists():
+        raise FileNotFoundError(f"No graph database at {db}. Run `codegraph index <repo>` first.")
+    return GraphStore(db, read_only=True)
+
+
+def _maybe_embed(query: str) -> list[float] | None:
+    try:
+        from codegraph.embeddings.pipeline import embed_one
+
+        return embed_one(query).tolist()
+    except Exception:  # noqa: BLE001 - model unavailable → literal search only
+        return None
+
+
+def _search_code(args: dict[str, Any]) -> str:
+    query = str(args["query"])
+    limit = int(args.get("limit", 10))
+    store = _open_store()
+    try:
+        # Only pay the embedding cost when the index actually has vectors.
+        vector = _maybe_embed(query) if store.count_embedded() > 0 else None
+        hits = hybrid_search(store.conn, query, vector, limit=limit)
+    finally:
+        store.close()
+    return json.dumps(
+        [
+            {
+                "entity_id": h.entity_id,
+                "type": h.type,
+                "name": h.name,
+                "file": h.file,
+                "start_line": h.start_line,
+                "docstring": h.docstring,
+                "via": list(h.retrievers),
+            }
+            for h in hits
+        ]
+    )
+
+
+def _get_entity_context(args: dict[str, Any]) -> str:
+    entity_id = str(args["entity_id"])
+    store = _open_store()
+    try:
+        row = store.conn.execute(
+            f"SELECT {', '.join(_ENTITY_COLUMNS)} FROM entities WHERE entity_id = ?",
+            [entity_id],
+        ).fetchone()
+        if row is None:
+            return json.dumps({"error": f"No entity {entity_id!r}."})
+        entity = dict(zip(_ENTITY_COLUMNS, row, strict=True))
+        calls_out = store.conn.execute(
+            "SELECT DISTINCT dst_id FROM edges WHERE src_id = ? AND type IN ('calls', 'imports')",
+            [entity_id],
+        ).fetchall()
+        called_by = store.conn.execute(
+            "SELECT DISTINCT src_id FROM edges WHERE dst_id = ? AND type = 'calls'",
+            [entity_id],
+        ).fetchall()
+    finally:
+        store.close()
+    return json.dumps(
+        {
+            "entity": entity,
+            "depends_on": [r[0] for r in calls_out],
+            "called_by": [r[0] for r in called_by],
+        }
+    )
+
+
+def _impact_analysis(args: dict[str, Any]) -> str:
+    entity_id = str(args["entity_id"])
+    depth = int(args.get("depth", 3))
+    store = _open_store()
+    try:
+        tree = find_callers(store.conn, entity_id, depth=depth)
+    finally:
+        store.close()
+    return json.dumps(
+        {
+            "root": tree.root,
+            "total": tree.total,
+            "truncated": tree.truncated,
+            "callers": {
+                callee: [
+                    {"entity_id": c.entity_id, "name": c.name, "type": c.type, "file": c.file}
+                    for c in callers
+                ]
+                for callee, callers in tree.callers.items()
+            },
+        }
+    )
+
+
+def _ask_codebase(args: dict[str, Any]) -> str:
+    query = str(args["query"])
+    store = _open_store()
+    try:
+        if store.count_embedded() == 0:
+            return json.dumps(
+                {"error": "This index has no embeddings; re-index without --no-embed."}
+            )
+        from codegraph.ai.graphrag import GraphRAG
+        from codegraph.ai.llm import LLM, LLMError
+
+        rag = GraphRAG(store, LLM())
+        try:
+            answer = "".join(rag.ask_stream(query))
+        except LLMError as exc:
+            return json.dumps({"error": str(exc)})
+    finally:
+        store.close()
+    return json.dumps({"answer": answer})
+
+
+_HANDLERS = {
+    "search_code": _search_code,
+    "get_entity_context": _get_entity_context,
+    "impact_analysis": _impact_analysis,
+    "ask_codebase": _ask_codebase,
+}
+
+
+@server.call_tool()
+async def call_tool(name: str, arguments: dict[str, Any] | None) -> list[TextContent]:
+    handler = _HANDLERS.get(name)
+    if handler is None:
+        raise ValueError(f"Unknown tool: {name}")
+    import anyio
+
+    try:
+        text = await anyio.to_thread.run_sync(handler, arguments or {})
+    except Exception as exc:  # noqa: BLE001 - report to the agent instead of crashing the server
+        text = json.dumps({"error": f"{type(exc).__name__}: {exc}"})
+    return [TextContent(type="text", text=text)]
 
 
 async def _serve() -> None:
