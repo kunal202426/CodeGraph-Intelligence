@@ -3,7 +3,7 @@
 ## Current
 
 - **Phase:** 6 — Minimal Web UI
-- **Next task:** T6.1 — FastAPI server skeleton (search/graph/entity/ask/impact)
+- **Next task:** T6.2 — Vite + React + Tailwind frontend scaffold
 - **Last session:** 2026-05-25
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -69,7 +69,13 @@
 **Phase 5 result: AI layer complete. `ask` streams grounded, citation-style answers via hybrid GraphRAG retrieval over claude-sonnet-4-6 (prompt-cached system); `summarize` writes a multi-pass architecture overview. All AI wiring is testable without a live key or the embedding model (injected fakes + one-hot vectors). 325 tests passing, 1 live-skip.**
 - [ ] T5.5 — Repo architecture summary (`summarize`)
 
-### Phase 6 — Minimal Web UI [PENDING]
+### Phase 6 — Minimal Web UI [IN PROGRESS 1/6]
+- [x] T6.1 — FastAPI skeleton: create_app(db) with /api health/graph(module+entity)/search/entity/impact + SSE /api/ask; per-request read-only DuckDB conn; CORS for Vite; GraphStore read_only flag added (12 tests via TestClient, no model/API)
+- [ ] T6.2 — Vite + React + Tailwind frontend scaffold   ← NEXT
+- [ ] T6.3 — D3 force-directed module graph
+- [ ] T6.4 — Search bar + entity details panel
+- [ ] T6.5 — AI chat panel with SSE streaming + citation links
+- [ ] T6.6 — `codegraph serve` packages frontend + opens browser
 ### Phase 7 — MCP Server (killer demo) [PENDING]
 ### Phase 8 — Polish & Demo Readiness [PENDING]
 ### Phase 9 — Stretch (optional, post-ship) [PENDING]

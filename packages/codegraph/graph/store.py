@@ -60,11 +60,11 @@ _stage_counter = itertools.count()
 class GraphStore:
     """DuckDB-backed graph storage."""
 
-    def __init__(self, db_path: Path | str) -> None:
+    def __init__(self, db_path: Path | str, *, read_only: bool = False) -> None:
         self.db_path = Path(db_path)
-        if str(self.db_path) != ":memory:":
+        if not read_only and str(self.db_path) != ":memory:":
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = duckdb.connect(str(self.db_path))
+        self.conn = duckdb.connect(str(self.db_path), read_only=read_only)
 
     # ------------------------------------------------------------------
     # Lifecycle
