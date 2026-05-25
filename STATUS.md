@@ -3,7 +3,7 @@
 ## Current
 
 - **Phase:** 5 — GraphRAG + Anthropic LLM
-- **Next task:** T5.2 — Hybrid retrieval for AI (graph + vector)
+- **Next task:** T5.3 — Prompt template + context assembly for `ask`
 - **Last session:** 2026-05-25
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -59,10 +59,10 @@
 
 **Phase 4 result: full graph-analysis suite live — `search`, `deps`, `impact`, `cycles`, `smells`. impact gives reverse-call blast radius; cycles uses iterative Tarjan SCC (safe on 1000+ file repos); smells flags 4 heuristics ranked by how far over threshold. 280 tests passing.**
 
-### Phase 5 — GraphRAG + Anthropic LLM [IN PROGRESS 1/5]
+### Phase 5 — GraphRAG + Anthropic LLM [IN PROGRESS 2/5]
 - [x] T5.1 — Anthropic SDK wrapper (LLM.stream/complete, claude-sonnet-4-6, prompt-cached system block, SDK retries, LLMError wrapping; 9 tests, fake-client injection, no live calls)
-- [ ] T5.2 — Hybrid retrieval for AI (vector + 1-hop graph expansion, re-rank)   ← NEXT
-- [ ] T5.3 — Prompt template + context assembly for `ask`
+- [x] T5.2 — Hybrid graph+vector retrieval (vector seeds → 1-hop calls/imports expansion → dedupe → re-rank 0.6·sim+0.3·log-degree+0.1·recency; RetrievedEntity + GraphRAG wrapper; 12 model-free tests via one-hot embeddings)
+- [ ] T5.3 — Prompt template + context assembly for `ask`   ← NEXT
 - [ ] T5.4 — CLI `ask` with streaming
 - [ ] T5.5 — Repo architecture summary (`summarize`)
 

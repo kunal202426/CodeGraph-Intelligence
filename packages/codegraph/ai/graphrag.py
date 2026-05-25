@@ -1,1 +1,247 @@
-"""GraphRAG: hybrid graph+vector retrieval, prompt assembly, generation. Lands at T5.2-T5.4."""
+"""GraphRAG retrieval: vector seeds + 1-hop graph expansion, re-ranked (T5.2).
+
+The retrieval core for `ask` / `summarize`. Pure-text vector search alone misses
+code that's *structurally* central but lexically dissimilar; pure graph walks
+miss semantically relevant code that isn't directly wired to the seed. We combine
+both:
+
+  1. Vector-search the query embedding for the top `pool` semantic seeds.
+  2. Expand each seed by its 1-hop `calls` / `imports` neighbours (both directions).
+  3. Dedupe the seed ∪ neighbour set by entity_id.
+  4. Re-rank every candidate by a blend of semantic similarity, graph centrality
+     (log degree), and recency, then keep the top `k`.
+
+`retrieve()` takes a *precomputed* query vector so it's independent of the
+embedding model (and unit-testable with hand-crafted vectors). `GraphRAG.retrieve`
+is the convenience wrapper that embeds the query string first.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, field
+from datetime import datetime
+
+import duckdb
+
+# Re-rank weights (see module docstring). Semantic similarity dominates; graph
+# centrality breaks ties toward well-connected code; recency is a light nudge.
+_W_SIMILARITY = 0.6
+_W_DEGREE = 0.3
+_W_RECENCY = 0.1
+
+_EMBEDDING_DIM = 384
+_EDGE_TYPES = ("calls", "imports")
+
+
+@dataclass(frozen=True)
+class RetrievedEntity:
+    """One ranked retrieval result with the fields the prompt assembler needs."""
+
+    entity_id: str
+    type: str
+    name: str
+    qualified_name: str
+    file: str
+    start_line: int
+    end_line: int
+    signature: str | None
+    docstring: str | None
+    raw_source: str | None
+    similarity: float  # cosine sim to the query (0 if the entity has no embedding)
+    degree: int  # total in + out edges (graph centrality)
+    score: float  # final combined rank score
+    via: str  # "vector" (semantic seed) or "graph" (neighbour expansion)
+    neighbors: tuple[str, ...] = field(default_factory=tuple)  # outbound call/import targets
+
+
+def _in_clause(ids: list[str]) -> tuple[str, list[str]]:
+    """Return a ``(?, ?, …)`` placeholder clause and the matching params."""
+    return "(" + ",".join(["?"] * len(ids)) + ")", list(ids)
+
+
+def _seed_ids(
+    conn: duckdb.DuckDBPyConnection, query_vector: list[float], pool: int
+) -> dict[str, float]:
+    """Top-`pool` semantic seeds → {entity_id: similarity}."""
+    rows = conn.execute(
+        f"""
+        SELECT entity_id, array_cosine_similarity(embedding, ?::FLOAT[{_EMBEDDING_DIM}]) AS sim
+        FROM entities
+        WHERE embedding IS NOT NULL
+        ORDER BY sim DESC
+        LIMIT ?
+        """,
+        [query_vector, pool],
+    ).fetchall()
+    return {r[0]: float(r[1]) for r in rows}
+
+
+def _expand_neighbors(conn: duckdb.DuckDBPyConnection, seeds: list[str]) -> set[str]:
+    """1-hop `calls`/`imports` neighbours (both directions) that are real entities."""
+    if not seeds:
+        return set()
+    clause, params = _in_clause(seeds)
+    type_clause, type_params = _in_clause(list(_EDGE_TYPES))
+    rows = conn.execute(
+        f"""
+        SELECT DISTINCT
+          CASE WHEN e.src_id IN {clause} THEN e.dst_id ELSE e.src_id END AS neighbor
+        FROM edges e
+        WHERE e.type IN {type_clause}
+          AND (e.src_id IN {clause} OR e.dst_id IN {clause})
+        """,
+        [*params, *type_params, *params, *params],
+    ).fetchall()
+    candidates = {r[0] for r in rows if r[0] is not None}
+    if not candidates:
+        return set()
+    # Keep only neighbours that are real indexed entities (drop external:/wildcard:).
+    real_clause, real_params = _in_clause(list(candidates))
+    real_rows = conn.execute(
+        f"SELECT entity_id FROM entities WHERE entity_id IN {real_clause}",
+        real_params,
+    ).fetchall()
+    return {r[0] for r in real_rows}
+
+
+def _outbound_neighbors(conn: duckdb.DuckDBPyConnection, ids: list[str]) -> dict[str, list[str]]:
+    """Map each id to its outbound `calls`/`imports` targets (for prompt context)."""
+    if not ids:
+        return {}
+    clause, params = _in_clause(ids)
+    type_clause, type_params = _in_clause(list(_EDGE_TYPES))
+    rows = conn.execute(
+        f"""
+        SELECT src_id, dst_id FROM edges
+        WHERE type IN {type_clause} AND src_id IN {clause}
+        ORDER BY src_id, line, dst_id
+        """,
+        [*type_params, *params],
+    ).fetchall()
+    out: dict[str, list[str]] = {}
+    for src, dst in rows:
+        bucket = out.setdefault(src, [])
+        if dst not in bucket:
+            bucket.append(dst)
+    return out
+
+
+def _combined_score(sim: float, degree: int, recency: float, max_degree: int) -> float:
+    """Weighted blend of similarity (clamped ≥0), log-degree, and recency — all in [0,1]."""
+    sim_c = max(0.0, sim)
+    deg_c = math.log1p(degree) / math.log1p(max_degree) if max_degree > 0 else 0.0
+    return _W_SIMILARITY * sim_c + _W_DEGREE * deg_c + _W_RECENCY * recency
+
+
+def _as_epoch(value: object) -> float | None:
+    if isinstance(value, datetime):
+        return value.timestamp()
+    return None
+
+
+def retrieve(
+    conn: duckdb.DuckDBPyConnection,
+    query_vector: list[float],
+    k: int = 15,
+    pool: int = 30,
+) -> list[RetrievedEntity]:
+    """Hybrid retrieval over a precomputed query vector. Returns top-`k` ranked.
+
+    Empty when there are no embedded entities (e.g. indexed with --no-embed) or
+    the query vector is empty.
+    """
+    if not query_vector:
+        return []
+
+    seed_sims = _seed_ids(conn, query_vector, pool)
+    if not seed_sims:
+        return []
+    seeds = list(seed_sims)
+    neighbors = _expand_neighbors(conn, seeds)
+    candidate_ids = list(dict.fromkeys([*seeds, *sorted(neighbors)]))  # stable, deduped
+
+    clause, params = _in_clause(candidate_ids)
+    rows = conn.execute(
+        f"""
+        SELECT e.entity_id, e.type, e.name, e.qualified_name, e.file,
+               e.start_line, e.end_line, e.signature, e.docstring, e.raw_source,
+               COALESCE(array_cosine_similarity(e.embedding, ?::FLOAT[{_EMBEDDING_DIM}]), 0.0) AS sim,
+               (SELECT COUNT(*) FROM edges g
+                 WHERE g.src_id = e.entity_id OR g.dst_id = e.entity_id) AS degree,
+               f.indexed_at AS indexed_at
+        FROM entities e
+        LEFT JOIN files f ON f.path = e.file
+        WHERE e.entity_id IN {clause}
+        """,
+        [query_vector, *params],
+    ).fetchall()
+    if not rows:
+        return []
+
+    outbound = _outbound_neighbors(conn, candidate_ids)
+
+    # Normalize recency across the candidate set (min-max on index timestamp).
+    epochs = [e for e in (_as_epoch(r[12]) for r in rows) if e is not None]
+    t_min, t_max = (min(epochs), max(epochs)) if epochs else (0.0, 0.0)
+    span = t_max - t_min
+
+    def recency_of(value: object) -> float:
+        ep = _as_epoch(value)
+        if ep is None or span <= 0:
+            return 0.0
+        return (ep - t_min) / span
+
+    max_degree = max((int(r[11]) for r in rows), default=0)
+
+    results: list[RetrievedEntity] = []
+    for r in rows:
+        eid = r[0]
+        sim = float(r[10])
+        degree = int(r[11])
+        score = _combined_score(sim, degree, recency_of(r[12]), max_degree)
+        results.append(
+            RetrievedEntity(
+                entity_id=eid,
+                type=r[1],
+                name=r[2],
+                qualified_name=r[3],
+                file=r[4],
+                start_line=r[5],
+                end_line=r[6],
+                signature=r[7],
+                docstring=r[8],
+                raw_source=r[9],
+                similarity=sim,
+                degree=degree,
+                score=score,
+                via="vector" if eid in seed_sims else "graph",
+                neighbors=tuple(outbound.get(eid, [])),
+            )
+        )
+
+    results.sort(key=lambda e: (-e.score, e.entity_id))
+    return results[:k]
+
+
+class GraphRAG:
+    """Convenience wrapper binding a store + embedder (+ optional LLM for later tasks).
+
+    `embedder` is a callable str -> list[float]; defaults to the local
+    sentence-transformers `embed_one`. Inject a fake in tests to avoid the model.
+    """
+
+    def __init__(self, store, llm=None, embedder=None) -> None:
+        self.store = store
+        self.llm = llm
+        self._embedder = embedder
+
+    def _embed_query(self, query: str) -> list[float]:
+        if self._embedder is not None:
+            return list(self._embedder(query))
+        from codegraph.embeddings.pipeline import embed_one
+
+        return embed_one(query).tolist()
+
+    def retrieve(self, query: str, k: int = 15, pool: int = 30) -> list[RetrievedEntity]:
+        return retrieve(self.store.conn, self._embed_query(query), k=k, pool=pool)
