@@ -19,11 +19,14 @@ is the convenience wrapper that embeds the query string first.
 from __future__ import annotations
 
 import math
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
 import duckdb
+
+from codegraph.ai.llm import LLMError
 
 # Re-rank weights (see module docstring). Semantic similarity dominates; graph
 # centrality breaks ties toward well-connected code; recency is a light nudge.
@@ -317,3 +320,22 @@ class GraphRAG:
 
     def retrieve(self, query: str, k: int = 15, pool: int = 30) -> list[RetrievedEntity]:
         return retrieve(self.store.conn, self._embed_query(query), k=k, pool=pool)
+
+    def ask_stream(
+        self,
+        query: str,
+        k: int = 15,
+        max_tokens: int = 2000,
+    ) -> Iterator[str]:
+        """Retrieve context, assemble the prompt, and stream the grounded answer.
+
+        Lazy: retrieval + embedding run when the generator is first consumed, so
+        errors (embedding model / API) surface at iteration time for the caller
+        to handle. Raises `LLMError` if no LLM is configured.
+        """
+        if self.llm is None:
+            raise LLMError("No LLM configured — construct GraphRAG(store, LLM()).")
+        entities = self.retrieve(query, k=k)
+        system = load_system_prompt()
+        user = build_user_message(query, entities)
+        yield from self.llm.stream(system, user, max_tokens=max_tokens)

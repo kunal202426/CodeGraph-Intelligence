@@ -3,7 +3,7 @@
 ## Current
 
 - **Phase:** 5 — GraphRAG + Anthropic LLM
-- **Next task:** T5.4 — CLI `ask` with streaming
+- **Next task:** T5.5 — Repo architecture summary (`summarize`)
 - **Last session:** 2026-05-25
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -63,7 +63,8 @@
 - [x] T5.1 — Anthropic SDK wrapper (LLM.stream/complete, claude-sonnet-4-6, prompt-cached system block, SDK retries, LLMError wrapping; 9 tests, fake-client injection, no live calls)
 - [x] T5.2 — Hybrid graph+vector retrieval (vector seeds → 1-hop calls/imports expansion → dedupe → re-rank 0.6·sim+0.3·log-degree+0.1·recency; RetrievedEntity + GraphRAG wrapper; 12 model-free tests via one-hot embeddings)
 - [x] T5.3 — `ask` system prompt + context assembly (ask_system.md grounding/citation rules; format_entity_block + build_user_message with char budget; 10 tests)
-- [ ] T5.4 — CLI `ask` with streaming   ← NEXT
+- [x] T5.4 — CLI `ask` with streaming (GraphRAG.ask_stream wires retrieve→assemble→LLM.stream; cp1252-safe + markup-free token emit; missing-db/no-embeddings/LLMError guards; 6 tests + 1 live-skip)
+- [ ] T5.5 — Repo architecture summary (`summarize`)   ← NEXT
 - [ ] T5.4 — CLI `ask` with streaming
 - [ ] T5.5 — Repo architecture summary (`summarize`)
 

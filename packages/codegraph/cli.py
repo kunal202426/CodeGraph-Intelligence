@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import time
 from pathlib import Path
 
@@ -344,13 +345,66 @@ def search(
     console.print(table)
 
 
+def _emit(text: str) -> None:
+    """Write a streamed chunk to stdout, tolerating legacy console encodings.
+
+    Model output may contain characters the Windows cp1252 console can't encode;
+    replace them rather than crash mid-stream. Goes through sys.stdout (which the
+    test runner captures) and bypasses Rich markup so `[entity_id]` citations
+    aren't mistaken for style tags.
+    """
+    try:
+        sys.stdout.write(text)
+    except UnicodeEncodeError:
+        enc = sys.stdout.encoding or "utf-8"
+        sys.stdout.write(text.encode(enc, errors="replace").decode(enc))
+    sys.stdout.flush()
+
+
 @app.command()
 def ask(
     query: str = typer.Argument(..., help="Natural-language question about the codebase."),
     db: Path = typer.Option(DEFAULT_DB, "--db", help="DuckDB graph file path."),
+    k: int = typer.Option(15, "--k", help="Number of entities to retrieve as context."),
+    max_tokens: int = typer.Option(2000, "--max-tokens", help="Max answer length (tokens)."),
 ) -> None:
     """Ask a natural-language question. Streams a grounded answer via GraphRAG. [T5.4]"""
-    _stub("ask", "T5.4")
+    from codegraph.ai.graphrag import GraphRAG
+    from codegraph.ai.llm import LLM, LLMError
+
+    if not db.exists():
+        console.print(
+            f"[red]No graph database at {db}.[/red] Run [bold]codegraph index <repo>[/bold] first."
+        )
+        raise typer.Exit(code=1)
+
+    with GraphStore(db) as store:
+        if store.count_embedded() == 0:
+            console.print(
+                "[yellow]This index has no embeddings, which GraphRAG needs to find "
+                "relevant code. Re-run [bold]codegraph index[/bold] without --no-embed.[/yellow]"
+            )
+            raise typer.Exit(code=1)
+
+        rag = GraphRAG(store, LLM())
+        printed = False
+        try:
+            for token in rag.ask_stream(query, k=k, max_tokens=max_tokens):
+                _emit(token)
+                printed = True
+        except LLMError as exc:
+            if printed:
+                _emit("\n")
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=1) from exc
+        except Exception as exc:  # noqa: BLE001 - embedding/model failure → friendly message
+            if printed:
+                _emit("\n")
+            console.print(f"[red]Could not answer ({type(exc).__name__}): {exc}[/red]")
+            raise typer.Exit(code=1) from exc
+
+    if printed:
+        _emit("\n")
 
 
 @app.command()
