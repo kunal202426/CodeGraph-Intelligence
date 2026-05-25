@@ -26,12 +26,16 @@ import duckdb
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from codegraph.graph.queries import find_callers, hybrid_search
 
 # Vite dev server origin (T6.2+). The packaged build is served same-origin.
 _DEV_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173"]
+
+# Default location of the built frontend (Vite's build outDir, see vite.config.ts).
+_DEFAULT_STATIC = Path(__file__).with_name("static")
 
 
 class AskRequest(BaseModel):
@@ -40,8 +44,13 @@ class AskRequest(BaseModel):
     max_tokens: int = 2000
 
 
-def create_app(db_path: Path | str) -> FastAPI:
-    """Build a FastAPI app bound to the indexed graph at `db_path`."""
+def create_app(db_path: Path | str, static_dir: Path | str | None = None) -> FastAPI:
+    """Build a FastAPI app bound to the indexed graph at `db_path`.
+
+    If a built frontend exists at `static_dir` (default: the packaged
+    `server/static`), it is mounted at `/` as an SPA — added after the API
+    routes so `/api/*` always takes precedence.
+    """
     db_path = Path(db_path)
     app = FastAPI(title="CodeGraph", version="0.1.0")
     app.add_middleware(
@@ -193,6 +202,11 @@ def create_app(db_path: Path | str) -> FastAPI:
                 store.close()
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+    # Mount the built SPA last so it doesn't shadow the /api routes above.
+    static = Path(static_dir) if static_dir is not None else _DEFAULT_STATIC
+    if (static / "index.html").exists():
+        app.mount("/", StaticFiles(directory=str(static), html=True), name="static")
 
     return app
 

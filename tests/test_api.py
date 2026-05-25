@@ -135,6 +135,34 @@ def test_ask_no_embeddings_streams_error(client: TestClient) -> None:
     assert "embeddings" in r.text.lower()
 
 
+# ---------- static SPA mount (T6.6) ----------
+
+
+def test_spa_mounted_when_build_present(db: Path, tmp_path: Path) -> None:
+    static = tmp_path / "static"
+    static.mkdir()
+    (static / "index.html").write_text("<!doctype html><title>CodeGraph</title>", encoding="utf-8")
+    client = TestClient(create_app(db, static_dir=static))
+    root = client.get("/")
+    assert root.status_code == 200
+    assert "CodeGraph" in root.text
+    assert client.get("/api/health").status_code == 200  # /api still wins
+
+
+def test_no_spa_when_build_absent(db: Path, tmp_path: Path) -> None:
+    client = TestClient(create_app(db, static_dir=tmp_path / "missing"))
+    assert client.get("/").status_code == 404
+    assert client.get("/api/health").status_code == 200
+
+
+def test_serve_missing_db_exits_nonzero(tmp_path: Path) -> None:
+    result = CliRunner().invoke(
+        cli_app, ["serve", "--db", str(tmp_path / "nope.duckdb"), "--no-open"]
+    )
+    assert result.exit_code == 1
+    assert "No graph database" in result.stdout
+
+
 def test_ask_streams_tokens(db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Give the index embeddings so the endpoint proceeds past the guard.
     store = GraphStore(db)

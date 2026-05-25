@@ -2,8 +2,8 @@
 
 ## Current
 
-- **Phase:** 6 — Minimal Web UI
-- **Next task:** T6.6 — `codegraph serve` packages frontend + opens browser
+- **Phase:** 7 — MCP Server (killer demo)
+- **Next task:** T7.1 — MCP server skeleton with 4 tools
 - **Last session:** 2026-05-25
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -75,7 +75,9 @@
 - [x] T6.3 — D3 force-directed module graph (components/Graph.tsx): /api/graph?type=module → forceManyBody+forceLink+forceCenter, drag + zoom, click→onSelect; callback-ref avoids sim rebuild; error/empty states; wired into App left pane, selection shown in footer. build+lint green
 - [x] T6.4 — SearchBar (debounced 250ms, literal/semantic toggle, results dropdown) + EntityPanel (fetch /api/entity → name/sig/docstring/source); shared entity_id selection highlights graph node. API change: module-graph nodes now keyed by module entity_id (label=file) so node clicks + search results both feed EntityPanel; test_api updated. 337 py tests + build/lint green
 - [x] T6.5 — ChatPanel + askStream SSE consumer (api/index.ts parses data: {token|error|done}); transcript with you/codegraph turns, streaming cursor, [entity_id] citations rendered as clickable spans → onSelect (highlights graph + opens entity). build+lint green
-- [ ] T6.6 — `codegraph serve` packages frontend + opens browser   ← NEXT
+- [x] T6.6 — `codegraph serve` (build frontend → uvicorn → mount SPA at / + open browser; --dev skips build for Vite; --no-open flag); create_app mounts StaticFiles after /api routes. 15 API tests (SPA mount, /api precedence, serve guard) + live smoke (serve → / 200 SPA, /api/health + /api/graph 200) verified
+
+**Phase 6 result: full web UI live. `codegraph serve` builds the React/D3 frontend and serves it + the FastAPI graph API on one origin. Module graph (D3 force, drag/zoom), debounced search (literal/semantic), entity detail panel, and an SSE-streaming AI chat with clickable [entity_id] citations — all sharing one selection. 340 tests passing.**
 - [ ] T6.4 — Search bar + entity details panel
 - [ ] T6.5 — AI chat panel with SSE streaming + citation links
 - [ ] T6.6 — `codegraph serve` packages frontend + opens browser

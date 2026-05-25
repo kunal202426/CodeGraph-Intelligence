@@ -663,6 +663,25 @@ def summarize(
     console.print(f"[green]Wrote architecture summary to[/green] [bold]{out}[/bold].")
 
 
+def _build_frontend() -> None:
+    """Run `npm run build` in packages/web (best-effort; warn but don't fail)."""
+    import subprocess
+
+    web = Path(__file__).resolve().parents[1] / "web"
+    if not (web / "package.json").exists():
+        console.print(
+            "[yellow]Frontend source not found; serving the existing build if present.[/yellow]"
+        )
+        return
+    console.print("[dim]Building frontend (npm run build)...[/dim]")
+    try:
+        subprocess.run("npm run build", cwd=web, shell=True, check=True)  # noqa: S602,S607
+    except (OSError, subprocess.CalledProcessError) as exc:
+        console.print(
+            f"[yellow]Frontend build failed ({exc}); serving the existing build if present.[/yellow]"
+        )
+
+
 @app.command()
 def serve(
     db: Path = typer.Option(DEFAULT_DB, "--db", help="DuckDB graph file path."),
@@ -671,9 +690,39 @@ def serve(
     dev: bool = typer.Option(
         False, "--dev", help="Assume Vite dev server is running; skip frontend bundle."
     ),
+    open_browser: bool = typer.Option(
+        True, "--open/--no-open", help="Open a browser tab once the server starts."
+    ),
 ) -> None:
     """Start FastAPI server + open browser to the web UI. [T6.6]"""
-    _stub("serve", "T6.6")
+    if not db.exists():
+        console.print(
+            f"[red]No graph database at {db}.[/red] Run [bold]codegraph index <repo>[/bold] first."
+        )
+        raise typer.Exit(code=1)
+
+    import threading
+    import webbrowser
+
+    import uvicorn
+
+    from codegraph.server.api import create_app
+
+    if dev:
+        url = "http://localhost:5173"
+        console.print(
+            "[dim]--dev: run the Vite dev server separately "
+            "([bold]cd packages/web && npm run dev[/bold]); it proxies /api here.[/dim]"
+        )
+    else:
+        _build_frontend()
+        url = f"http://{host}:{port}"
+
+    application = create_app(db)
+    if open_browser:
+        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+    console.print(f"[green]Serving CodeGraph at[/green] [bold]{url}[/bold]  (Ctrl+C to stop)")
+    uvicorn.run(application, host=host, port=port, log_level="warning")
 
 
 if __name__ == "__main__":
