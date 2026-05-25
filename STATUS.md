@@ -3,7 +3,7 @@
 ## Current
 
 - **Phase:** 8 — Polish & Demo Readiness
-- **Next task:** T8.1 — README rewrite (hero, quickstart, architecture, examples)
+- **Next task:** T8.2 — Benchmark on fastapi + mark MVP shipped
 - **Last session:** 2026-05-25
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -88,7 +88,10 @@
 
 **Phase 7 result: MCP server live — Claude Code (or any MCP agent) can call CodeGraph's 4 tools over stdio against an indexed repo. Validated with real MCP client roundtrips. Install documented in README. 354 tests passing.**
 
-### Phase 8 — Polish & Demo Readiness [PENDING]
+### Phase 8 — Polish & Demo Readiness [IN PROGRESS 1/2]
+- [x] T8.1 — README rewrite: hero + docs/demo.gif, what-it-does bullets, quickstart, 3 example queries with output (search/impact/ask), Mermaid architecture diagram, MCP section, stack table, roadmap, acknowledgments
+- [ ] T8.2 — Benchmark on fastapi + mark MVP shipped   ← NEXT
+
 ### Phase 9 — Stretch (optional, post-ship) [PENDING]
 
 ## Blockers / Notes
