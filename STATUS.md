@@ -2,8 +2,8 @@
 
 ## Current
 
-- **Phase:** 7 — MCP Server (killer demo)
-- **Next task:** T7.3 — Document MCP install + record demo
+- **Phase:** 8 — Polish & Demo Readiness
+- **Next task:** T8.1 — README rewrite (hero, quickstart, architecture, examples)
 - **Last session:** 2026-05-25
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -84,7 +84,10 @@
 ### Phase 7 — MCP Server (killer demo) [IN PROGRESS 1/3]
 - [x] T7.1 — MCP server skeleton (mcp 1.27 low-level Server): 4 tools declared (search_code/get_entity_context/impact_analysis/ask_codebase) via tool_definitions(); stdio runner `python -m codegraph.server.mcp_server --db ...`; get_db_path (--db > CODEGRAPH_DB > default). 7 tests + live stdio client roundtrip listed all 4 tools
 - [x] T7.2 — call_tool wired: search_code→hybrid_search (embeds only if vectors exist), get_entity_context→entity+depends_on/called_by, impact_analysis→find_callers, ask_codebase→GraphRAG.ask_stream; sync handlers via anyio.to_thread, per-call read-only store, errors→{"error":...} JSON. 14 tests + live client roundtrip (search_code→authenticate, impact→3)
-- [ ] T7.3 — Document MCP install + record demo   ← NEXT
+- [x] T7.3 — README MCP section (quickstart + `claude mcp add codegraph -- uv run python -m codegraph.server.mcp_server --db ...`, CODEGRAPH_DB, 4-tool table, demo placeholder docs/demo.gif). Entry point verified (`python -m ... --help`). GIF is a manual recording step (left to repo owner)
+
+**Phase 7 result: MCP server live — Claude Code (or any MCP agent) can call CodeGraph's 4 tools over stdio against an indexed repo. Validated with real MCP client roundtrips. Install documented in README. 354 tests passing.**
+
 ### Phase 8 — Polish & Demo Readiness [PENDING]
 ### Phase 9 — Stretch (optional, post-ship) [PENDING]
 
