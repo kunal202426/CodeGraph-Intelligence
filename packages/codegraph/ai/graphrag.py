@@ -21,6 +21,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 
 import duckdb
 
@@ -32,6 +33,12 @@ _W_RECENCY = 0.1
 
 _EMBEDDING_DIM = 384
 _EDGE_TYPES = ("calls", "imports")
+
+# Prompt assembly (T5.3).
+_PROMPTS_DIR = Path(__file__).with_name("prompts")
+_ASK_SYSTEM_PATH = _PROMPTS_DIR / "ask_system.md"
+_BODY_PREVIEW_LINES = 20  # show signature, else first N lines of raw_source
+_CONTEXT_CHAR_BUDGET = 12000  # ~3000 tokens of repository context
 
 
 @dataclass(frozen=True)
@@ -222,6 +229,71 @@ def retrieve(
 
     results.sort(key=lambda e: (-e.score, e.entity_id))
     return results[:k]
+
+
+# ----------------------------------------------------------------------
+# Prompt assembly (T5.3)
+
+
+def load_system_prompt() -> str:
+    """Read the `ask` system prompt template from disk."""
+    return _ASK_SYSTEM_PATH.read_text(encoding="utf-8").strip()
+
+
+def _entity_body(entity: RetrievedEntity) -> str:
+    """The code preview for one entity: its signature, else the first N source lines."""
+    if entity.signature:
+        return entity.signature.strip()
+    if entity.raw_source:
+        lines = entity.raw_source.splitlines()
+        preview = "\n".join(lines[:_BODY_PREVIEW_LINES])
+        if len(lines) > _BODY_PREVIEW_LINES:
+            preview += "\n    ..."
+        return preview
+    return "(source unavailable)"
+
+
+def format_entity_block(entity: RetrievedEntity) -> str:
+    """Render one retrieved entity as a context block for the prompt."""
+    header = (
+        f"--- [{entity.entity_id}] {entity.type} "
+        f"({entity.file}:{entity.start_line}-{entity.end_line})"
+    )
+    parts = [header, _entity_body(entity)]
+    if entity.docstring:
+        parts.append(entity.docstring.strip())
+    if entity.neighbors:
+        parts.append("Calls: " + ", ".join(entity.neighbors))
+    return "\n".join(parts)
+
+
+def build_user_message(
+    query: str,
+    entities: list[RetrievedEntity],
+    char_budget: int = _CONTEXT_CHAR_BUDGET,
+) -> str:
+    """Assemble the user message: the question + a token-budgeted context section.
+
+    Entities are added in rank order until the character budget is reached, so
+    the most relevant context survives truncation. With no entities, the context
+    section says so explicitly (the system prompt tells the model to admit gaps).
+    """
+    lines = [f"QUESTION: {query}", "", "REPOSITORY CONTEXT:"]
+    if not entities:
+        lines.append("(no relevant entities were retrieved for this query)")
+        return "\n".join(lines)
+
+    used = 0
+    # The loop only ever appends-then-continues or breaks, so the enumerate index
+    # equals the number of blocks already included.
+    for i, entity in enumerate(entities):
+        block = format_entity_block(entity)
+        if i > 0 and used + len(block) > char_budget:
+            break
+        lines.append("")
+        lines.append(block)
+        used += len(block)
+    return "\n".join(lines)
 
 
 class GraphRAG:
