@@ -2,8 +2,8 @@
 
 ## Current
 
-- **Phase:** 5 — GraphRAG + Anthropic LLM
-- **Next task:** T5.5 — Repo architecture summary (`summarize`)
+- **Phase:** 6 — Minimal Web UI
+- **Next task:** T6.1 — FastAPI server skeleton (search/graph/entity/ask/impact)
 - **Last session:** 2026-05-25
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -59,13 +59,14 @@
 
 **Phase 4 result: full graph-analysis suite live — `search`, `deps`, `impact`, `cycles`, `smells`. impact gives reverse-call blast radius; cycles uses iterative Tarjan SCC (safe on 1000+ file repos); smells flags 4 heuristics ranked by how far over threshold. 280 tests passing.**
 
-### Phase 5 — GraphRAG + Anthropic LLM [IN PROGRESS 2/5]
+### Phase 5 — GraphRAG + Anthropic LLM [DONE 5/5]
 - [x] T5.1 — Anthropic SDK wrapper (LLM.stream/complete, claude-sonnet-4-6, prompt-cached system block, SDK retries, LLMError wrapping; 9 tests, fake-client injection, no live calls)
 - [x] T5.2 — Hybrid graph+vector retrieval (vector seeds → 1-hop calls/imports expansion → dedupe → re-rank 0.6·sim+0.3·log-degree+0.1·recency; RetrievedEntity + GraphRAG wrapper; 12 model-free tests via one-hot embeddings)
 - [x] T5.3 — `ask` system prompt + context assembly (ask_system.md grounding/citation rules; format_entity_block + build_user_message with char budget; 10 tests)
 - [x] T5.4 — CLI `ask` with streaming (GraphRAG.ask_stream wires retrieve→assemble→LLM.stream; cp1252-safe + markup-free token emit; missing-db/no-embeddings/LLMError guards; 6 tests + 1 live-skip)
-- [ ] T5.5 — Repo architecture summary (`summarize`)   ← NEXT
-- [ ] T5.4 — CLI `ask` with streaming
+- [x] T5.5 — `summarize` multi-pass architecture summary (degree-based select_representatives per top-dir → per-subsystem LLM summary → final synthesis → SUMMARY.md; 8 model-free tests)
+
+**Phase 5 result: AI layer complete. `ask` streams grounded, citation-style answers via hybrid GraphRAG retrieval over claude-sonnet-4-6 (prompt-cached system); `summarize` writes a multi-pass architecture overview. All AI wiring is testable without a live key or the embedding model (injected fakes + one-hot vectors). 325 tests passing, 1 live-skip.**
 - [ ] T5.5 — Repo architecture summary (`summarize`)
 
 ### Phase 6 — Minimal Web UI [PENDING]

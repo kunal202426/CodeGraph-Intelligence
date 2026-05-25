@@ -628,9 +628,39 @@ def smells(
 def summarize(
     db: Path = typer.Option(DEFAULT_DB, "--db", help="DuckDB graph file path."),
     out: Path = typer.Option(Path(".codegraph/SUMMARY.md"), "--out", help="Output markdown path."),
+    per_dir: int = typer.Option(
+        10, "--per-dir", help="Representative entities sampled per top-level directory."
+    ),
 ) -> None:
     """Generate an AI architecture summary of the repo via multi-pass GraphRAG. [T5.5]"""
-    _stub("summarize", "T5.5")
+    from codegraph.ai.graphrag import GraphRAG
+    from codegraph.ai.llm import LLM, LLMError
+
+    if not db.exists():
+        console.print(
+            f"[red]No graph database at {db}.[/red] Run [bold]codegraph index <repo>[/bold] first."
+        )
+        raise typer.Exit(code=1)
+
+    with GraphStore(db) as store:
+        if store.count_entities() == 0:
+            console.print("[yellow]Nothing indexed yet — no entities to summarize.[/yellow]")
+            raise typer.Exit(code=1)
+
+        rag = GraphRAG(store, LLM())
+        console.print("[dim]Summarizing subsystems (this calls the LLM per directory)...[/dim]")
+        try:
+            markdown = rag.summarize(per_dir=per_dir)
+        except LLMError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=1) from exc
+        except Exception as exc:  # noqa: BLE001 - surface model/other failures cleanly
+            console.print(f"[red]Could not summarize ({type(exc).__name__}): {exc}[/red]")
+            raise typer.Exit(code=1) from exc
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(markdown, encoding="utf-8")
+    console.print(f"[green]Wrote architecture summary to[/green] [bold]{out}[/bold].")
 
 
 @app.command()

@@ -40,8 +40,10 @@ _EDGE_TYPES = ("calls", "imports")
 # Prompt assembly (T5.3).
 _PROMPTS_DIR = Path(__file__).with_name("prompts")
 _ASK_SYSTEM_PATH = _PROMPTS_DIR / "ask_system.md"
+_SUMMARIZE_SYSTEM_PATH = _PROMPTS_DIR / "summarize_system.md"
 _BODY_PREVIEW_LINES = 20  # show signature, else first N lines of raw_source
 _CONTEXT_CHAR_BUDGET = 12000  # ~3000 tokens of repository context
+_DEFAULT_PER_DIR = 10  # representative entities sampled per top-level directory
 
 
 @dataclass(frozen=True)
@@ -243,6 +245,67 @@ def load_system_prompt() -> str:
     return _ASK_SYSTEM_PATH.read_text(encoding="utf-8").strip()
 
 
+def load_summarize_prompt() -> str:
+    """Read the `summarize` system prompt template from disk."""
+    return _SUMMARIZE_SYSTEM_PATH.read_text(encoding="utf-8").strip()
+
+
+def _top_dir(file: str) -> str:
+    """Top-level directory of a repo-relative path ('.' for root-level files)."""
+    head, sep, _ = file.partition("/")
+    return head if sep else "."
+
+
+def select_representatives(
+    conn: duckdb.DuckDBPyConnection,
+    per_dir: int = _DEFAULT_PER_DIR,
+) -> dict[str, list[RetrievedEntity]]:
+    """Pick the most graph-central entities per top-level directory.
+
+    Representative selection for `summarize` uses graph degree (in + out edges)
+    rather than vector search, so it works without embeddings and is fully
+    deterministic. Returns an ordered map {top_dir: [entities]} — directories
+    sorted by name, entities within a directory by descending degree.
+    """
+    rows = conn.execute(
+        """
+        SELECT e.entity_id, e.type, e.name, e.qualified_name, e.file,
+               e.start_line, e.end_line, e.signature, e.docstring, e.raw_source,
+               (SELECT COUNT(*) FROM edges g
+                 WHERE g.src_id = e.entity_id OR g.dst_id = e.entity_id) AS degree
+        FROM entities e
+        """
+    ).fetchall()
+    if not rows:
+        return {}
+
+    grouped: dict[str, list[RetrievedEntity]] = {}
+    for r in rows:
+        entity = RetrievedEntity(
+            entity_id=r[0],
+            type=r[1],
+            name=r[2],
+            qualified_name=r[3],
+            file=r[4],
+            start_line=r[5],
+            end_line=r[6],
+            signature=r[7],
+            docstring=r[8],
+            raw_source=r[9],
+            similarity=0.0,
+            degree=int(r[10]),
+            score=float(r[10]),
+            via="graph",
+        )
+        grouped.setdefault(_top_dir(entity.file), []).append(entity)
+
+    result: dict[str, list[RetrievedEntity]] = {}
+    for d in sorted(grouped):
+        ents = sorted(grouped[d], key=lambda e: (-e.degree, e.entity_id))
+        result[d] = ents[:per_dir]
+    return result
+
+
 def _entity_body(entity: RetrievedEntity) -> str:
     """The code preview for one entity: its signature, else the first N source lines."""
     if entity.signature:
@@ -339,3 +402,52 @@ class GraphRAG:
         system = load_system_prompt()
         user = build_user_message(query, entities)
         yield from self.llm.stream(system, user, max_tokens=max_tokens)
+
+    def summarize(self, per_dir: int = _DEFAULT_PER_DIR, max_tokens: int = 1000) -> str:
+        """Generate a multi-pass architecture summary as a markdown string.
+
+        Pass 1: summarize each top-level directory from its most graph-central
+        entities. Pass 2: synthesize those subsystem summaries into one overview.
+        Needs the graph only — no embeddings — so it runs without the embedding
+        model. Raises `LLMError` if no LLM is configured.
+        """
+        if self.llm is None:
+            raise LLMError("No LLM configured — construct GraphRAG(store, LLM()).")
+
+        groups = select_representatives(self.store.conn, per_dir=per_dir)
+        if not groups:
+            return "# Architecture Summary\n\n(No indexed entities to summarize.)\n"
+
+        system = load_summarize_prompt()
+        subsystems: dict[str, str] = {}
+        for directory, entities in groups.items():
+            context = "\n\n".join(format_entity_block(e) for e in entities)
+            user = (
+                f"SUBSYSTEM: {directory}\n\n"
+                f"ENTITIES:\n{context}\n\n"
+                "Write a concise (2-4 sentence) summary of what this part of the "
+                "codebase is responsible for and how its pieces relate."
+            )
+            subsystems[directory] = self.llm.complete(system, user, max_tokens=max_tokens).strip()
+
+        combined = "\n\n".join(f"{d}:\n{summary}" for d, summary in subsystems.items())
+        overview_user = (
+            "Here are per-directory summaries of a codebase:\n\n"
+            f"{combined}\n\n"
+            "Write a 1-2 paragraph high-level overview of the overall architecture: "
+            "what the system does and how the subsystems fit together."
+        )
+        overview = self.llm.complete(system, overview_user, max_tokens=max_tokens).strip()
+
+        return _render_summary(overview, subsystems)
+
+
+def _render_summary(overview: str, subsystems: dict[str, str]) -> str:
+    """Assemble the final SUMMARY.md from the overview + per-subsystem summaries."""
+    parts = ["# Architecture Summary", "", overview, "", "## Subsystems"]
+    for directory, summary in subsystems.items():
+        label = directory if directory != "." else "(root)"
+        parts.append("")
+        parts.append(f"### {label}")
+        parts.append(summary)
+    return "\n".join(parts) + "\n"
