@@ -217,20 +217,34 @@ def _maybe_embed(query: str) -> list[float] | None:
 
 
 def _module_graph(conn: duckdb.DuckDBPyConnection) -> dict[str, list[dict]]:
+    """File-level import graph keyed by each file's module entity_id.
+
+    Nodes are module entities (id = entity_id, label = file path) so the UI can
+    fetch a clicked node's full record from /api/entity. Edges map file→file
+    imports onto the corresponding module entity_ids.
+    """
     nodes = [
-        {"id": path, "label": path, "language": language}
-        for path, language in conn.execute(
-            "SELECT path, language FROM files ORDER BY path"
+        {"id": eid, "label": file, "language": language}
+        for eid, file, language in conn.execute(
+            """
+            SELECT m.entity_id, m.file, f.language
+            FROM entities m
+            JOIN files f ON f.path = m.file
+            WHERE m.type = 'module'
+            ORDER BY m.file
+            """
         ).fetchall()
     ]
     edges = [
         {"source": src, "target": dst, "type": "imports"}
         for src, dst in conn.execute(
             """
-            SELECT DISTINCT s.file, d.file
+            SELECT DISTINCT sm.entity_id, dm.entity_id
             FROM edges e
             JOIN entities s ON s.entity_id = e.src_id
             JOIN entities d ON d.entity_id = e.dst_id
+            JOIN entities sm ON sm.file = s.file AND sm.type = 'module'
+            JOIN entities dm ON dm.file = d.file AND dm.type = 'module'
             WHERE e.type = 'imports' AND s.file <> d.file
             """
         ).fetchall()

@@ -29,7 +29,13 @@ function makeDrag(sim: d3.Simulation<SimNode, undefined>) {
     })
 }
 
-export default function Graph({ onSelect }: { onSelect?: (id: string) => void }) {
+export default function Graph({
+  onSelect,
+  selectedId,
+}: {
+  onSelect?: (id: string) => void
+  selectedId?: string | null
+}) {
   const svgRef = useRef<SVGSVGElement | null>(null)
   // Keep the latest callback in a ref so the simulation isn't rebuilt when the
   // parent passes a new inline function each render.
@@ -125,6 +131,16 @@ export default function Graph({ onSelect }: { onSelect?: (id: string) => void })
       simulation.stop()
     }
   }, [data])
+
+  // Highlight the selected node without rebuilding the simulation.
+  useEffect(() => {
+    if (!svgRef.current) return
+    d3.select(svgRef.current)
+      .selectAll<SVGCircleElement, SimNode>('circle')
+      .attr('stroke', (d) => (d.id === selectedId ? '#f4f4f5' : 'none'))
+      .attr('stroke-width', (d) => (d.id === selectedId ? 3 : 0))
+      .attr('r', (d) => (d.id === selectedId ? 9 : 7))
+  }, [selectedId, data])
 
   if (error) {
     return (

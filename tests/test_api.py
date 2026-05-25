@@ -63,10 +63,15 @@ def test_missing_db_returns_503(tmp_path: Path) -> None:
 
 def test_module_graph(client: TestClient) -> None:
     data = client.get("/api/graph?type=module").json()
-    node_ids = {n["id"] for n in data["nodes"]}
-    assert "main.py" in node_ids
+    labels = {n["label"] for n in data["nodes"]}
+    assert "main.py" in labels  # file path is the label
+    # Nodes are keyed by module entity_id so the UI can fetch /api/entity.
+    assert all(n["id"].startswith(("py:", "ts:", "js:")) for n in data["nodes"])
     assert data["edges"]  # imports edges exist between files
     assert all({"source", "target", "type"} <= e.keys() for e in data["edges"])
+    # Edge endpoints reference node ids (entity_ids), not raw file paths.
+    node_ids = {n["id"] for n in data["nodes"]}
+    assert all(e["source"] in node_ids and e["target"] in node_ids for e in data["edges"])
 
 
 def test_entity_graph_for_file(client: TestClient) -> None:

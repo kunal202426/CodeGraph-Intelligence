@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import { health } from './api'
 import Graph from './components/Graph'
+import SearchBar from './components/SearchBar'
+import EntityPanel from './components/EntityPanel'
 
-// App shell (T6.2). The four regions are filled in by later tasks:
-//   - SearchBar (top)        → T6.4
-//   - Graph (left, D3)       → T6.3
-//   - ChatPanel (right)      → T6.5
-//   - EntityPanel (bottom)   → T6.4
+// App shell. Regions: SearchBar (top), Graph (left), ChatPanel (right → T6.5),
+// EntityPanel (bottom). Selection (an entity_id) is shared across them.
 
 function App() {
   const [online, setOnline] = useState<boolean | null>(null)
@@ -24,11 +23,7 @@ function App() {
     <div className="flex h-full flex-col bg-zinc-950 text-zinc-100">
       <header className="flex items-center gap-3 border-b border-zinc-800 px-4 py-3">
         <span className="text-lg font-semibold tracking-tight">CodeGraph</span>
-        <input
-          className="flex-1 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-sm outline-none placeholder:text-zinc-500 focus:border-violet-500"
-          placeholder="Search the codebase…  (T6.4)"
-          disabled
-        />
+        <SearchBar onSelect={handleSelect} />
         <span
           className="text-xs"
           title={online === null ? 'checking…' : online ? 'API reachable' : 'API offline'}
@@ -43,7 +38,7 @@ function App() {
             Module graph
           </h2>
           <div className="h-[calc(100%-1.5rem)] overflow-hidden rounded-md border border-zinc-800">
-            <Graph onSelect={handleSelect} />
+            <Graph onSelect={handleSelect} selectedId={selected} />
           </div>
         </section>
 
@@ -57,16 +52,12 @@ function App() {
         </aside>
       </main>
 
-      <footer className="h-40 shrink-0 border-t border-zinc-800 p-4">
+      <footer className="h-44 shrink-0 border-t border-zinc-800 p-4">
         <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500">
           Entity details
         </h2>
-        <div className="grid h-[calc(100%-1.5rem)] place-items-center rounded-md border border-dashed border-zinc-800 text-sm text-zinc-600">
-          {selected ? (
-            <code className="text-violet-300">{selected}</code>
-          ) : (
-            'Select a node — details panel lands in T6.4'
-          )}
+        <div className="h-[calc(100%-1.5rem)] rounded-md border border-zinc-800 p-3">
+          <EntityPanel entityId={selected} />
         </div>
       </footer>
     </div>
