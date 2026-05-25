@@ -3,7 +3,7 @@
 ## Current
 
 - **Phase:** 6 — Minimal Web UI
-- **Next task:** T6.5 — AI chat panel with SSE streaming + citation links
+- **Next task:** T6.6 — `codegraph serve` packages frontend + opens browser
 - **Last session:** 2026-05-25
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -74,7 +74,8 @@
 - [x] T6.2 — Vite+React 19+TS 6 scaffold under packages/web; Tailwind v4 via @tailwindcss/vite; d3 + @types/d3; typed api client (src/api); App shell (search/graph/chat/entity regions + /api/health indicator); vite build → packages/codegraph/server/static (gitignored), dev proxy /api→:8765. `npm run build` + `npm run lint` green
 - [x] T6.3 — D3 force-directed module graph (components/Graph.tsx): /api/graph?type=module → forceManyBody+forceLink+forceCenter, drag + zoom, click→onSelect; callback-ref avoids sim rebuild; error/empty states; wired into App left pane, selection shown in footer. build+lint green
 - [x] T6.4 — SearchBar (debounced 250ms, literal/semantic toggle, results dropdown) + EntityPanel (fetch /api/entity → name/sig/docstring/source); shared entity_id selection highlights graph node. API change: module-graph nodes now keyed by module entity_id (label=file) so node clicks + search results both feed EntityPanel; test_api updated. 337 py tests + build/lint green
-- [ ] T6.5 — AI chat panel with SSE streaming + citation links   ← NEXT
+- [x] T6.5 — ChatPanel + askStream SSE consumer (api/index.ts parses data: {token|error|done}); transcript with you/codegraph turns, streaming cursor, [entity_id] citations rendered as clickable spans → onSelect (highlights graph + opens entity). build+lint green
+- [ ] T6.6 — `codegraph serve` packages frontend + opens browser   ← NEXT
 - [ ] T6.4 — Search bar + entity details panel
 - [ ] T6.5 — AI chat panel with SSE streaming + citation links
 - [ ] T6.6 — `codegraph serve` packages frontend + opens browser

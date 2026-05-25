@@ -3,6 +3,7 @@ import { health } from './api'
 import Graph from './components/Graph'
 import SearchBar from './components/SearchBar'
 import EntityPanel from './components/EntityPanel'
+import ChatPanel from './components/ChatPanel'
 
 // App shell. Regions: SearchBar (top), Graph (left), ChatPanel (right → T6.5),
 // EntityPanel (bottom). Selection (an entity_id) is shared across them.
@@ -46,8 +47,8 @@ function App() {
           <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500">
             Ask the codebase
           </h2>
-          <div className="grid flex-1 place-items-center rounded-md border border-dashed border-zinc-800 text-sm text-zinc-600">
-            AI chat panel — T6.5
+          <div className="min-h-0 flex-1">
+            <ChatPanel onSelect={handleSelect} />
           </div>
         </aside>
       </main>
