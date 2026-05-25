@@ -134,6 +134,23 @@ the other three work on any index. The DB path may also be set via `CODEGRAPH_DB
 | Web | [FastAPI](https://fastapi.tiangolo.com/) + React 19 + Vite + [D3](https://d3js.org/) |
 | Agent | [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) |
 
+## Benchmarks
+
+Indexing [`tiangolo/fastapi`](https://github.com/tiangolo/fastapi) (1,122 files) on a
+laptop — **6,065 entities, 14,601 edges**:
+
+| Metric | Result |
+|---|---|
+| Cold index (parse + resolve, graph only) | ~67 s |
+| Warm re-index (no changes, hash-skip) | ~1.9 s |
+| Literal search query | <1 ms p50 / ~16 ms p95 (in-process) |
+| Embedding throughput | ~690 entities/s (`all-MiniLM-L6-v2`, CPU) |
+| Graph DB size on disk | ~34 MB |
+
+`search get_swagger_ui_html` → `fastapi/openapi/docs.py:40`. Warm re-index is ~35×
+faster than cold thanks to per-file SHA-256 hash-skipping; embeddings re-compute only
+for entities whose input changed. `ask` latency depends on the Anthropic API.
+
 ## Roadmap
 
 CodeGraph is an MVP carve-out of a larger vision. Deliberately **deferred**: more

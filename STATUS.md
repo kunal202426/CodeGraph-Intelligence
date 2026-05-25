@@ -2,8 +2,9 @@
 
 ## Current
 
-- **Phase:** 8 — Polish & Demo Readiness
-- **Next task:** T8.2 — Benchmark on fastapi + mark MVP shipped
+- **Status:** SHIPPED — MVP complete (Phases 0-8 done). Phase 9 stretch items optional.
+- **Phase:** 8 — Polish & Demo Readiness [DONE]
+- **Next task:** (none — MVP shipped). Optional: Phase 9 stretch, or record docs/demo.gif.
 - **Last session:** 2026-05-25
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -88,9 +89,11 @@
 
 **Phase 7 result: MCP server live — Claude Code (or any MCP agent) can call CodeGraph's 4 tools over stdio against an indexed repo. Validated with real MCP client roundtrips. Install documented in README. 354 tests passing.**
 
-### Phase 8 — Polish & Demo Readiness [IN PROGRESS 1/2]
+### Phase 8 — Polish & Demo Readiness [DONE 2/2]
 - [x] T8.1 — README rewrite: hero + docs/demo.gif, what-it-does bullets, quickstart, 3 example queries with output (search/impact/ask), Mermaid architecture diagram, MCP section, stack table, roadmap, acknowledgments
-- [ ] T8.2 — Benchmark on fastapi + mark MVP shipped   ← NEXT
+- [x] T8.2 — Benchmarked fastapi (1122 files / 6065 entities / 14601 edges): cold 67s, warm 1.9s, literal query <1ms p50, embed ~690 ent/s, DB 34MB; benchmark table added to README; marked SHIPPED
+
+**Phase 8 result: MVP shipped. README has hero/quickstart/examples/architecture/MCP/benchmarks; STATUS marked SHIPPED. 354 tests passing, 1 live-skip. All 9 CLI commands + web UI + MCP server working on fixtures and real repos (fastapi).**
 
 ### Phase 9 — Stretch (optional, post-ship) [PENDING]
 
@@ -125,6 +128,10 @@
 - Phase 2 fastapi (1122 files / 6057 entities / 4405 edges): cold 38.6s, warm re-index 0.8s
   - resolver: 287 in-repo imports resolved, 4118 external (stdlib + pydantic/starlette etc.), 0 wildcard
   - search `get_swagger_ui_html` → fastapi/openapi/docs.py:40 ✓
-- Phase 3 embedding throughput: TBD
-- Phase 5 ask latency (p50): TBD
-- Phase 8 final benchmarks: TBD
+- Phase 3 embedding throughput: ~690 entities/s (all-MiniLM-L6-v2, CPU)
+- Phase 5 ask latency (p50): depends on Anthropic API (not benchmarked offline)
+- Phase 8 final benchmarks (fastapi, 1122 files / 6065 entities / 14601 edges):
+  - cold index (graph only) ~67s; warm re-index ~1.9s (hash-skip)
+  - literal search query <1ms p50 / ~16ms p95 (in-process)
+  - graph DB size ~34MB on disk
+  - (edge count up vs Phase 2's 4405 → call edges added in Phase 4)
