@@ -3,7 +3,7 @@
 ## Current
 
 - **Phase:** 7 — MCP Server (killer demo)
-- **Next task:** T7.1 — MCP server skeleton with 4 tools
+- **Next task:** T7.2 — Wire MCP tools to graph + AI engine
 - **Last session:** 2026-05-25
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -81,7 +81,10 @@
 - [ ] T6.4 — Search bar + entity details panel
 - [ ] T6.5 — AI chat panel with SSE streaming + citation links
 - [ ] T6.6 — `codegraph serve` packages frontend + opens browser
-### Phase 7 — MCP Server (killer demo) [PENDING]
+### Phase 7 — MCP Server (killer demo) [IN PROGRESS 1/3]
+- [x] T7.1 — MCP server skeleton (mcp 1.27 low-level Server): 4 tools declared (search_code/get_entity_context/impact_analysis/ask_codebase) via tool_definitions(); stdio runner `python -m codegraph.server.mcp_server --db ...`; get_db_path (--db > CODEGRAPH_DB > default). 7 tests + live stdio client roundtrip listed all 4 tools
+- [ ] T7.2 — Wire MCP tools to graph + AI engine   ← NEXT
+- [ ] T7.3 — Document MCP install + record demo
 ### Phase 8 — Polish & Demo Readiness [PENDING]
 ### Phase 9 — Stretch (optional, post-ship) [PENDING]
 
