@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { health } from './api'
+import Graph from './components/Graph'
 
 // App shell (T6.2). The four regions are filled in by later tasks:
 //   - SearchBar (top)        → T6.4
@@ -9,6 +10,9 @@ import { health } from './api'
 
 function App() {
   const [online, setOnline] = useState<boolean | null>(null)
+  const [selected, setSelected] = useState<string | null>(null)
+
+  const handleSelect = useCallback((id: string) => setSelected(id), [])
 
   useEffect(() => {
     health()
@@ -38,8 +42,8 @@ function App() {
           <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500">
             Module graph
           </h2>
-          <div className="grid h-[calc(100%-1.5rem)] place-items-center rounded-md border border-dashed border-zinc-800 text-sm text-zinc-600">
-            D3 force-directed graph — T6.3
+          <div className="h-[calc(100%-1.5rem)] overflow-hidden rounded-md border border-zinc-800">
+            <Graph onSelect={handleSelect} />
           </div>
         </section>
 
@@ -58,7 +62,11 @@ function App() {
           Entity details
         </h2>
         <div className="grid h-[calc(100%-1.5rem)] place-items-center rounded-md border border-dashed border-zinc-800 text-sm text-zinc-600">
-          Select an entity — T6.4
+          {selected ? (
+            <code className="text-violet-300">{selected}</code>
+          ) : (
+            'Select a node — details panel lands in T6.4'
+          )}
         </div>
       </footer>
     </div>
