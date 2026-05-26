@@ -722,6 +722,58 @@ def owner(
 
 
 @app.command()
+def layers(
+    db: Path = typer.Option(DEFAULT_DB, "--db", help="DuckDB graph file path."),
+) -> None:
+    """Classify directories into architectural layers + flag layering violations. [T9.3]"""
+    if not db.exists():
+        console.print(
+            f"[red]No graph database at {db}.[/red] Run [bold]codegraph index <repo>[/bold] first."
+        )
+        raise typer.Exit(code=1)
+
+    from codegraph.analysis.patterns import analyze_layers
+
+    with GraphStore(db) as store:
+        report = analyze_layers(store.conn)
+
+    ranked = [
+        layer for layer in ("presentation", "service", "data") if layer in report.layers_present
+    ]
+    if not ranked:
+        console.print(
+            "[yellow]No recognizable layers (api/services/models-style directories).[/yellow]"
+        )
+        return
+
+    console.print("[bold]Layers detected:[/bold]")
+    for layer in ranked:
+        dirs = ", ".join(report.layers_present[layer])
+        console.print(f"  [cyan]{layer}[/cyan]: [dim]{dirs}[/dim]")
+
+    if report.flows:
+        console.print("\n[bold]Cross-layer imports:[/bold]")
+        for (src, dst), count in sorted(report.flows.items(), key=lambda kv: -kv[1]):
+            arrow = "->"
+            console.print(f"  {src} {arrow} {dst}  [dim]({count})[/dim]")
+
+    if report.violations:
+        console.print(
+            f"\n[yellow]{len(report.violations)} layering violation(s) "
+            "(a lower layer importing a higher one):[/yellow]"
+        )
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("From (lower)", style="cyan")
+        table.add_column("Imports (higher)", style="magenta")
+        table.add_column("Files", overflow="fold")
+        for v in report.violations:
+            table.add_row(v.src_layer, v.dst_layer, f"{v.src_file} -> {v.dst_file}")
+        console.print(table)
+    else:
+        console.print("\n[green]No layering violations.[/green]")
+
+
+@app.command()
 def summarize(
     db: Path = typer.Option(DEFAULT_DB, "--db", help="DuckDB graph file path."),
     out: Path = typer.Option(Path(".codegraph/SUMMARY.md"), "--out", help="Output markdown path."),

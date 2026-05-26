@@ -42,6 +42,17 @@ test_smoke command set.
 **Note:** `--repo` must match the indexed root (entity `file` paths are root-relative). Web entity-panel
 ownership display deferred.
 
+### T9.3 — Layered-architecture analysis
+**Files:** `packages/codegraph/analysis/patterns.py` (new), `cli.py layers` (new command), `tests/test_patterns.py`
+**Steps:** `classify_layer(dir)` maps top-level dir names to presentation/service/data/other by keyword.
+`analyze_layers(conn)` builds the file import graph (same query as cycles), classifies src/dst layers
+per cross-file edge, tallies flows, and flags *violations* (lower layer importing higher: src_rank >
+dst_rank, ranks presentation<service<data). New `codegraph layers` prints layers + cross-layer flows +
+violation table.
+**Verify:** `tests/test_patterns.py` (classify keywords; layers detected; data→presentation violation
+flagged; downward-only clean; 3 CLI cases) on a layered fixture. Updated test_smoke command set.
+**Commit:** `T9.3: layered-architecture analysis (layers command)`
+
 ## Task block template
 
 When you pick one up, write a block in this file using the same format as earlier phase files:
