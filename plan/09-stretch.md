@@ -29,6 +29,19 @@ methods opt-in, 3 CLI cases); live demo on sample_repo_py. Updated test_smoke co
 **Note:** feature-envy (the other half of T9.6) deferred — needs method↔attribute access data
 the current UIR doesn't capture.
 
+### T9.1 — Git-blame ownership
+**Files:** `packages/codegraph/analysis/ownership.py` (new), `cli.py owner` (new command), `tests/test_ownership.py`
+**Steps:** `entity_ownership(repo_root, file, start, end)` runs `git blame --line-porcelain -L start,end`
+and tallies `author ` records (one per source line → accurate). Returns `[Ownership(author, lines)]`
+sorted desc; `primary_owner()` helper. Empty on non-git / untracked / bad range. New `codegraph owner
+<entity> --repo <root>` resolves the entity, fetches its span, prints an ownership table + primary owner.
+**Verify:** `tests/test_ownership.py` (single/two-author, non-git, untracked, bad range, 3 CLI cases) —
+throwaway git repo with GIT_AUTHOR_* env (no global config touched); live demo on this repo. Updated
+test_smoke command set.
+**Commit:** `T9.1: git-blame ownership (owner command)`
+**Note:** `--repo` must match the indexed root (entity `file` paths are root-relative). Web entity-panel
+ownership display deferred.
+
 ## Task block template
 
 When you pick one up, write a block in this file using the same format as earlier phase files:

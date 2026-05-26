@@ -58,6 +58,7 @@ def test_cli_app_exposes_expected_commands() -> None:
         "cycles",
         "smells",
         "deadcode",  # T9.6
+        "owner",  # T9.1
         "summarize",
         "serve",
     }

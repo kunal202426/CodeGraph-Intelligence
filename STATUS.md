@@ -97,7 +97,8 @@
 
 ### Phase 9 — Stretch (optional, post-ship) [IN PROGRESS]
 - [x] T9.6 — Dead-code detection: analysis/refactor.py find_dead_code (functions/classes never an edge dst; excludes main/test_/dunders; methods opt-in) + `codegraph deadcode` command. 7 tests + live demo (sample_repo flags fetch_user/make_token/_PrivateForm/etc.). Feature-envy half deferred (needs attribute-access data)
-- [ ] T9.1/T9.2/T9.3/T9.4/T9.5/T9.7/T9.8 — backlog (see plan/09-stretch.md)
+- [x] T9.1 — Git-blame ownership: analysis/ownership.py entity_ownership (git blame --line-porcelain, per-line author tally) + `codegraph owner <entity> --repo <root>` (table + primary owner). 8 tests (throwaway repo, no global config touched) + live demo. --repo must match indexed root; web panel deferred
+- [ ] T9.2/T9.3/T9.4/T9.5/T9.7/T9.8 — backlog (see plan/09-stretch.md)
 
 ## Blockers / Notes
 

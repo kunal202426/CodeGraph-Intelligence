@@ -663,6 +663,65 @@ def deadcode(
 
 
 @app.command()
+def owner(
+    entity: str = typer.Argument(..., help="Entity name, qualified_name, or entity_id."),
+    repo: Path = typer.Option(
+        Path("."), "--repo", help="Git working tree root (must match the indexed root)."
+    ),
+    db: Path = typer.Option(DEFAULT_DB, "--db", help="DuckDB graph file path."),
+) -> None:
+    """Show git-blame ownership for an entity's lines. [T9.1]"""
+    if not db.exists():
+        console.print(
+            f"[red]No graph database at {db}.[/red] Run [bold]codegraph index <repo>[/bold] first."
+        )
+        raise typer.Exit(code=1)
+
+    from codegraph.analysis.ownership import entity_ownership
+
+    with GraphStore(db) as store:
+        hits = find_entity_by_name_or_id(store.conn, entity)
+        if not hits:
+            console.print(f"[yellow]No entity matching {entity!r}.[/yellow]")
+            raise typer.Exit(code=1)
+        if len(hits) > 1:
+            console.print(
+                f"[yellow]{len(hits)} entities match {entity!r}. Pass an entity_id instead:[/yellow]"
+            )
+            for h in hits[:10]:
+                console.print(f"  [dim]{h.entity_id}[/dim]  ({h.type}, {h.file}:{h.start_line})")
+            raise typer.Exit(code=1)
+        row = hits[0]
+        span = store.conn.execute(
+            "SELECT file, start_line, end_line FROM entities WHERE entity_id = ?",
+            [row.entity_id],
+        ).fetchone()
+
+    file, start_line, end_line = span
+    owners = entity_ownership(repo, file, start_line, end_line)
+    if not owners:
+        console.print(
+            f"[yellow]No git-blame data for {file}:{start_line}-{end_line}.[/yellow] "
+            "Is --repo a git working tree with this file committed?"
+        )
+        raise typer.Exit(code=1)
+
+    total = sum(o.lines for o in owners)
+    console.print(
+        f"Ownership of [bold]{row.name}[/bold] [dim]({file}:{start_line}-{end_line}, "
+        f"{total} lines)[/dim]:"
+    )
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Author", style="cyan")
+    table.add_column("Lines", justify="right")
+    table.add_column("%", justify="right", style="dim")
+    for o in owners:
+        table.add_row(o.author, str(o.lines), f"{100 * o.lines / total:.0f}%")
+    console.print(table)
+    console.print(f"[dim]Primary owner: [bold]{owners[0].author}[/bold].[/dim]")
+
+
+@app.command()
 def summarize(
     db: Path = typer.Option(DEFAULT_DB, "--db", help="DuckDB graph file path."),
     out: Path = typer.Option(Path(".codegraph/SUMMARY.md"), "--out", help="Output markdown path."),
