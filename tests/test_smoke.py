@@ -57,6 +57,7 @@ def test_cli_app_exposes_expected_commands() -> None:
         "impact",
         "cycles",
         "smells",
+        "deadcode",  # T9.6
         "summarize",
         "serve",
     }

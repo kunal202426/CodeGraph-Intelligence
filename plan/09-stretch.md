@@ -15,6 +15,20 @@ These are 1–3 sessions each. Each gets its own task block below when picked up
 - **T9.7 Solidity parser** — if the smart-contract angle interests you
 - **T9.8 Cross-language HTTP edges** — TS `fetch()` ↔ FastAPI route matching
 
+## Picked up
+
+### T9.6 — Dead-code detection (refactor suggestions, part 1)
+**Files:** `packages/codegraph/analysis/refactor.py` (new), `cli.py deadcode` (new command), `tests/test_refactor.py`
+**Steps:** `find_dead_code(conn, include_methods=False)` returns top-level functions/classes
+that are never the `dst` of a `calls`/`imports` edge (SQL `NOT EXISTS`). Excludes entrypoints
+(`main`/`__main__`), `test_*`, and dunders; methods opt-in via `--methods` (self.x() resolution
+is weak). New `codegraph deadcode` command renders a Rich table + false-positive caveat.
+**Verify:** `tests/test_refactor.py` (orphan flagged, callers/entrypoints/tests/dunders excluded,
+methods opt-in, 3 CLI cases); live demo on sample_repo_py. Updated test_smoke command set.
+**Commit:** `T9.6: dead-code detection (deadcode command)`
+**Note:** feature-envy (the other half of T9.6) deferred — needs method↔attribute access data
+the current UIR doesn't capture.
+
 ## Task block template
 
 When you pick one up, write a block in this file using the same format as earlier phase files:

@@ -95,7 +95,9 @@
 
 **Phase 8 result: MVP shipped. README has hero/quickstart/examples/architecture/MCP/benchmarks; STATUS marked SHIPPED. 354 tests passing, 1 live-skip. All 9 CLI commands + web UI + MCP server working on fixtures and real repos (fastapi).**
 
-### Phase 9 — Stretch (optional, post-ship) [PENDING]
+### Phase 9 — Stretch (optional, post-ship) [IN PROGRESS]
+- [x] T9.6 — Dead-code detection: analysis/refactor.py find_dead_code (functions/classes never an edge dst; excludes main/test_/dunders; methods opt-in) + `codegraph deadcode` command. 7 tests + live demo (sample_repo flags fetch_user/make_token/_PrivateForm/etc.). Feature-envy half deferred (needs attribute-access data)
+- [ ] T9.1/T9.2/T9.3/T9.4/T9.5/T9.7/T9.8 — backlog (see plan/09-stretch.md)
 
 ## Blockers / Notes
 

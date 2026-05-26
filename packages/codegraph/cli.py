@@ -625,6 +625,44 @@ def smells(
 
 
 @app.command()
+def deadcode(
+    db: Path = typer.Option(DEFAULT_DB, "--db", help="DuckDB graph file path."),
+    include_methods: bool = typer.Option(
+        False, "--methods", help="Also flag methods (noisier — self.x() resolution is weak)."
+    ),
+) -> None:
+    """List dead-code candidates: functions/classes nothing calls or imports. [T9.6]"""
+    if not db.exists():
+        console.print(
+            f"[red]No graph database at {db}.[/red] Run [bold]codegraph index <repo>[/bold] first."
+        )
+        raise typer.Exit(code=1)
+
+    from codegraph.analysis.refactor import find_dead_code
+
+    with GraphStore(db) as store:
+        dead = find_dead_code(store.conn, include_methods=include_methods)
+
+    if not dead:
+        console.print("[green]No dead-code candidates found.[/green]")
+        return
+
+    plural = "candidate" if len(dead) == 1 else "candidates"
+    console.print(f"[yellow]Found {len(dead)} dead-code {plural}:[/yellow]")
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Type", style="cyan", no_wrap=True)
+    table.add_column("Name", style="bold", no_wrap=True)
+    table.add_column("Location", style="dim", no_wrap=True)
+    for d in dead:
+        table.add_row(d.type, d.name, f"{d.file}:{d.start_line}")
+    console.print(table)
+    console.print(
+        "[dim]Heuristic: nothing in the indexed graph references these. "
+        "Framework entrypoints, public API, and dynamic calls may be false positives.[/dim]"
+    )
+
+
+@app.command()
 def summarize(
     db: Path = typer.Option(DEFAULT_DB, "--db", help="DuckDB graph file path."),
     out: Path = typer.Option(Path(".codegraph/SUMMARY.md"), "--out", help="Output markdown path."),
