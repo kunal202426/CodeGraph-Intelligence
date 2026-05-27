@@ -35,6 +35,7 @@ class Language(StrEnum):
     JAVASCRIPT = "javascript"
     GO = "go"
     RUST = "rust"
+    JAVA = "java"
 
 
 LANGUAGE_PREFIX: dict[Language, str] = {
@@ -43,6 +44,7 @@ LANGUAGE_PREFIX: dict[Language, str] = {
     Language.JAVASCRIPT: "js",
     Language.GO: "go",
     Language.RUST: "rs",
+    Language.JAVA: "java",
 }
 
 
