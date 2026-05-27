@@ -26,6 +26,7 @@ def test_all_scaffolded_modules_importable() -> None:
         "codegraph.parsers.python",
         "codegraph.parsers.typescript",
         "codegraph.parsers.go",
+        "codegraph.parsers.rust",
         "codegraph.graph",
         "codegraph.graph.store",
         "codegraph.graph.queries",
