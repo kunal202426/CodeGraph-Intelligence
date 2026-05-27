@@ -33,12 +33,14 @@ class Language(StrEnum):
     PYTHON = "python"
     TYPESCRIPT = "typescript"
     JAVASCRIPT = "javascript"
+    GO = "go"
 
 
 LANGUAGE_PREFIX: dict[Language, str] = {
     Language.PYTHON: "py",
     Language.TYPESCRIPT: "ts",
     Language.JAVASCRIPT: "js",
+    Language.GO: "go",
 }
 
 

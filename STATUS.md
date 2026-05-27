@@ -2,10 +2,10 @@
 
 ## Current
 
-- **Status:** SHIPPED — MVP complete (Phases 0-8 done). Phase 9 stretch items optional.
-- **Phase:** 8 — Polish & Demo Readiness [DONE]
-- **Next task:** (none — MVP shipped). Optional: Phase 9 stretch, or record docs/demo.gif.
-- **Last session:** 2026-05-25
+- **Status:** ACTIVE — Phases 10-13 "best of both" roadmap in progress.
+- **Phase:** 10 — Language breadth [IN PROGRESS 1/7]
+- **Next task:** T10.2 — Rust parser
+- **Last session:** 2026-05-27
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
 ## Phase progress
@@ -100,6 +100,17 @@
 - [x] T9.1 — Git-blame ownership: analysis/ownership.py entity_ownership (git blame --line-porcelain, per-line author tally) + `codegraph owner <entity> --repo <root>` (table + primary owner). 8 tests (throwaway repo, no global config touched) + live demo. --repo must match indexed root; web panel deferred
 - [x] T9.3 — Layered-architecture analysis: analysis/patterns.py classify_layer + analyze_layers (file import graph → cross-layer flows + violations where lower imports higher) + `codegraph layers` command. 7 tests (layered fixture: data→presentation violation flagged, downward clean)
 - [ ] T9.2/T9.4/T9.5/T9.7/T9.8 — backlog (see plan/09-stretch.md)
+
+### Phase 10 — Language breadth [IN PROGRESS 1/7]
+- [x] T10.1 — Go parser: Language.GO enum + .go walker ext + parsers/go.py (function/method/struct/interface/imports/calls via tree-sitter) + queries/go.scm + sample_repo_go fixture + 24 tests. 401 tests passing.
+- [ ] T10.2 — Rust parser (fn/struct/enum/impl/trait, `use`, calls)
+- [ ] T10.3 — Java parser (class/interface/method, `import`, calls)
+- [ ] T10.4 — Ruby parser (module/class/def, `require`, calls)
+- [ ] T10.5 — PHP parser (class/function/method, `use`/`require`, calls)
+- [ ] T10.6 — C/C++ parser (functions/structs/classes, `#include`, calls)
+- [ ] T10.7 — Cross-language import resolution pass (extend resolver for go/rust/java/ruby/php/c)
+
+**Phase 10 goal: go from 3 to ~9 languages. tree-sitter-languages ships all grammars. See plan/10-13-roadmap.md for full per-language pattern.**
 
 ## Blockers / Notes
 

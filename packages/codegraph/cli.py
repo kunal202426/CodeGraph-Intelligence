@@ -25,6 +25,7 @@ from codegraph.graph.queries import (
 )
 from codegraph.graph.resolver import resolve_symbols
 from codegraph.graph.store import GraphStore
+from codegraph.parsers.go import GoParser
 from codegraph.parsers.python import PythonParser
 from codegraph.parsers.typescript import TypeScriptParser
 from codegraph.uir import Language, hash_source
@@ -47,6 +48,7 @@ _LANGUAGE_PARSERS = {
     Language.PYTHON: PythonParser(),
     Language.TYPESCRIPT: _TS_PARSER,
     Language.JAVASCRIPT: _TS_PARSER,
+    Language.GO: GoParser(),
 }
 
 
