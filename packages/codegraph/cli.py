@@ -28,6 +28,7 @@ from codegraph.graph.store import GraphStore
 from codegraph.parsers.go import GoParser
 from codegraph.parsers.java import JavaParser
 from codegraph.parsers.python import PythonParser
+from codegraph.parsers.ruby import RubyParser
 from codegraph.parsers.rust import RustParser
 from codegraph.parsers.typescript import TypeScriptParser
 from codegraph.uir import Language, hash_source
@@ -53,6 +54,7 @@ _LANGUAGE_PARSERS = {
     Language.GO: GoParser(),
     Language.RUST: RustParser(),
     Language.JAVA: JavaParser(),
+    Language.RUBY: RubyParser(),
 }
 
 

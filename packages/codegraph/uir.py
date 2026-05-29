@@ -36,6 +36,7 @@ class Language(StrEnum):
     GO = "go"
     RUST = "rust"
     JAVA = "java"
+    RUBY = "ruby"
 
 
 LANGUAGE_PREFIX: dict[Language, str] = {
@@ -45,6 +46,7 @@ LANGUAGE_PREFIX: dict[Language, str] = {
     Language.GO: "go",
     Language.RUST: "rs",
     Language.JAVA: "java",
+    Language.RUBY: "rb",
 }
 
 

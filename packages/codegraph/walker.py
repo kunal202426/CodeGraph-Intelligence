@@ -33,6 +33,7 @@ LANGUAGE_BY_EXT: dict[str, Language] = {
     ".go": Language.GO,
     ".rs": Language.RUST,
     ".java": Language.JAVA,
+    ".rb": Language.RUBY,
 }
 
 ALWAYS_EXCLUDE: frozenset[str] = frozenset(
