@@ -3,8 +3,8 @@
 ## Current
 
 - **Status:** ACTIVE — Phases 10-13 "best of both" roadmap in progress.
-- **Phase:** 10 — Language breadth [IN PROGRESS 4/7]
-- **Next task:** T10.5 — PHP parser
+- **Phase:** 10 — Language breadth [IN PROGRESS 5/7]
+- **Next task:** T10.6 — C/C++ parser
 - **Last session:** 2026-05-27
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -106,7 +106,7 @@
 - [x] T10.2 — Rust parser: Language.RUST enum + .rs walker ext + parsers/rust.py (fn/struct/enum/impl/trait/use/calls via tree-sitter) + queries/rust.scm + sample_repo_rust fixture + 24 tests. 426 tests passing.
 - [x] T10.3 — Java parser: Language.JAVA enum + .java walker ext + parsers/java.py (class/enum/interface/method/constructor/imports/calls via tree-sitter) + queries/java.scm + sample_repo_java fixture + 24 tests. 451 tests passing.
 - [x] T10.4 — Ruby parser: Language.RUBY enum + .rb walker ext + parsers/ruby.py (class/module/def/private-tracking/require/calls via tree-sitter) + queries/ruby.scm + sample_repo_ruby fixture + 21 tests. 473 tests passing.
-- [ ] T10.5 — PHP parser (class/function/method, `use`/`require`, calls)
+- [x] T10.5 — PHP parser: Language.PHP enum + .php walker ext + parsers/php.py (class/trait/interface/method/function/use/require/calls via tree-sitter) + queries/php.scm + sample_repo_php fixture + 22 tests. 496 tests passing.
 - [ ] T10.6 — C/C++ parser (functions/structs/classes, `#include`, calls)
 - [ ] T10.7 — Cross-language import resolution pass (extend resolver for go/rust/java/ruby/php/c)
 
