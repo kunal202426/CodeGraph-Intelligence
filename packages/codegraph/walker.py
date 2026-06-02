@@ -35,6 +35,13 @@ LANGUAGE_BY_EXT: dict[str, Language] = {
     ".java": Language.JAVA,
     ".rb": Language.RUBY,
     ".php": Language.PHP,
+    ".c": Language.C,
+    ".h": Language.C,
+    ".cpp": Language.CPP,
+    ".cc": Language.CPP,
+    ".cxx": Language.CPP,
+    ".hpp": Language.CPP,
+    ".hxx": Language.CPP,
 }
 
 ALWAYS_EXCLUDE: frozenset[str] = frozenset(

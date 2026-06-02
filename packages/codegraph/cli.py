@@ -25,6 +25,7 @@ from codegraph.graph.queries import (
 )
 from codegraph.graph.resolver import resolve_symbols
 from codegraph.graph.store import GraphStore
+from codegraph.parsers.c_cpp import CParser, CppParser
 from codegraph.parsers.go import GoParser
 from codegraph.parsers.java import JavaParser
 from codegraph.parsers.php import PHPParser
@@ -57,6 +58,8 @@ _LANGUAGE_PARSERS = {
     Language.JAVA: JavaParser(),
     Language.RUBY: RubyParser(),
     Language.PHP: PHPParser(),
+    Language.C: CParser(),
+    Language.CPP: CppParser(),
 }
 
 

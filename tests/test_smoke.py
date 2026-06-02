@@ -30,6 +30,7 @@ def test_all_scaffolded_modules_importable() -> None:
         "codegraph.parsers.java",
         "codegraph.parsers.ruby",
         "codegraph.parsers.php",
+        "codegraph.parsers.c_cpp",
         "codegraph.graph",
         "codegraph.graph.store",
         "codegraph.graph.queries",

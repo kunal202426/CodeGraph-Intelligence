@@ -38,6 +38,8 @@ class Language(StrEnum):
     JAVA = "java"
     RUBY = "ruby"
     PHP = "php"
+    C = "c"
+    CPP = "cpp"
 
 
 LANGUAGE_PREFIX: dict[Language, str] = {
@@ -49,6 +51,8 @@ LANGUAGE_PREFIX: dict[Language, str] = {
     Language.JAVA: "java",
     Language.RUBY: "rb",
     Language.PHP: "php",
+    Language.C: "c",
+    Language.CPP: "cpp",
 }
 
 

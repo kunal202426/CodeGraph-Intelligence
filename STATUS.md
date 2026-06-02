@@ -3,8 +3,8 @@
 ## Current
 
 - **Status:** ACTIVE — Phases 10-13 "best of both" roadmap in progress.
-- **Phase:** 10 — Language breadth [IN PROGRESS 5/7]
-- **Next task:** T10.6 — C/C++ parser
+- **Phase:** 10 — Language breadth [IN PROGRESS 6/7]
+- **Next task:** T10.7 — Cross-language import resolution
 - **Last session:** 2026-05-27
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -107,7 +107,7 @@
 - [x] T10.3 — Java parser: Language.JAVA enum + .java walker ext + parsers/java.py (class/enum/interface/method/constructor/imports/calls via tree-sitter) + queries/java.scm + sample_repo_java fixture + 24 tests. 451 tests passing.
 - [x] T10.4 — Ruby parser: Language.RUBY enum + .rb walker ext + parsers/ruby.py (class/module/def/private-tracking/require/calls via tree-sitter) + queries/ruby.scm + sample_repo_ruby fixture + 21 tests. 473 tests passing.
 - [x] T10.5 — PHP parser: Language.PHP enum + .php walker ext + parsers/php.py (class/trait/interface/method/function/use/require/calls via tree-sitter) + queries/php.scm + sample_repo_php fixture + 22 tests. 496 tests passing.
-- [ ] T10.6 — C/C++ parser (functions/structs/classes, `#include`, calls)
+- [x] T10.6 — C/C++ parser: Language.C + Language.CPP enums + .c/.h/.cpp/.cc etc walker exts + parsers/c_cpp.py (CParser + CppParser via shared _CCppMixin; functions/structs/typedef/classes/methods/access-specifier-tracking/#include/calls) + queries/c_cpp.scm + sample_repo_c_cpp fixture + 25 tests. 528 tests passing.
 - [ ] T10.7 — Cross-language import resolution pass (extend resolver for go/rust/java/ruby/php/c)
 
 **Phase 10 goal: go from 3 to ~9 languages. tree-sitter-languages ships all grammars. See plan/10-13-roadmap.md for full per-language pattern.**
