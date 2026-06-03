@@ -1,4 +1,4 @@
-# CodeGraph
+# CodeGraph (IN DEVELOPMENT)
 
 **A local-first AI memory layer for your codebase.** Index a Python or TypeScript
 repo into a queryable graph, search it by meaning, ask grounded questions over a
