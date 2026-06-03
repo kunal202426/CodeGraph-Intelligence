@@ -3,8 +3,8 @@
 ## Current
 
 - **Status:** ACTIVE — Phases 10-13 "best of both" roadmap in progress.
-- **Phase:** 11 — Freshness / Watch daemon [IN PROGRESS 1/3]
-- **Next task:** T11.2 — `codegraph watch` CLI command
+- **Phase:** 11 — Freshness / Watch daemon [IN PROGRESS 2/3]
+- **Next task:** T11.3 — Staleness guard on serve/MCP startup
 - **Last session:** 2026-06-03
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -114,7 +114,7 @@
 
 ### Phase 11 — Freshness / Watch daemon [IN PROGRESS 1/3]
 - [x] T11.1 — `sync/watcher.py` module: `watchdog>=3.0` added; `packages/codegraph/sync/` subpackage with `RepoWatcher`, `index_one_file`, `delete_one_file`, `_DebounceHandler`, `ChangeEvent`. Debounce 300 ms default. Respects ALWAYS_EXCLUDE + .gitignore. Language-agnostic edge cleanup on re-index. 21 new tests. 566 tests passing.
-- [ ] T11.2 — `codegraph watch <repo>` CLI command (long-running, ASCII status lines, Ctrl-C shutdown)
+- [x] T11.2 — `codegraph watch <repo>` CLI command: long-running, ASCII status lines ([green]modified[/green] / [red]deleted[/red] with entity count + elapsed ms), Ctrl-C clean shutdown (stop + join with timeout). --no-embed, --debounce, --db flags. Note if index missing. Added "watch" to smoke expected set. 11 new tests. 577 tests passing.
 - [ ] T11.3 — Staleness guard on `serve`/MCP startup
 
 ## Blockers / Notes

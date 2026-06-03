@@ -887,5 +887,69 @@ def serve(
     uvicorn.run(application, host=host, port=port, log_level="warning")
 
 
+@app.command()
+def watch(
+    repo: Path = typer.Argument(
+        ...,
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        resolve_path=True,
+        help="Repository root to watch for changes.",
+    ),
+    db: Path = typer.Option(DEFAULT_DB, "--db", help="DuckDB graph file path."),
+    no_embed: bool = typer.Option(
+        False,
+        "--no-embed",
+        help="Skip semantic embeddings on incremental re-index.",
+    ),
+    debounce: float = typer.Option(
+        0.3,
+        "--debounce",
+        help="Seconds to wait after a change before re-indexing (debounce).",
+        min=0.0,
+    ),
+) -> None:
+    """Watch a repo and re-index changed source files automatically. [T11.2]"""
+    from codegraph.sync.watcher import ChangeEvent, RepoWatcher
+
+    if not db.exists():
+        console.print(
+            f"[yellow]No index at {db}.[/yellow] "
+            "Changed files will be indexed as they are saved. "
+            "Run [bold]codegraph index <repo>[/bold] first for a full initial index."
+        )
+
+    def _on_change(evt: ChangeEvent) -> None:
+        ms = f"{evt.elapsed_ms:.0f}ms"
+        if evt.action == "deleted":
+            console.print(f"[red]deleted[/red]  {evt.path}  [dim]{ms}[/dim]")
+        else:
+            n = evt.n_entities
+            noun = "entity" if n == 1 else "entities"
+            console.print(f"[green]{evt.action}[/green]  {evt.path}  [dim]{n} {noun}  {ms}[/dim]")
+
+    watcher = RepoWatcher(
+        repo=repo,
+        db=db,
+        no_embed=no_embed,
+        debounce_sec=debounce,
+        on_change=_on_change,
+    )
+    watcher.start()
+    console.print(
+        f"Watching [bold]{repo}[/bold]  "
+        f"[dim](db: {db}, debounce: {debounce:.2f}s, Ctrl-C to stop)[/dim]"
+    )
+
+    try:
+        watcher.join()
+    except KeyboardInterrupt:
+        console.print("\nStopping watcher...")
+        watcher.stop()
+        watcher.join(timeout=5)
+        console.print("Watcher stopped.")
+
+
 if __name__ == "__main__":
     app()
