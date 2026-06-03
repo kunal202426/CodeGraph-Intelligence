@@ -67,6 +67,8 @@ dependencies = [
   "anthropic>=0.39",
   "mcp>=1.0",
   "numpy>=1.26",
+  "pandas>=3.0.3",
+  "watchdog>=3.0",   # Phase 11: filesystem watcher for incremental index freshness
 ]
 
 [project.optional-dependencies]

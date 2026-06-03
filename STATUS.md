@@ -3,9 +3,9 @@
 ## Current
 
 - **Status:** ACTIVE — Phases 10-13 "best of both" roadmap in progress.
-- **Phase:** 10 — Language breadth [DONE 7/7]
-- **Next task:** T11.1 — watchdog watcher module (Phase 11 start)
-- **Last session:** 2026-05-27
+- **Phase:** 11 — Freshness / Watch daemon [IN PROGRESS 1/3]
+- **Next task:** T11.2 — `codegraph watch` CLI command
+- **Last session:** 2026-06-03
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
 ## Phase progress
@@ -112,6 +112,11 @@
 
 **Phase 10 result: 3 → 9 languages (Go, Rust, Java, Ruby, PHP, C, C++ added). All emit into shared embedding/search/ask pipeline automatically. resolver extended for all 7 new languages. 545 tests passing.**
 
+### Phase 11 — Freshness / Watch daemon [IN PROGRESS 1/3]
+- [x] T11.1 — `sync/watcher.py` module: `watchdog>=3.0` added; `packages/codegraph/sync/` subpackage with `RepoWatcher`, `index_one_file`, `delete_one_file`, `_DebounceHandler`, `ChangeEvent`. Debounce 300 ms default. Respects ALWAYS_EXCLUDE + .gitignore. Language-agnostic edge cleanup on re-index. 21 new tests. 566 tests passing.
+- [ ] T11.2 — `codegraph watch <repo>` CLI command (long-running, ASCII status lines, Ctrl-C shutdown)
+- [ ] T11.3 — Staleness guard on `serve`/MCP startup
+
 ## Blockers / Notes
 
 - (none)
@@ -130,6 +135,7 @@
 - **`tree-sitter-languages` FutureWarning suppressed**: The package internally calls a deprecated `Language(path, name)` form; warning is noisy and unactionable until upstream migrates. Suppressed via `warnings.catch_warnings()` around the import + first call in `parsers/python.py`. Revisit if/when we move to tree-sitter ≥ 0.22 (will need API migration). (T1.3)
 - **`tests/fixtures/` excluded from ruff**: Fixture files may intentionally carry "bad" code patterns (cycles, dead code, god classes) for future test cases. Added `extend-exclude = ["tests/fixtures"]` in pyproject. (T1.3)
 - **DuckDB bulk-insert perf — RESOLVED at T2.7**: `executemany` was ~30 ms/row (per-call overhead), making the first fastapi index take 439s. Added `pandas` and switched `GraphStore._bulk_insert` to a registered-DataFrame `INSERT … SELECT` (~1000x faster: 6000 rows in 0.09s). Also batched the resolver from per-edge DELETE+INSERT (2N round-trips) into one bulk DELETE + one bulk insert, and skipped `clear_file` on cold index. Result: fastapi 439s → 38.6s cold, 0.8s warm. (T1.5 → T2.7)
+- **`watchdog` added as a hard dependency** (Phase 11, T11.1): filesystem watcher for `codegraph watch`. Added `watchdog>=3.0` (installed 6.0.0) to pyproject.toml and BUILD_PLAN.md §1.
 - **No Unicode in CLI text output**: Windows cp1252 console can't encode chars like `✓` (U+2713) and crashes with `UnicodeEncodeError` even when stdout is captured by typer.CliRunner inside a UTF-8 buffer (the test environment hides this). Stick to ASCII text in console.print() messages. Rich style tags (`[green]...[/green]`) are fine. (T1.7)
 - **Embedding tests skip when model unavailable**: `test_embeddings.py` loads `all-MiniLM-L6-v2` (~80 MB, downloaded from HuggingFace on first use, cached at `~/.cache/huggingface/`). A module-scoped autouse fixture skips the whole module if the model can't load (no network + not cached) instead of failing. CI will download it fresh each run (~45s, occasionally flaky — first attempt 500'd, retry succeeded) until we add an HF cache step. (T3.1)
 
