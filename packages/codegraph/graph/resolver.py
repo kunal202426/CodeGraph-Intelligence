@@ -36,7 +36,78 @@ _TS_EXTENSIONS = (".ts", ".tsx", ".d.ts", ".js", ".mjs", ".cjs", ".jsx")
 _TS_INDEX_NAMES = ("index.ts", "index.tsx", "index.js", "index.jsx")
 
 # File extensions stripped when building the module-qname index.
-_MODULE_EXT_ORDER = (".tsx", ".ts", ".jsx", ".mjs", ".cjs", ".js", ".pyi", ".py")
+_MODULE_EXT_ORDER = (
+    ".tsx",
+    ".ts",
+    ".jsx",
+    ".mjs",
+    ".cjs",
+    ".js",
+    ".pyi",
+    ".py",
+    ".go",
+    ".rs",
+    ".java",
+    ".rb",
+    ".php",
+    ".cpp",
+    ".cc",
+    ".cxx",
+    ".hpp",
+    ".hxx",
+    ".h",
+    ".c",
+)
+
+# SQL fragment selecting all provisional edge patterns.
+_PROVISIONAL_WHERE = (
+    "dst_id LIKE 'py:?%' OR dst_id LIKE 'ts:?%' "
+    "OR dst_id LIKE 'go:?%' OR dst_id LIKE 'rs:?%' "
+    "OR dst_id LIKE 'java:?%' OR dst_id LIKE 'rb:?%' "
+    "OR dst_id LIKE 'php:?%' "
+    "OR dst_id LIKE 'c:?%' OR dst_id LIKE 'cpp:?%'"
+)
+
+# Rust standard / core library namespace prefixes → always external.
+_RUST_STDLIB_PREFIXES = (
+    "std::",
+    "core::",
+    "alloc::",
+    "proc_macro::",
+    "test::",
+)
+
+# C / C++ system header names that are always external (no extension).
+# Headers ending in .h are still probed against known_files first.
+_C_SYSTEM_NOEXT = frozenset(
+    {
+        "string",
+        "vector",
+        "map",
+        "set",
+        "list",
+        "array",
+        "deque",
+        "memory",
+        "utility",
+        "algorithm",
+        "iostream",
+        "fstream",
+        "sstream",
+        "functional",
+        "type_traits",
+        "chrono",
+        "thread",
+        "mutex",
+        "atomic",
+        "cassert",
+        "cstdio",
+        "cstdlib",
+        "cstring",
+        "cmath",
+        "climits",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -64,8 +135,7 @@ def resolve_symbols(store: GraphStore) -> ResolutionStats:
     idx = _build_indexes(store)
 
     rows = store.conn.execute(
-        "SELECT src_id, dst_id, type, line FROM edges "
-        "WHERE dst_id LIKE 'py:?%' OR dst_id LIKE 'ts:?%'"
+        f"SELECT src_id, dst_id, type, line FROM edges WHERE {_PROVISIONAL_WHERE}"
     ).fetchall()
 
     # Calls are resolved after imports (they may reference imported names), so
@@ -114,7 +184,7 @@ def resolve_symbols(store: GraphStore) -> ResolutionStats:
         # Two bulk statements instead of 2*N per-edge round-trips: drop every
         # provisional edge, then re-insert the resolved versions. INSERT OR
         # IGNORE dedupes when a resolved counterpart already exists (re-index).
-        store.conn.execute("DELETE FROM edges WHERE dst_id LIKE 'py:?%' OR dst_id LIKE 'ts:?%'")
+        store.conn.execute(f"DELETE FROM edges WHERE {_PROVISIONAL_WHERE}")
         store.upsert_edges(resolved_edges)
 
     return ResolutionStats(
@@ -228,6 +298,27 @@ def _resolve_one(
 
     if dst_id.startswith("ts:?:"):
         return _resolve_typescript(dst_id[len("ts:?:") :], src_id, by_file_name, known_files)
+
+    if dst_id.startswith("go:?:"):
+        return _resolve_go(dst_id[5:], src_id, by_file_name, by_module_qname, known_files)
+
+    if dst_id.startswith("rs:?:"):
+        return _resolve_rust(dst_id[5:], src_id, by_file_name, by_module_qname, known_files)
+
+    if dst_id.startswith("java:?:"):
+        return _resolve_java(dst_id[7:], by_file_name, known_files)
+
+    if dst_id.startswith("rb:?:"):
+        return _resolve_ruby(dst_id[5:], src_id, by_file_name, known_files)
+
+    if dst_id.startswith("php:?:"):
+        return _resolve_php(dst_id[6:], src_id, by_file_name, known_files)
+
+    if dst_id.startswith("c:?:"):
+        return _resolve_c_include(dst_id[4:], src_id, by_file_name, known_files, "c")
+
+    if dst_id.startswith("cpp:?:"):
+        return _resolve_c_include(dst_id[6:], src_id, by_file_name, known_files, "cpp")
 
     # Already resolved (shouldn't reach here given the SQL filter, but defensive).
     return dst_id, 1.0
@@ -385,6 +476,226 @@ def _resolve_typescript(
     if module_eid is not None:
         return module_eid, 0.7
     return f"external:{specifier}{'::' + name if name else ''}", 0.5
+
+
+# ----------------------------------------------------------------------
+# New language resolvers (T10.7)
+
+
+def _module_entity_for_file(
+    file: str,
+    by_file_name: dict[tuple[str, str], str],
+) -> tuple[str, float] | None:
+    """Return the module entity_id for a known file, or None if not in index."""
+    module_qname = _path_to_module_qname(file)
+    hit = by_file_name.get((file, module_qname))
+    if hit is not None:
+        return hit, 0.9
+    return None
+
+
+def _resolve_go(
+    path: str,
+    src_id: str,
+    by_file_name: dict[tuple[str, str], str],
+    by_module_qname: dict[str, str],
+    known_files: set[str],
+) -> tuple[str, float]:
+    """Resolve a Go import path.
+
+    Go imports are module-path rooted (e.g. `github.com/x/y/pkg` or just
+    `fmt`). Best-effort strategy: convert the last slash-segment to a directory
+    name and scan for any `.go` file inside a directory of that name.
+    """
+    # Standard library packages have no slash or dots — treat as external.
+    last_seg = path.split("/")[-1]
+
+    # Try exact module-qname lookup (works when the path matches our index keys
+    # directly, e.g. the repo root is the module root).
+    dot_path = path.replace("/", ".")
+    file = by_module_qname.get(dot_path)
+    if file and file.endswith(".go"):
+        result = _module_entity_for_file(file, by_file_name)
+        if result:
+            return result
+
+    # Heuristic: find any `.go` file whose parent directory's last segment matches.
+    for known_file in sorted(known_files):
+        if not known_file.endswith(".go"):
+            continue
+        parts = known_file.split("/")
+        if len(parts) >= 2 and parts[-2] == last_seg:
+            result = _module_entity_for_file(known_file, by_file_name)
+            if result:
+                return result
+
+    return f"external:{path}", 0.5
+
+
+def _resolve_rust(
+    path: str,
+    src_id: str,
+    by_file_name: dict[tuple[str, str], str],
+    by_module_qname: dict[str, str],
+    known_files: set[str],
+) -> tuple[str, float]:
+    """Resolve a Rust `use` path (e.g. `serde::Serialize`, `crate::server`)."""
+    # Wildcards
+    if path.endswith("::*"):
+        path = path[:-3]
+
+    # Standard-library namespaces → always external.
+    if any(path.startswith(p) for p in _RUST_STDLIB_PREFIXES):
+        return f"external:{path}", 0.5
+
+    # Strip `crate::` prefix — refers to the current crate's root.
+    rel = path.removeprefix("crate::")
+
+    # Convert `::` → `/` and try `<path>.rs` or `<path>/mod.rs`
+    slash_path = rel.replace("::", "/")
+    for candidate in (slash_path + ".rs", slash_path + "/mod.rs"):
+        if candidate in known_files:
+            result = _module_entity_for_file(candidate, by_file_name)
+            if result:
+                return result
+
+    # Also try the module-qname index with `.` separators.
+    dot_path = rel.replace("::", ".")
+    file = by_module_qname.get(dot_path)
+    if file and file.endswith(".rs"):
+        result = _module_entity_for_file(file, by_file_name)
+        if result:
+            return result
+
+    return f"external:{path}", 0.5
+
+
+def _resolve_java(
+    path: str,
+    by_file_name: dict[tuple[str, str], str],
+    known_files: set[str],
+) -> tuple[str, float]:
+    """Resolve a Java `import` path (e.g. `com.example.Server`, `java.util.*`)."""
+    # Wildcard imports
+    if path.endswith(".*"):
+        return f"external:{path}", 0.5
+
+    # Known stdlib / framework roots → external.
+    if path.startswith(("java.", "javax.", "org.junit.", "org.springframework.", "android.")):
+        return f"external:{path}", 0.5
+
+    # PSR-like: com.example.server.Server → com/example/server/Server.java
+    file_candidate = path.replace(".", "/") + ".java"
+    if file_candidate in known_files:
+        last_seg = path.rsplit(".", 1)[-1]
+        hit = by_file_name.get((file_candidate, last_seg))
+        if hit:
+            return hit, 0.9
+        result = _module_entity_for_file(file_candidate, by_file_name)
+        if result:
+            return result
+
+    return f"external:{path}", 0.5
+
+
+def _resolve_ruby(
+    path: str,
+    src_id: str,
+    by_file_name: dict[tuple[str, str], str],
+    known_files: set[str],
+) -> tuple[str, float]:
+    """Resolve a Ruby `require` / `require_relative` path."""
+    src_file = src_id.split(":", 2)[1] if src_id.count(":") >= 2 else ""
+    src_dir = posixpath.dirname(src_file)
+
+    candidates: list[str] = []
+
+    if path.startswith("./") or path.startswith("../"):
+        # require_relative-style: resolve against the source file's directory.
+        joined = posixpath.normpath(posixpath.join(src_dir, path))
+        candidates += [joined, joined + ".rb"]
+    else:
+        # Bare require: probe common directory prefixes + direct file.
+        for prefix in ("", "lib/", "app/"):
+            candidates += [
+                prefix + path,
+                prefix + path + ".rb",
+            ]
+
+    for candidate in candidates:
+        if candidate in known_files:
+            result = _module_entity_for_file(candidate, by_file_name)
+            if result:
+                return result
+
+    return f"external:{path}", 0.5
+
+
+def _resolve_php(
+    path: str,
+    src_id: str,
+    by_file_name: dict[tuple[str, str], str],
+    known_files: set[str],
+) -> tuple[str, float]:
+    """Resolve a PHP `use` namespace path or `require`/`include` file path."""
+    src_file = src_id.split(":", 2)[1] if src_id.count(":") >= 2 else ""
+    src_dir = posixpath.dirname(src_file)
+
+    # File-based includes (has .php extension)
+    if path.endswith(".php"):
+        candidates = [path, posixpath.normpath(posixpath.join(src_dir, path))]
+        for candidate in candidates:
+            if candidate in known_files:
+                result = _module_entity_for_file(candidate, by_file_name)
+                if result:
+                    return result
+        return f"external:{path}", 0.5
+
+    # PSR-4 namespace: App\Http\Request → App/Http/Request.php
+    if "\\" in path:
+        file_candidate = path.replace("\\", "/") + ".php"
+        if file_candidate in known_files:
+            last_seg = path.rsplit("\\", 1)[-1]
+            hit = by_file_name.get((file_candidate, last_seg))
+            if hit:
+                return hit, 0.9
+            result = _module_entity_for_file(file_candidate, by_file_name)
+            if result:
+                return result
+
+    return f"external:{path}", 0.5
+
+
+def _resolve_c_include(
+    path: str,
+    src_id: str,
+    by_file_name: dict[tuple[str, str], str],
+    known_files: set[str],
+    lang_prefix: str,
+) -> tuple[str, float]:
+    """Resolve a C/C++ `#include` path.
+
+    System headers (no extension or well-known C++ stdlib names) → external.
+    Local headers (relative paths or `.h`/`.hpp` names) → probe known_files.
+    """
+    # C++ stdlib headers with no extension are always external.
+    if path in _C_SYSTEM_NOEXT:
+        return f"external:{path}", 0.5
+
+    src_file = src_id.split(":", 2)[1] if src_id.count(":") >= 2 else ""
+    src_dir = posixpath.dirname(src_file)
+
+    candidates = [
+        path,
+        posixpath.normpath(posixpath.join(src_dir, path)),
+    ]
+    for candidate in candidates:
+        if candidate in known_files:
+            result = _module_entity_for_file(candidate, by_file_name)
+            if result:
+                return result
+
+    return f"external:{path}", 0.5
 
 
 def _find_ts_file(joined_no_ext: str, known_files: set[str]) -> str | None:
