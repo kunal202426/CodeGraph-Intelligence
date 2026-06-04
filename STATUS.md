@@ -3,8 +3,8 @@
 ## Current
 
 - **Status:** ACTIVE — Phases 10-13 "best of both" roadmap in progress.
-- **Phase:** 13 — Multi-agent installer [IN PROGRESS 2/4]
-- **Next task:** T13.3 — `codegraph install`/`uninstall` CLI
+- **Phase:** 13 — Multi-agent installer [IN PROGRESS 3/4]
+- **Next task:** T13.4 — README install section
 - **Last session:** 2026-06-04
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -126,7 +126,7 @@
 ### Phase 13 — Multi-agent installer [IN PROGRESS 1/4]
 - [x] T13.1 — Installer core + target registry: `codegraph/installer/` subpackage with `Target` ABC, `McpEntry` dataclass, JSON read-modify-write helpers (`_write_entry`/`_remove_entry`/`is_configured`), `_make_entry(db)` default entry builder (uses `sys.executable`), and registry (`register_target`/`get_target`/`list_targets`). Smoke importability list updated. 25 tests. 648 tests passing.
 - [x] T13.2 — Claude Code, Cursor, Codex, Gemini targets: `installer/targets/` subpackage with 4 classes auto-registered on `import codegraph.installer`. ClaudeCode: `~/.claude.json` / `.mcp.json`. Cursor: `~/.cursor/mcp.json` / `.cursor/mcp.json`. Codex: `~/.codex/config.json`. Gemini: `~/.gemini/settings.json`. `is_available()` checks `shutil.which` + dir heuristic. Smoke importability list updated. 42 tests. 690 tests passing.
-- [ ] T13.3 — `codegraph install`/`uninstall` CLI
+- [x] T13.3 — `codegraph install`/`uninstall` CLI: `install <target> [--db] [--location global|local] [--yes/-y] [--print-config]`; `uninstall <target> [--location] [--yes/-y]`. `--print-config` dry-run uses `_emit()` to avoid Rich line-wrapping JSON. Registry patched via fixture for tests (never touches real agent configs). Smoke expected-set updated. 15 tests. 705 tests passing.
 - [ ] T13.4 — README install section
 
 - [x] T11.1 — `sync/watcher.py` module: `watchdog>=3.0` added; `packages/codegraph/sync/` subpackage with `RepoWatcher`, `index_one_file`, `delete_one_file`, `_DebounceHandler`, `ChangeEvent`. Debounce 300 ms default. Respects ALWAYS_EXCLUDE + .gitignore. Language-agnostic edge cleanup on re-index. 21 new tests. 566 tests passing.
