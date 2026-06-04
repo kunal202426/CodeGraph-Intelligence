@@ -160,6 +160,7 @@ CodeGraph is an MVP in development carve-out of a larger vision. Deliberately **
 language parsers (Rust/Java/Go/etc.), deep TypeScript type resolution via `tsc`,
 git-blame/ownership overlays, antipattern/architecture detection, a background
 re-indexing daemon, and cross-language HTTP edges. See [plan/09-stretch.md](plan/09-stretch.md).
+
 Other github repos consisting of architectural memoery does not solve the semantic meaning for the codebase,
 Which in development, models have to go through the whole code bases again defeating the point for
 CODEGRAPHS.
