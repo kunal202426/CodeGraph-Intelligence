@@ -224,6 +224,26 @@ def tool_definitions() -> list[Tool]:
                 "required": [],
             },
         ),
+        Tool(
+            name="reindex",
+            description=(
+                "Use this when index_status reports the index is stale, to refresh it "
+                "without leaving the chat. Re-parses only the source files changed since "
+                "the last index (incremental, fast) and updates the graph. Returns how "
+                "many files and entities were refreshed."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "no_embed": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Skip recomputing embeddings for changed files (faster).",
+                    },
+                },
+                "required": [],
+            },
+        ),
     ]
 
 
@@ -567,6 +587,23 @@ def _list_files(args: dict[str, Any]) -> str:
     return json.dumps({"total": len(files), "files": files})
 
 
+def _repo_root_for_db() -> Path:
+    """Best-effort repo root for the active DB.
+
+    A discovered/standard DB lives at ``<root>/.codegraph/graph.duckdb``, so the
+    root is two levels up. Otherwise fall back to the current working directory.
+    """
+    db = get_db_path()
+    if db.parent.name == ".codegraph":
+        return db.parent.parent
+    return Path(".")
+
+
+# Cap on files reindexed in a single MCP call -- beyond this, suggest the CLI so
+# an agent call doesn't block on a full cold index.
+_REINDEX_FILE_CAP = 500
+
+
 def _index_status(_args: dict[str, Any]) -> str:
     """Return index-level statistics and staleness indicator (T12.3)."""
     store = _open_store()
@@ -582,7 +619,7 @@ def _index_status(_args: dict[str, Any]) -> str:
     try:
         from codegraph.sync.watcher import count_stale_files
 
-        stale_files = count_stale_files(Path("."), get_db_path())
+        stale_files = count_stale_files(_repo_root_for_db(), get_db_path())
     except Exception:  # noqa: BLE001 — staleness check is best-effort
         pass
 
@@ -599,6 +636,62 @@ def _index_status(_args: dict[str, Any]) -> str:
     )
 
 
+def _reindex(args: dict[str, Any]) -> str:
+    """Re-parse only the files changed since the last index (T17.1).
+
+    Reuses ``find_stale_files`` + ``index_one_file`` so an agent can refresh a
+    stale index from within the chat. Caps the batch at ``_REINDEX_FILE_CAP`` and
+    suggests the CLI for larger refreshes.
+    """
+    import time
+
+    from codegraph.sync.watcher import find_stale_files, index_one_file
+
+    no_embed = bool(args.get("no_embed", False))
+    db = get_db_path()
+    if not db.exists():
+        return json.dumps({"error": f"No graph database at {db}. Run `codegraph index <repo>`."})
+
+    root = _repo_root_for_db()
+    stale = find_stale_files(root, db)
+
+    if not stale:
+        return json.dumps(
+            {"reindexed": 0, "entities": 0, "elapsed_ms": 0.0, "message": "Index already fresh."}
+        )
+
+    if len(stale) > _REINDEX_FILE_CAP:
+        return json.dumps(
+            {
+                "error": (
+                    f"{len(stale)} files changed (> {_REINDEX_FILE_CAP}); that is a large "
+                    "refresh. Run `codegraph index <repo>` in a terminal instead."
+                ),
+                "stale_files": len(stale),
+            }
+        )
+
+    start = time.monotonic()
+    total_entities = 0
+    reindexed = 0
+    for abs_path in stale:
+        try:
+            total_entities += index_one_file(root, abs_path, db, no_embed=no_embed)
+            reindexed += 1
+        except Exception:  # noqa: BLE001 — one bad file shouldn't abort the batch
+            continue
+    elapsed_ms = (time.monotonic() - start) * 1000.0
+
+    return json.dumps(
+        {
+            "reindexed": reindexed,
+            "entities": total_entities,
+            "elapsed_ms": round(elapsed_ms, 1),
+            "no_embed": no_embed,
+        }
+    )
+
+
 _HANDLERS = {
     "search_code": _search_code,
     "get_entity_context": _get_entity_context,
@@ -608,6 +701,7 @@ _HANDLERS = {
     "get_context": _get_context,
     "list_files": _list_files,
     "index_status": _index_status,
+    "reindex": _reindex,
 }
 
 

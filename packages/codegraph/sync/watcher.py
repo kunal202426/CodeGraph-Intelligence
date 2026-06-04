@@ -457,16 +457,18 @@ class RepoWatcher:
 # --------------------------------------------------------------------------- #
 
 
-def count_stale_files(repo: Path, db: Path) -> int:
-    """Count source files in repo modified more recently than the last index.
+def find_stale_files(repo: Path, db: Path) -> list[Path]:
+    """Return source files in repo modified more recently than the last index.
 
     Compares each file's mtime against ``max(indexed_at)`` in the files table.
-    Returns 0 when the DB is missing, has no indexed files, or cannot be opened.
-    The repo path is used as-is so callers can pass ``Path(".")`` to check
-    relative to CWD (the common usage from ``serve`` / MCP startup).
+    Returns an empty list when the DB is missing, has no indexed files, or
+    cannot be opened. The repo path is used as-is so callers can pass
+    ``Path(".")`` to check relative to CWD (the common usage from ``serve`` /
+    MCP startup). This is the list form behind ``count_stale_files``; the
+    ``reindex`` path re-parses exactly these files.
     """
     if not db.exists():
-        return 0
+        return []
 
     try:
         store = GraphStore(db)
@@ -476,10 +478,10 @@ def count_stale_files(repo: Path, db: Path) -> int:
         finally:
             store.close()
     except Exception:  # noqa: BLE001 — DB locked, corrupt, etc.
-        return 0
+        return []
 
     if row is None or row[0] is None:
-        return 0
+        return []
 
     last_indexed = row[0]
     # DuckDB returns TIMESTAMP as datetime.datetime; guard against string fallback.
@@ -489,22 +491,30 @@ def count_stale_files(repo: Path, db: Path) -> int:
         try:
             last_indexed = _dt.fromisoformat(last_indexed)
         except ValueError:
-            return 0
+            return []
 
     try:
         last_indexed_ts = last_indexed.timestamp()
     except Exception:  # noqa: BLE001
-        return 0
+        return []
 
-    stale = 0
+    stale: list[Path] = []
     try:
         for path, _lang in walk(repo):
             try:
                 if path.stat().st_mtime > last_indexed_ts:
-                    stale += 1
+                    stale.append(path)
             except OSError:
                 continue
     except Exception:  # noqa: BLE001 — repo missing, permission error, etc.
-        return 0
+        return []
 
     return stale
+
+
+def count_stale_files(repo: Path, db: Path) -> int:
+    """Count source files in repo modified more recently than the last index.
+
+    Thin wrapper over :func:`find_stale_files`; returns 0 on any error.
+    """
+    return len(find_stale_files(repo, db))

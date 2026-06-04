@@ -27,6 +27,7 @@ _EXPECTED = {
     "trace_path",
     "list_files",
     "index_status",
+    "reindex",
 }
 SAMPLE_REPO = Path("tests/fixtures/sample_repo_py")
 
@@ -45,7 +46,7 @@ def indexed_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return db
 
 
-def test_seven_tools_declared() -> None:
+def test_nine_tools_declared() -> None:
     tools = tool_definitions()
     assert {t.name for t in tools} == _EXPECTED
 
@@ -296,6 +297,69 @@ def test_index_status_stale_false_after_fresh_index(indexed_db: Path) -> None:
     # so count_stale_files returns 0 because it can't find newer files in CWD).
     data = _call("index_status", {})
     assert isinstance(data["stale_files"], int)
+
+
+# ---------- T17.1: reindex ----------
+
+
+def test_reindex_tool_definition() -> None:
+    by_name = {t.name: t for t in tool_definitions()}
+    assert "reindex" in by_name
+    assert "no_embed" in by_name["reindex"].inputSchema["properties"]
+
+
+def _index_temp_repo(repo: Path, src: Path, body: str) -> Path:
+    """Index a repo with one source file into <repo>/.codegraph/graph.duckdb."""
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_text(body, encoding="utf-8")
+    db = repo / ".codegraph" / "graph.duckdb"
+    result = CliRunner().invoke(cli_app, ["index", str(repo), "--db", str(db), "--no-embed"])
+    assert result.exit_code == 0, result.output
+    return db
+
+
+def test_reindex_refreshes_changed_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Edit a file -> index_status stale -> reindex -> fresh + new symbol searchable."""
+    import time
+
+    repo = tmp_path / "proj"
+    src = repo / "pkg" / "mod.py"
+    db = _index_temp_repo(repo, src, "def alpha():\n    return 1\n")
+    monkeypatch.setattr(mcp_server, "_db_path", db)
+
+    # Fresh right after indexing.
+    assert _call("index_status", {})["stale"] is False
+
+    # Modify: add a new function so the file is newer than the index.
+    time.sleep(0.05)
+    src.write_text("def alpha():\n    return 1\n\n\ndef beta():\n    return 2\n", encoding="utf-8")
+    assert _call("index_status", {})["stale"] is True
+
+    # Reindex from within the "agent".
+    time.sleep(0.05)
+    result = _call("reindex", {"no_embed": True})
+    assert result["reindexed"] >= 1
+    assert result["entities"] >= 1
+
+    # Now fresh, and the new symbol is searchable.
+    assert _call("index_status", {})["stale"] is False
+    hits = _call("search_code", {"query": "beta"})
+    assert any(h["name"] == "beta" for h in hits)
+
+
+def test_reindex_when_fresh_is_noop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = tmp_path / "proj"
+    db = _index_temp_repo(repo, repo / "a.py", "def f():\n    return 0\n")
+    monkeypatch.setattr(mcp_server, "_db_path", db)
+
+    result = _call("reindex", {})
+    assert result["reindexed"] == 0
+
+
+def test_reindex_missing_db_returns_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(mcp_server, "_db_path", tmp_path / "nope.duckdb")
+    data = _call("reindex", {})
+    assert "error" in data
 
 
 def test_get_context_tool_definition() -> None:

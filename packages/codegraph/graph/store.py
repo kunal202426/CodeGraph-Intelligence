@@ -98,11 +98,17 @@ class GraphStore:
         hash_: str,
         loc: int | None = None,
     ) -> None:
-        """Insert or replace a single file row keyed on `path`."""
+        """Insert or replace a single file row keyed on `path`.
+
+        ``indexed_at`` is set to CURRENT_TIMESTAMP explicitly: DuckDB's
+        INSERT OR REPLACE does not re-evaluate column defaults on replace, so
+        without this an already-indexed file keeps its original timestamp and
+        ``count_stale_files`` would report it stale forever after a re-index.
+        """
         self.conn.execute(
             """
-            INSERT OR REPLACE INTO files (path, language, hash, loc)
-            VALUES (?, ?, ?, ?)
+            INSERT OR REPLACE INTO files (path, language, hash, loc, indexed_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
             """,
             [path, language.value, hash_, loc],
         )
