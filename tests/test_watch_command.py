@@ -6,6 +6,7 @@ a KeyboardInterrupt raised from the first watcher.join() call.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
@@ -13,6 +14,15 @@ from codegraph.cli import app
 from typer.testing import CliRunner
 
 _RUNNER = CliRunner()
+
+
+def _plain(text: str) -> str:
+    """Strip ANSI escape codes for terminal-independent assertions.
+
+    On Linux CI, Rich renders option names with color codes that split
+    '--db' into '-\\x1b[..]-db', breaking naive substring checks.
+    """
+    return re.sub(r"\x1b\[[0-9;]*[mK]", "", text)
 
 
 def _mock_watcher(join_side_effects=None):
@@ -38,14 +48,14 @@ def test_watch_help_exits_zero() -> None:
 
 def test_watch_help_mentions_repo_and_db() -> None:
     result = _RUNNER.invoke(app, ["watch", "--help"])
-    out = result.output.lower()
+    out = _plain(result.output).lower()
     assert "repo" in out
     assert "--db" in out
 
 
 def test_watch_help_mentions_debounce_option() -> None:
     result = _RUNNER.invoke(app, ["watch", "--help"])
-    assert "--debounce" in result.output
+    assert "--debounce" in _plain(result.output)
 
 
 def test_watch_nonexistent_repo_exits_nonzero(tmp_path: Path) -> None:
