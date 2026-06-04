@@ -146,6 +146,66 @@ def test_missing_db_returns_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 # ---------- T12.1: get_context ----------
 
 
+# ---------- T12.2: trace_path ----------
+
+
+def test_trace_path_tool_definition() -> None:
+    by_name = {t.name: t for t in tool_definitions()}
+    tool = by_name["trace_path"]
+    assert "from_id" in tool.inputSchema["properties"]
+    assert "to_id" in tool.inputSchema["properties"]
+    assert tool.inputSchema["required"] == ["from_id", "to_id"]
+
+
+def test_trace_path_direct_call(indexed_db: Path) -> None:
+    """A caller of authenticate should reach authenticate in 1 hop."""
+    # Find the authenticate entity and one of its callers via search.
+    hits = _call("search_code", {"query": "authenticate"})
+    auth_id = next(h["entity_id"] for h in hits if h["name"] == "authenticate")
+
+    # Retrieve direct callers from get_entity_context.
+    ctx = _call("get_entity_context", {"entity_id": auth_id})
+    callers = ctx["called_by"]
+    assert callers, "need at least one caller to test trace_path"
+
+    caller_id = callers[0]
+    data = _call("trace_path", {"from_id": caller_id, "to_id": auth_id})
+    assert data["found"] is True
+    assert data["hops"] == 1
+    assert data["path"] == [caller_id, auth_id]
+
+
+def test_trace_path_same_entity_zero_hops(indexed_db: Path) -> None:
+    """from_id == to_id should return a single-element path with 0 hops."""
+    hits = _call("search_code", {"query": "authenticate"})
+    auth_id = next(h["entity_id"] for h in hits if h["name"] == "authenticate")
+
+    data = _call("trace_path", {"from_id": auth_id, "to_id": auth_id})
+    assert data["found"] is True
+    assert data["hops"] == 0
+    assert data["path"] == [auth_id]
+
+
+def test_trace_path_not_found(indexed_db: Path) -> None:
+    """Unrelated entities should return found=False."""
+    hits = _call("search_code", {"query": "authenticate"})
+    auth_id = next(h["entity_id"] for h in hits if h["name"] == "authenticate")
+
+    # Try to reach authenticate *from* itself via a non-existent path in the
+    # reverse direction (authenticate → caller) — BFS is directed so this
+    # should not be reachable.
+    ctx = _call("get_entity_context", {"entity_id": auth_id})
+    callers = ctx["called_by"]
+    if not callers:
+        pytest.skip("no callers in fixture")
+
+    caller_id = callers[0]
+    # Reversed direction: authenticate → caller is not a call edge.
+    data = _call("trace_path", {"from_id": auth_id, "to_id": caller_id})
+    assert data["found"] is False
+    assert data["path"] == []
+
+
 def test_get_context_tool_definition() -> None:
     by_name = {t.name: t for t in tool_definitions()}
     tool = by_name["get_context"]
