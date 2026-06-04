@@ -67,6 +67,19 @@ def test_tools_have_descriptions() -> None:
     assert all(len(t.description or "") > 10 for t in tool_definitions())
 
 
+def test_tool_descriptions_are_directive() -> None:
+    """Each tool must tell the agent WHEN to use it / to prefer it over file reads."""
+    import re
+
+    directive = re.compile(
+        r"(?i)(prefer|use this|start here|call this|instead of|before reading|before editing)"
+    )
+    for tool in tool_definitions():
+        assert directive.search(tool.description or ""), (
+            f"{tool.name} description is not directive: {tool.description!r}"
+        )
+
+
 def test_list_tools_handler_matches_definitions() -> None:
     tools = asyncio.run(list_tools())
     assert {t.name for t in tools} == _EXPECTED

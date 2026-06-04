@@ -50,8 +50,11 @@ def tool_definitions() -> list[Tool]:
     return [
         Tool(
             name="search_code",
-            description="Hybrid literal + semantic search over the indexed codebase. "
-            "Returns matching entities (functions/classes/modules) with file:line.",
+            description="Prefer this over grep/file-reading for finding code. Hybrid "
+            "literal + semantic search over the indexed codebase -- returns matching "
+            "entities (functions/classes/modules) with file:line and entity_id, using "
+            "far fewer tokens than scanning files. Use when you need a quick list of "
+            "candidate locations; follow up with get_context for the full picture.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -63,8 +66,10 @@ def tool_definitions() -> list[Tool]:
         ),
         Tool(
             name="get_entity_context",
-            description="Get the full source plus immediate graph neighbours "
-            "(callers, callees, imports) for a given entity_id.",
+            description="Use this instead of opening a file when you already know the "
+            "entity_id and need its full source plus immediate graph neighbours "
+            "(callers, callees, imports). Returns exactly one entity's body and its "
+            "links -- cheaper and more precise than reading the whole file.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -78,8 +83,9 @@ def tool_definitions() -> list[Tool]:
         ),
         Tool(
             name="impact_analysis",
-            description="Find what would break if this entity changed — the reverse-call "
-            "blast radius (transitive callers).",
+            description="Use this before editing an entity to see what would break -- the "
+            "reverse-call blast radius (transitive callers). Prefer this over manually "
+            "grepping for usages; it follows the resolved call graph across files.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -91,8 +97,10 @@ def tool_definitions() -> list[Tool]:
         ),
         Tool(
             name="ask_codebase",
-            description="Ask a natural-language question about the codebase. Returns a "
-            "grounded answer with entity_id citations via GraphRAG.",
+            description="Use this for broad 'how does X work?' questions when you want a "
+            "synthesized answer rather than raw entities. Returns a grounded natural-"
+            "language answer with entity_id citations via GraphRAG. Requires an index "
+            "built with embeddings.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -104,10 +112,10 @@ def tool_definitions() -> list[Tool]:
         Tool(
             name="trace_path",
             description=(
-                "Find the shortest call chain between two symbols via BFS over "
-                "directed call edges (max 7 hops by default). Returns the sequence "
-                "of entity_ids from source to destination. Useful for understanding "
-                "how one function transitively reaches another."
+                "Use this to answer 'how does A reach B?' -- the shortest call chain "
+                "between two entity_ids via BFS over directed call edges (max 7 hops by "
+                "default). Returns the labeled sequence from source to destination. "
+                "Prefer this over manually following calls through files."
             ),
             inputSchema={
                 "type": "object",
@@ -132,12 +140,12 @@ def tool_definitions() -> list[Tool]:
         Tool(
             name="get_context",
             description=(
-                "Primary context tool — one call returns hybrid search results packed "
-                "with full source, signatures, docstrings, and each entity's immediate "
-                "callers and callees. Replaces 3-4 round-trips (search + entity + "
-                "impact) with a single request. Use this first when exploring an "
-                "unfamiliar codebase or when you need to understand how a symbol fits "
-                "into the call graph."
+                "START HERE before reading any source file. The primary tool -- one call "
+                "returns hybrid search results packed with signatures, docstrings, a "
+                "short source preview, and each entity's callers and callees. Replaces "
+                "3-4 round-trips (search + entity + impact) and uses ~10x fewer tokens "
+                "than opening files. Defaults to lean summaries; pass detail='full' only "
+                "when you need complete bodies (1-2 entities at a time)."
             ),
             inputSchema={
                 "type": "object",
@@ -158,9 +166,10 @@ def tool_definitions() -> list[Tool]:
         Tool(
             name="list_files",
             description=(
-                "List all source files in the indexed codebase with their language, "
-                "line count, and entity count. Optionally filter by language name "
-                "(e.g. 'python', 'typescript', 'go')."
+                "Use this instead of listing the directory tree to understand project "
+                "layout from the index: every source file with its language, line count, "
+                "and entity count. Optionally filter by language name (e.g. 'python', "
+                "'typescript', 'go')."
             ),
             inputSchema={
                 "type": "object",
@@ -176,9 +185,10 @@ def tool_definitions() -> list[Tool]:
         Tool(
             name="index_status",
             description=(
-                "Return index statistics: file, entity, and edge counts; embedding "
-                "coverage; and whether any source files have changed since the last "
-                "index run (staleness indicator)."
+                "Call this once at the start of a session to confirm the index exists "
+                "and is fresh. Returns file, entity, and edge counts; embedding "
+                "coverage; and whether source files changed since the last index "
+                "(staleness). If stale, run the reindex tool before relying on results."
             ),
             inputSchema={
                 "type": "object",
