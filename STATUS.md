@@ -3,8 +3,8 @@
 ## Current
 
 - **Status:** ACTIVE — Phases 10-13 "best of both" roadmap in progress.
-- **Phase:** 13 — Multi-agent installer [IN PROGRESS 1/4]
-- **Next task:** T13.2 — Claude Code, Cursor, Codex, Gemini targets
+- **Phase:** 13 — Multi-agent installer [IN PROGRESS 2/4]
+- **Next task:** T13.3 — `codegraph install`/`uninstall` CLI
 - **Last session:** 2026-06-04
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -125,7 +125,7 @@
 
 ### Phase 13 — Multi-agent installer [IN PROGRESS 1/4]
 - [x] T13.1 — Installer core + target registry: `codegraph/installer/` subpackage with `Target` ABC, `McpEntry` dataclass, JSON read-modify-write helpers (`_write_entry`/`_remove_entry`/`is_configured`), `_make_entry(db)` default entry builder (uses `sys.executable`), and registry (`register_target`/`get_target`/`list_targets`). Smoke importability list updated. 25 tests. 648 tests passing.
-- [ ] T13.2 — Claude Code, Cursor, Codex, Gemini targets
+- [x] T13.2 — Claude Code, Cursor, Codex, Gemini targets: `installer/targets/` subpackage with 4 classes auto-registered on `import codegraph.installer`. ClaudeCode: `~/.claude.json` / `.mcp.json`. Cursor: `~/.cursor/mcp.json` / `.cursor/mcp.json`. Codex: `~/.codex/config.json`. Gemini: `~/.gemini/settings.json`. `is_available()` checks `shutil.which` + dir heuristic. Smoke importability list updated. 42 tests. 690 tests passing.
 - [ ] T13.3 — `codegraph install`/`uninstall` CLI
 - [ ] T13.4 — README install section
 
