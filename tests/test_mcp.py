@@ -190,6 +190,20 @@ def test_trace_path_direct_call(indexed_db: Path) -> None:
     assert data["path"] == [caller_id, auth_id]
 
 
+def test_trace_path_includes_readable_labels(indexed_db: Path) -> None:
+    """trace_path returns a parallel labels list of 'name (file:line)' strings."""
+    hits = _call("search_code", {"query": "authenticate"})
+    auth_id = next(h["entity_id"] for h in hits if h["name"] == "authenticate")
+    ctx = _call("get_entity_context", {"entity_id": auth_id})
+    caller_id = ctx["called_by"][0]
+
+    data = _call("trace_path", {"from_id": caller_id, "to_id": auth_id})
+    assert "labels" in data
+    assert len(data["labels"]) == len(data["path"])
+    # The authenticate endpoint's label should name it and cite a file:line.
+    assert any("authenticate" in lbl and "(" in lbl for lbl in data["labels"])
+
+
 def test_trace_path_same_entity_zero_hops(indexed_db: Path) -> None:
     """from_id == to_id should return a single-element path with 0 hops."""
     hits = _call("search_code", {"query": "authenticate"})

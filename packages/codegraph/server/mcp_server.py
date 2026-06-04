@@ -259,6 +259,22 @@ def _source_preview(raw_source: str | None, max_lines: int = _SOURCE_PREVIEW_LIN
     return f"{head}\n... ({len(lines) - max_lines} more lines; pass detail='full' for all)"
 
 
+def _labels_for(conn, entity_ids: list[str]) -> dict[str, str]:
+    """Map each entity_id to a human-readable 'name (file:line)' label.
+
+    Ids with no matching entity row (e.g. external targets) fall back to the id
+    itself so the agent always gets a usable string.
+    """
+    labels: dict[str, str] = {}
+    for eid in entity_ids:
+        row = conn.execute(
+            "SELECT name, file, start_line FROM entities WHERE entity_id = ?",
+            [eid],
+        ).fetchone()
+        labels[eid] = f"{row[0]} ({row[1]}:{row[2]})" if row else eid
+    return labels
+
+
 def _open_store() -> GraphStore:
     db = get_db_path()
     if not db.exists():
@@ -387,6 +403,8 @@ def _trace_path(args: dict[str, Any]) -> str:
     store = _open_store()
     try:
         path = find_shortest_path(store.conn, from_id, to_id, max_hops=max_hops)
+        # Resolve readable labels while the store is open (path is short, <= max_hops).
+        label_map = _labels_for(store.conn, path) if path else {}
     finally:
         store.close()
 
@@ -398,6 +416,7 @@ def _trace_path(args: dict[str, Any]) -> str:
                 "found": False,
                 "hops": None,
                 "path": [],
+                "labels": [],
                 "message": f"No call path found within {max_hops} hops.",
             }
         )
@@ -408,6 +427,7 @@ def _trace_path(args: dict[str, Any]) -> str:
             "found": True,
             "hops": len(path) - 1,
             "path": path,
+            "labels": [label_map.get(eid, eid) for eid in path],
         }
     )
 
