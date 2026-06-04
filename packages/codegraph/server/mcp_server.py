@@ -159,6 +159,16 @@ def tool_definitions() -> list[Tool]:
                         "default": 5,
                         "description": "Max entities to return (1-10, default 5).",
                     },
+                    "detail": {
+                        "type": "string",
+                        "enum": ["summary", "full"],
+                        "default": "summary",
+                        "description": (
+                            "'summary' (default, token-lean): signature + docstring + "
+                            "short source preview. 'full': complete source bodies -- use "
+                            "sparingly, only for 1-2 entities."
+                        ),
+                    },
                 },
                 "required": ["query"],
             },
@@ -222,6 +232,23 @@ _ENTITY_COLUMNS = (
     "docstring",
     "raw_source",
 )
+
+# Columns returned in get_context "summary" mode (omits raw_source to stay token-lean).
+_SUMMARY_COLUMNS = tuple(c for c in _ENTITY_COLUMNS if c != "raw_source")
+
+# Lines of source shown as a preview in summary mode.
+_SOURCE_PREVIEW_LINES = 8
+
+
+def _source_preview(raw_source: str | None, max_lines: int = _SOURCE_PREVIEW_LINES) -> str:
+    """Return the first *max_lines* lines of source with a truncation marker."""
+    if not raw_source:
+        return ""
+    lines = raw_source.splitlines()
+    if len(lines) <= max_lines:
+        return raw_source
+    head = "\n".join(lines[:max_lines])
+    return f"{head}\n... ({len(lines) - max_lines} more lines; pass detail='full' for all)"
 
 
 def _open_store() -> GraphStore:
@@ -378,9 +405,16 @@ def _trace_path(args: dict[str, Any]) -> str:
 
 
 def _get_context(args: dict[str, Any]) -> str:
-    """Hybrid search + full source + callers/callees in one response (T12.1)."""
+    """Hybrid search packed with callers/callees in one response (T12.1).
+
+    Defaults to token-lean summaries (signature + docstring + short source
+    preview). Pass ``detail="full"`` to include complete ``raw_source`` bodies.
+    """
     query = str(args["query"])
     limit = max(1, min(int(args.get("limit", 5)), 10))
+    detail = str(args.get("detail", "summary")).lower()
+    full = detail == "full"
+    columns = _ENTITY_COLUMNS if full else _SUMMARY_COLUMNS
 
     store = _open_store()
     try:
@@ -388,10 +422,10 @@ def _get_context(args: dict[str, Any]) -> str:
         hits = hybrid_search(store.conn, query, vector, limit=limit)
 
         if not hits:
-            return json.dumps({"query": query, "total": 0, "entities": []})
+            return json.dumps({"query": query, "total": 0, "detail": detail, "entities": []})
 
         entities = []
-        col_select = ", ".join(_ENTITY_COLUMNS)
+        col_select = ", ".join(columns)
         for hit in hits:
             eid = hit.entity_id
             row = store.conn.execute(
@@ -400,7 +434,15 @@ def _get_context(args: dict[str, Any]) -> str:
             ).fetchone()
             if row is None:
                 continue
-            entity: dict[str, Any] = dict(zip(_ENTITY_COLUMNS, row, strict=True))
+            entity: dict[str, Any] = dict(zip(columns, row, strict=True))
+
+            # In summary mode, attach a short preview instead of the full body.
+            if not full:
+                preview_row = store.conn.execute(
+                    "SELECT raw_source FROM entities WHERE entity_id = ?",
+                    [eid],
+                ).fetchone()
+                entity["source_preview"] = _source_preview(preview_row[0] if preview_row else None)
 
             # Outbound: imports + calls (what this entity depends on)
             entity["depends_on"] = [
@@ -424,7 +466,9 @@ def _get_context(args: dict[str, Any]) -> str:
             entity["via"] = list(hit.retrievers)
             entities.append(entity)
 
-        return json.dumps({"query": query, "total": len(entities), "entities": entities})
+        return json.dumps(
+            {"query": query, "total": len(entities), "detail": detail, "entities": entities}
+        )
     finally:
         store.close()
 

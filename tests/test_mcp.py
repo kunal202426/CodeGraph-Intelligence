@@ -271,6 +271,10 @@ def test_get_context_tool_definition() -> None:
     props = tool.inputSchema["properties"]
     assert "query" in props and "limit" in props
     assert "default" in props["limit"]
+    # T15.1: detail param with summary/full enum
+    assert "detail" in props
+    assert props["detail"]["default"] == "summary"
+    assert set(props["detail"]["enum"]) == {"summary", "full"}
 
 
 def test_get_context_returns_packed_result(indexed_db: Path) -> None:
@@ -279,9 +283,8 @@ def test_get_context_returns_packed_result(indexed_db: Path) -> None:
     assert len(data["entities"]) >= 1
 
     top = data["entities"][0]
-    # Full entity fields present
+    # Summary fields present
     assert "entity_id" in top
-    assert "raw_source" in top
     assert "signature" in top or "docstring" in top
     # Graph neighbourhood present
     assert "depends_on" in top
@@ -290,6 +293,43 @@ def test_get_context_returns_packed_result(indexed_db: Path) -> None:
     assert isinstance(top["called_by"], list)
     # Retriever tags present
     assert "via" in top and isinstance(top["via"], list)
+
+
+def test_get_context_summary_omits_raw_source(indexed_db: Path) -> None:
+    """Default (summary) mode must NOT include full raw_source -- token discipline."""
+    data = _call("get_context", {"query": "authenticate"})
+    assert data["detail"] == "summary"
+    for ent in data["entities"]:
+        assert "raw_source" not in ent
+        assert "source_preview" in ent
+
+
+def test_get_context_full_includes_raw_source(indexed_db: Path) -> None:
+    """detail='full' includes complete bodies and omits the preview."""
+    data = _call("get_context", {"query": "authenticate", "detail": "full"})
+    assert data["detail"] == "full"
+    top = data["entities"][0]
+    assert "raw_source" in top
+    assert "source_preview" not in top
+
+
+def test_source_preview_truncates_long_bodies() -> None:
+    """The preview helper caps long source and adds a truncation marker."""
+    from codegraph.server.mcp_server import _source_preview
+
+    long_src = "\n".join(f"line {i}" for i in range(50))
+    preview = _source_preview(long_src)
+    assert preview.count("\n") < 50  # truncated
+    assert "more lines" in preview
+    assert len(preview) < len(long_src)
+
+
+def test_source_preview_keeps_short_bodies() -> None:
+    from codegraph.server.mcp_server import _source_preview
+
+    short = "def f():\n    return 1"
+    assert _source_preview(short) == short
+    assert _source_preview(None) == ""
 
 
 def test_get_context_authenticate_has_callers(indexed_db: Path) -> None:
