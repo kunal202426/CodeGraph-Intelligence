@@ -44,9 +44,7 @@ def test_context_shows_column_headers(indexed_db: Path) -> None:
 
 
 def test_context_no_match(indexed_db: Path) -> None:
-    result = runner.invoke(
-        app, ["context", "zzz_not_a_real_symbol_9999", "--db", str(indexed_db)]
-    )
+    result = runner.invoke(app, ["context", "zzz_not_a_real_symbol_9999", "--db", str(indexed_db)])
     assert result.exit_code == 0
     assert "No results" in _plain(result.output)
 
@@ -111,9 +109,7 @@ def test_trace_not_found_exits_1(indexed_db: Path) -> None:
 
 
 def test_trace_missing_db(tmp_path: Path) -> None:
-    result = runner.invoke(
-        app, ["trace", "x", "y", "--db", str(tmp_path / "nope.duckdb")]
-    )
+    result = runner.invoke(app, ["trace", "x", "y", "--db", str(tmp_path / "nope.duckdb")])
     assert result.exit_code == 1
 
 
