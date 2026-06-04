@@ -300,6 +300,42 @@ def _ask_codebase(args: dict[str, Any]) -> str:
     return json.dumps({"answer": answer})
 
 
+def _trace_path(args: dict[str, Any]) -> str:
+    """Shortest call chain between two entity_ids (T12.2)."""
+    from_id = str(args["from_id"])
+    to_id = str(args["to_id"])
+    max_hops = max(1, min(int(args.get("max_hops", 7)), 20))
+
+    from codegraph.analysis.traversal import find_shortest_path
+
+    store = _open_store()
+    try:
+        path = find_shortest_path(store.conn, from_id, to_id, max_hops=max_hops)
+    finally:
+        store.close()
+
+    if path is None:
+        return json.dumps(
+            {
+                "from_id": from_id,
+                "to_id": to_id,
+                "found": False,
+                "hops": None,
+                "path": [],
+                "message": f"No call path found within {max_hops} hops.",
+            }
+        )
+    return json.dumps(
+        {
+            "from_id": from_id,
+            "to_id": to_id,
+            "found": True,
+            "hops": len(path) - 1,
+            "path": path,
+        }
+    )
+
+
 def _get_context(args: dict[str, Any]) -> str:
     """Hybrid search + full source + callers/callees in one response (T12.1)."""
     query = str(args["query"])
