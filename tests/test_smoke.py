@@ -53,6 +53,11 @@ def test_all_scaffolded_modules_importable() -> None:
         "codegraph.installer",
         "codegraph.installer.base",
         "codegraph.installer.registry",
+        "codegraph.installer.targets",
+        "codegraph.installer.targets.claude_code",
+        "codegraph.installer.targets.cursor",
+        "codegraph.installer.targets.codex",
+        "codegraph.installer.targets.gemini",
     ]
     for name in modules:
         importlib.import_module(name)
