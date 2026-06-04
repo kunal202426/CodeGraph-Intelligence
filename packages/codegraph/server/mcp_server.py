@@ -155,6 +155,37 @@ def tool_definitions() -> list[Tool]:
                 "required": ["query"],
             },
         ),
+        Tool(
+            name="list_files",
+            description=(
+                "List all source files in the indexed codebase with their language, "
+                "line count, and entity count. Optionally filter by language name "
+                "(e.g. 'python', 'typescript', 'go')."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "language": {
+                        "type": "string",
+                        "description": "Filter to one language. Omit for all languages.",
+                    },
+                },
+                "required": [],
+            },
+        ),
+        Tool(
+            name="index_status",
+            description=(
+                "Return index statistics: file, entity, and edge counts; embedding "
+                "coverage; and whether any source files have changed since the last "
+                "index run (staleness indicator)."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        ),
     ]
 
 

@@ -25,6 +25,8 @@ _EXPECTED = {
     "ask_codebase",
     "get_context",
     "trace_path",
+    "list_files",
+    "index_status",
 }
 SAMPLE_REPO = Path("tests/fixtures/sample_repo_py")
 
@@ -43,7 +45,7 @@ def indexed_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return db
 
 
-def test_five_tools_declared() -> None:
+def test_seven_tools_declared() -> None:
     tools = tool_definitions()
     assert {t.name for t in tools} == _EXPECTED
 
