@@ -55,6 +55,13 @@ def test_make_entry_has_module_arg(tmp_path: Path) -> None:
     assert "codegraph.server.mcp_server" in entry.args
 
 
+def test_make_entry_none_omits_db_arg() -> None:
+    """T16.2: db=None writes no --db so the server discovers per project."""
+    entry = _make_entry(None)
+    assert "--db" not in entry.args
+    assert "codegraph.server.mcp_server" in entry.args
+
+
 # ---------------------------------------------------------------------------
 # JSON file utilities
 # ---------------------------------------------------------------------------

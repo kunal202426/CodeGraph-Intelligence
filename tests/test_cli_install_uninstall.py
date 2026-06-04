@@ -253,3 +253,34 @@ def test_uninstall_no_guide_leaves_claude_md(tmp_path: Path, patched_claude) -> 
     runner.invoke(app, ["install", "claude", "--db", str(db), "--yes"])
     runner.invoke(app, ["uninstall", "claude", "--yes", "--no-guide"])
     assert (tmp_path / "CLAUDE.md").exists()
+
+
+# ---------------------------------------------------------------------------
+# T16.2 — discovery default (no --db) vs pinned (--db)
+# ---------------------------------------------------------------------------
+
+
+def test_install_without_db_omits_db_arg(tmp_path: Path, patched_claude) -> None:
+    _, cfg, _ = patched_claude
+    result = runner.invoke(app, ["install", "claude", "--yes", "--no-guide"])
+    assert result.exit_code == 0
+    entry = json.loads(cfg.read_text())["mcpServers"]["codegraph"]
+    assert "--db" not in entry["args"]
+    assert "auto-discovered" in _plain(result.output)
+
+
+def test_install_with_db_pins_it(tmp_path: Path, patched_claude) -> None:
+    _, cfg, _ = patched_claude
+    db = tmp_path / "g.duckdb"
+    result = runner.invoke(app, ["install", "claude", "--db", str(db), "--yes", "--no-guide"])
+    assert result.exit_code == 0
+    entry = json.loads(cfg.read_text())["mcpServers"]["codegraph"]
+    assert "--db" in entry["args"]
+    assert "pinned" in _plain(result.output)
+
+
+def test_print_config_without_db_omits_db(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["install", "claude", "--print-config"])
+    assert result.exit_code == 0
+    data = json.loads(result.output.strip())
+    assert "--db" not in data["mcpServers"]["codegraph"]["args"]

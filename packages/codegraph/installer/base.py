@@ -40,12 +40,18 @@ class McpEntry:
         return d
 
 
-def _make_entry(db: Path) -> McpEntry:
-    """Build the default CodeGraph entry pointing the MCP server at *db*."""
-    return McpEntry(
-        command=sys.executable,
-        args=["-m", "codegraph.server.mcp_server", "--db", str(db.resolve())],
-    )
+def _make_entry(db: Path | None) -> McpEntry:
+    """Build the CodeGraph MCP server entry.
+
+    When *db* is given, the entry pins that database with ``--db``. When *db* is
+    ``None``, no ``--db`` is written so the server discovers the nearest
+    ``.codegraph/graph.duckdb`` from its working directory -- one entry then
+    serves every project.
+    """
+    args = ["-m", "codegraph.server.mcp_server"]
+    if db is not None:
+        args += ["--db", str(db.resolve())]
+    return McpEntry(command=sys.executable, args=args)
 
 
 # ---------------------------------------------------------------------------
@@ -83,21 +89,21 @@ class Target(ABC):
         """Project-level config file.  Defaults to ``.mcp.json`` in CWD."""
         return Path(".mcp.json")
 
-    def build_entry(self, db: Path) -> McpEntry:
-        """Build the McpEntry for *db*.  Override to customise the command."""
+    def build_entry(self, db: Path | None) -> McpEntry:
+        """Build the McpEntry for *db* (``None`` = rely on discovery)."""
         return _make_entry(db)
 
     # ------------------------------------------------------------------
     # Concrete helpers
 
-    def config_snippet(self, db: Path) -> str:
+    def config_snippet(self, db: Path | None) -> str:
         """Return the JSON that ``install`` would write (for --print-config)."""
         return json.dumps(
             {"mcpServers": {_SERVER_KEY: self.build_entry(db).to_dict()}},
             indent=2,
         )
 
-    def install(self, db: Path, *, global_: bool = True) -> None:
+    def install(self, db: Path | None, *, global_: bool = True) -> None:
         """Idempotently add the CodeGraph MCP entry to the agent config."""
         path = self.global_config_path() if global_ else self.local_config_path()
         self._write_entry(path, db)
@@ -119,7 +125,7 @@ class Target(ABC):
     # ------------------------------------------------------------------
     # Private read-modify-write helpers
 
-    def _write_entry(self, path: Path, db: Path) -> None:
+    def _write_entry(self, path: Path, db: Path | None) -> None:
         data = _read_json_or_empty(path)
         servers: dict[str, Any] = data.setdefault("mcpServers", {})
         servers[_SERVER_KEY] = self.build_entry(db).to_dict()

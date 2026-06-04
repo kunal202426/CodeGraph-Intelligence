@@ -1147,7 +1147,12 @@ def _list_available_targets() -> None:
 @app.command()
 def install(
     target: str = typer.Argument(..., help="Agent target: claude, cursor, codex, gemini."),
-    db: Path = typer.Option(DEFAULT_DB, "--db", help="DuckDB graph file path."),
+    db: Path | None = typer.Option(
+        None,
+        "--db",
+        help="Pin a specific DuckDB graph file. Omit to let the server discover "
+        "the nearest .codegraph/graph.duckdb per project (recommended).",
+    ),
     location: str = typer.Option(
         "global", "--location", help="Config scope: global (user) or local (project)."
     ),
@@ -1201,6 +1206,13 @@ def install(
         f"[green]Installed.[/green] {t.display_name} can now use CodeGraph as an MCP tool."
     )
     console.print(f"[dim]Config: {config_path}[/dim]")
+    if db is None:
+        console.print(
+            "[dim]DB: auto-discovered per project (nearest .codegraph/graph.duckdb). "
+            "One entry works across all your repos.[/dim]"
+        )
+    else:
+        console.print(f"[dim]DB: pinned to {db}.[/dim]")
 
     if not no_guide:
         guide_path = write_agent_guide(Path("."))
