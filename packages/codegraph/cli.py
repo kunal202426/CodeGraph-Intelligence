@@ -1285,5 +1285,70 @@ def uninstall(
         console.print("[dim]Removed the CodeGraph block from CLAUDE.md.[/dim]")
 
 
+@app.command()
+def init(
+    repo: Path = typer.Argument(
+        Path("."),
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        resolve_path=True,
+        help="Repository root to set up (default: current directory).",
+    ),
+    target: str = typer.Option(
+        "claude", "--target", help="Agent to wire up: claude, cursor, codex, gemini."
+    ),
+    no_embed: bool = typer.Option(
+        False, "--no-embed", help="Skip semantic embeddings (faster, literal search only)."
+    ),
+    location: str = typer.Option(
+        "global", "--location", help="Agent config scope: global (user) or local (project)."
+    ),
+) -> None:
+    """One-shot setup: index the repo, wire up your agent, and write the guide. [T18.2]
+
+    Collapses index + install + CLAUDE.md into a single command so a new user
+    goes from zero to a Claude-usable index in one step.
+    """
+    from codegraph.installer import get_target  # also triggers auto-registration
+    from codegraph.installer.guide import write_agent_guide
+
+    if location not in ("global", "local"):
+        console.print(f"[red]--location must be 'global' or 'local', got {location!r}.[/red]")
+        raise typer.Exit(code=1)
+
+    # Resolve the target up front so we fail fast on a typo before indexing.
+    try:
+        t = get_target(target)
+    except KeyError as exc:
+        console.print(f"[red]{exc}[/red]")
+        _list_available_targets()
+        raise typer.Exit(code=1) from exc
+
+    # Keep the DB inside the repo so walk-up discovery resolves it per project.
+    db = repo / ".codegraph" / "graph.duckdb"
+    db.parent.mkdir(parents=True, exist_ok=True)
+
+    console.print(f"[bold]Step 1/3[/bold] Indexing [bold]{repo}[/bold]...")
+    index(repo=repo, db=db, no_embed=no_embed)
+
+    console.print(f"\n[bold]Step 2/3[/bold] Wiring up [bold]{t.display_name}[/bold]...")
+    t.install(None, global_=(location == "global"))  # None = discovery, works everywhere
+    config_path = t.global_config_path() if location == "global" else t.local_config_path()
+    console.print(f"[green]MCP server registered[/green] [dim]({config_path})[/dim]")
+
+    console.print("\n[bold]Step 3/3[/bold] Writing agent guide...")
+    guide_path = write_agent_guide(repo)
+    console.print(f"[green]Guide written[/green] [dim]({guide_path})[/dim]")
+
+    console.print(
+        f"\n[green bold]Done.[/green bold] {t.display_name} can now use CodeGraph on this repo.\n"
+        "Next steps:\n"
+        f"  - Restart {t.display_name} so it picks up the new MCP server.\n"
+        '  - Ask it something like: [italic]"use codegraph to explain how X works"[/italic].\n'
+        "  - Keep the index fresh with [bold]codegraph watch .[/bold] (optional)."
+    )
+
+
 if __name__ == "__main__":
     app()
