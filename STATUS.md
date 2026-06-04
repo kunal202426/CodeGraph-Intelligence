@@ -2,9 +2,9 @@
 
 ## Current
 
-- **Status:** ACTIVE — Phases 10-13 "best of both" roadmap in progress.
-- **Phase:** 13 — Multi-agent installer [DONE 4/4]
-- **Next task:** (all planned phases complete — see Future section)
+- **Status:** ACTIVE — Phases 14-18 "actually usable" roadmap in progress.
+- **Phase:** 14 — Adoption gate [DONE 4/4]
+- **Next task:** T15.1 — `detail` param on get_context (lean output)
 - **Last session:** 2026-06-05
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -130,6 +130,14 @@
 - [x] T13.4 — README install section: "Agent installer" section (4-target table, install/uninstall examples, --location/--yes/--print-config); MCP tools section expanded to 8 tools with get_context as primary; Stack table updated (9 languages, watchdog row); Roadmap updated to reflect Phases 10-13 completion.
 
 **Phase 13 result: `codegraph install <target>` wires the MCP server into Claude Code, Cursor, Codex, or Gemini in one command. Idempotent read-modify-write JSON; never clobbers other config entries. 705 tests passing.**
+
+### Phase 14 — Adoption gate (make Claude actually use it) [DONE 4/4]
+- [x] T14.1 — Directive MCP tool descriptions: rewrote all 8 `description=` strings in `tool_definitions()` to say WHEN to use each tool and to prefer it over file-reading/grep, with token framing. `get_context` = "START HERE before reading any source file"; `index_status` = "Call this once at session start". New test asserts every description contains a directive marker. 706 tests.
+- [x] T14.2 — CLAUDE.md agent-guide writer: `installer/guide.py` with `write_agent_guide`/`remove_agent_guide`/`has_agent_guide`. Wraps a <400-token CodeGraph block in `<!-- BEGIN/END CODEGRAPH -->` markers; creates CLAUDE.md if absent, replaces only the marked block if present, never clobbers other content; remove deletes the file if it becomes empty. 13 tests.
+- [x] T14.3 — Wire guide into install/uninstall: `install` writes the guide to ./CLAUDE.md (`--no-guide` to skip); `uninstall` strips it (`--no-guide` to leave). Test fixture chdirs into tmp_path so the guide never lands in the repo root. 6 new tests. 725 tests passing.
+- [x] T14.4 — STATUS.md update (this entry).
+
+**Phase 14 result: the adoption gate. Tool descriptions now direct Claude to prefer CodeGraph over reading files, and `install` drops a CLAUDE.md managed block that tells the agent to call `index_status` at session start and `get_context` before opening files. 725 tests passing.**
 
 - [x] T11.1 — `sync/watcher.py` module: `watchdog>=3.0` added; `packages/codegraph/sync/` subpackage with `RepoWatcher`, `index_one_file`, `delete_one_file`, `_DebounceHandler`, `ChangeEvent`. Debounce 300 ms default. Respects ALWAYS_EXCLUDE + .gitignore. Language-agnostic edge cleanup on re-index. 21 new tests. 566 tests passing.
 - [x] T11.2 — `codegraph watch <repo>` CLI command: long-running, ASCII status lines ([green]modified[/green] / [red]deleted[/red] with entity count + elapsed ms), Ctrl-C clean shutdown (stop + join with timeout). --no-embed, --debounce, --db flags. Note if index missing. Added "watch" to smoke expected set. 11 new tests. 577 tests passing.
