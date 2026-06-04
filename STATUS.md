@@ -3,8 +3,8 @@
 ## Current
 
 - **Status:** ACTIVE — Phases 14-18 "actually usable" roadmap in progress.
-- **Phase:** 16 — Multi-project (one install, every project) [DONE 3/3]
-- **Next task:** T17.1 — `reindex` MCP tool (self-healing freshness)
+- **Phase:** 17 — Self-healing freshness [DONE 3/3]
+- **Next task:** T18.1 — model-download UX (first-run legibility)
 - **Last session:** 2026-06-05
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -154,6 +154,13 @@
 - [x] T16.3 — STATUS.md update (this entry). Note: CLI-from-subdirectory discovery (so `codegraph search` works below the repo root) deferred as low-value — the CLI is normally run from the repo root and `--db` is always available; the agent-facing MCP path is what needed discovery.
 
 **Phase 16 result: a single `codegraph install <agent>` (no `--db`) now works across every project on the machine — the MCP server discovers the nearest index from its working directory. 748 tests passing.**
+
+### Phase 17 — Self-healing freshness [DONE 3/3]
+- [x] T17.1 — `reindex` MCP tool (9th tool): re-parses only files changed since the last index (new `find_stale_files` + reuse `index_one_file`), capped at 500 files (suggests CLI beyond that). Derives repo root from the DB path. **Also fixed a latent bug**: DuckDB `INSERT OR REPLACE` doesn't re-evaluate the `indexed_at` DEFAULT, so the watcher's `index_one_file` never advanced a file's timestamp — `count_stale_files` reported it stale forever after a re-index. `upsert_file` now sets `indexed_at = CURRENT_TIMESTAMP` explicitly. 3 reindex tests + end-to-end verification.
+- [x] T17.2 — Degraded-search warning: `get_context` returns a `warnings` array when the index has no embeddings (semantic silently degrades to literal). Staleness stays in `index_status` to keep the search hot path off the per-call repo walk. `search_code` keeps its bare-array contract. 2 tests.
+- [x] T17.3 — STATUS.md update (this entry).
+
+**Phase 17 result: an agent can refresh a stale index from within the chat (`reindex`) and is told when semantic search is unavailable. Fixed a real staleness bug along the way. 754 tests passing.**
 
 - [x] T11.1 — `sync/watcher.py` module: `watchdog>=3.0` added; `packages/codegraph/sync/` subpackage with `RepoWatcher`, `index_one_file`, `delete_one_file`, `_DebounceHandler`, `ChangeEvent`. Debounce 300 ms default. Respects ALWAYS_EXCLUDE + .gitignore. Language-agnostic edge cleanup on re-index. 21 new tests. 566 tests passing.
 - [x] T11.2 — `codegraph watch <repo>` CLI command: long-running, ASCII status lines ([green]modified[/green] / [red]deleted[/red] with entity count + elapsed ms), Ctrl-C clean shutdown (stop + join with timeout). --no-embed, --debounce, --db flags. Note if index missing. Added "watch" to smoke expected set. 11 new tests. 577 tests passing.
