@@ -12,17 +12,21 @@ to your coding agent over MCP.
 
 ## What it does
 
-- **Understands your code as a graph** — tree-sitter parses Python & TypeScript into a
-  unified entity/edge model (functions, classes, methods, modules + `imports`/`calls`
-  edges), stored in a single DuckDB file with cross-file symbol resolution.
+- **Understands your code as a graph** — tree-sitter parses 9 languages (Python,
+  TypeScript/JS, Go, Rust, Java, Ruby, PHP, C, C++) into a unified entity/edge model
+  (functions, classes, methods, modules + `imports`/`calls` edges), stored in a single
+  DuckDB file with cross-file symbol resolution.
 - **Search by meaning, not just text** — local `all-MiniLM-L6-v2` embeddings + DuckDB
   vector search, fused with literal search via Reciprocal Rank Fusion.
 - **Answers grounded questions** — GraphRAG retrieval (vector seeds + graph expansion)
   feeds `claude-sonnet-4-6` to answer "how does X work?" with `file:line` citations.
-- **Analyzes structure** — dependency trees, reverse-call impact ("what breaks if I
-  change this?"), import-cycle detection (Tarjan SCC), and code-smell heuristics.
-- **Plugs into your agent** — an MCP server lets Claude Code (or any MCP client) call
-  CodeGraph as a tool.
+- **Analyzes structure** — dependency trees, reverse-call impact, import-cycle detection
+  (Tarjan SCC), code-smell heuristics, dead-code candidates, git-blame ownership, and
+  architectural layer analysis.
+- **Stays fresh automatically** — `codegraph watch` debounces filesystem events and
+  re-indexes only the changed files in ~300 ms, keeping the graph current as you code.
+- **Plugs into any MCP agent** — 8 MCP tools (search, context, trace, impact, status,
+  …) plus a one-command installer for Claude Code, Cursor, Codex, and Gemini.
 
 ## Quickstart
 
@@ -42,7 +46,8 @@ uv run codegraph serve
 ```
 
 Full command list: `uv run codegraph --help` — `index`, `search`, `deps`, `impact`,
-`cycles`, `smells`, `ask`, `summarize`, `serve`.
+`cycles`, `smells`, `deadcode`, `owner`, `layers`, `ask`, `summarize`, `context`,
+`trace`, `status`, `watch`, `serve`, `install`, `uninstall`.
 
 ## Example queries
 
@@ -98,39 +103,76 @@ flowchart LR
     mcp --> agent[Claude Code / MCP agent]
 ```
 
-## MCP integration
+## Agent installer
 
-CodeGraph ships an [MCP](https://modelcontextprotocol.io) server so an agent can query
-your code as a tool.
-[IN DEVELOPMENT]
+`codegraph install` wires the MCP server into your agent in one command — no manual
+JSON editing needed.
 
 ```bash
+# Index your repo first
 uv run codegraph index /path/to/repo
-claude mcp add codegraph -- \
-  uv run python -m codegraph.server.mcp_server --db /path/to/repo/.codegraph/graph.duckdb
+
+# Install into Claude Code (writes ~/.claude.json)
+uv run codegraph install claude --db /path/to/repo/.codegraph/graph.duckdb
+
+# Install into Cursor (writes ~/.cursor/mcp.json)
+uv run codegraph install cursor --db /path/to/repo/.codegraph/graph.duckdb
+
+# Dry-run: print the JSON snippet without writing
+uv run codegraph install claude --db ... --print-config
+
+# Remove the entry
+uv run codegraph uninstall claude
 ```
+
+**Supported targets:**
+
+| Target | Command | Global config written |
+|---|---|---|
+| `claude` | Claude Code | `~/.claude.json` |
+| `cursor` | Cursor IDE | `~/.cursor/mcp.json` |
+| `codex` | OpenAI Codex CLI | `~/.codex/config.json` |
+| `gemini` | Google Gemini CLI | `~/.gemini/settings.json` |
+
+Use `--location local` to write a project-scoped config instead (`.mcp.json`,
+`.cursor/mcp.json`, etc.). Use `--yes`/`-y` to skip the confirmation prompt in scripts.
 
 Then ask your agent: *"Use codegraph to explain how authentication works in this repo."*
 
+## MCP tools
+
+CodeGraph exposes 8 tools over the [MCP](https://modelcontextprotocol.io) stdio protocol.
+
 | Tool | What it does |
 |---|---|
-| `search_code` | Hybrid literal + semantic search → entities with `file:line` |
+| `get_context` | **Primary tool.** One call = hybrid search + full source + callers/callees. Replaces 3-4 round-trips. |
+| `search_code` | Hybrid literal + semantic search -> entities with `file:line` |
 | `get_entity_context` | Full source + neighbours (`depends_on`, `called_by`) for an `entity_id` |
-| `impact_analysis` | Reverse-call blast radius — what breaks if an entity changes |
+| `impact_analysis` | Reverse-call blast radius -- what breaks if an entity changes |
+| `trace_path` | Shortest call chain between two `entity_id`s (BFS, up to 7 hops) |
+| `list_files` | All indexed files with language, LOC, and entity count; filterable by language |
+| `index_status` | File / entity / edge / embedding counts + staleness indicator |
 | `ask_codebase` | Natural-language question answered via GraphRAG with citations |
 
-`ask_codebase` needs embeddings (don't index with `--no-embed`) and `ANTHROPIC_API_KEY`;
-the other three work on any index. The DB path may also be set via `CODEGRAPH_DB`.
+`ask_codebase` requires embeddings and `ANTHROPIC_API_KEY`; all others work on any index.
+Set `CODEGRAPH_DB` to override the default DB path without passing `--db`.
+
+To run the MCP server manually (e.g. for a custom agent config):
+
+```bash
+python -m codegraph.server.mcp_server --db /path/to/repo/.codegraph/graph.duckdb
+```
 
 ## Stack
 
 | Layer | Choice |
 |---|---|
 | Language / tooling | Python 3.11, [uv](https://github.com/astral-sh/uv), [ruff](https://docs.astral.sh/ruff/), pytest |
-| Parsing | [tree-sitter](https://tree-sitter.github.io/) (Python, TypeScript/TSX, JS/JSX) |
+| Parsing | [tree-sitter](https://tree-sitter.github.io/) — Python, TS/JS, Go, Rust, Java, Ruby, PHP, C, C++ |
 | Storage | [DuckDB](https://duckdb.org/) — entities, edges, `FLOAT[384]` vectors, one file |
 | Embeddings | [sentence-transformers](https://www.sbert.net/) `all-MiniLM-L6-v2` (local, 384-d) |
 | LLM | [Anthropic](https://docs.anthropic.com/) `claude-sonnet-4-6` (prompt-cached) |
+| Freshness | [watchdog](https://github.com/gorakhargosh/watchdog) — debounced file watcher |
 | CLI | [Typer](https://typer.tiangolo.com/) + [Rich](https://rich.readthedocs.io/) |
 | Web | [FastAPI](https://fastapi.tiangolo.com/) + React 19 + Vite + [D3](https://d3js.org/) |
 | Agent | [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) |
@@ -156,10 +198,16 @@ for entities whose input changed. `ask` latency depends on the Anthropic API.
 
 ## Roadmap
 
-CodeGraph is an MVP in development carve-out of a larger vision. Deliberately **deferred**: more
-language parsers (Rust/Java/Go/etc.), deep TypeScript type resolution via `tsc`,
-git-blame/ownership overlays, antipattern/architecture detection, a background
-re-indexing daemon, and cross-language HTTP edges. See [plan/09-stretch.md](plan/09-stretch.md).
+Phases 10-13 ("best of both") are complete:
+
+- **Phase 10** — 9 languages: Go, Rust, Java, Ruby, PHP, C, C++ added to Python + TS/JS
+- **Phase 11** — `codegraph watch`: debounced file watcher re-indexes in ~300 ms; staleness guard on `serve`/MCP startup
+- **Phase 12** — 8 MCP tools: `get_context` (3-in-1), `trace_path` (BFS), `list_files`, `index_status` + CLI mirrors (`context`, `trace`, `status`)
+- **Phase 13** — Agent installer: `codegraph install`/`uninstall` for Claude Code, Cursor, Codex, Gemini
+
+Deliberately **deferred**: deep TypeScript type resolution via `tsc`, framework-aware
+resolvers (Express/NestJS/Django/Rails), multi-client shared watcher daemon (Unix
+socket), and cross-language HTTP edge extraction. See [STATUS.md](STATUS.md).
 
 Other github repos consisting of architectural memoery does not solve the semantic meaning for the codebase,
 Which in development, models have to go through the whole code bases again defeating the point for
