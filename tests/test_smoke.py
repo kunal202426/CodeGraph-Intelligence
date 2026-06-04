@@ -41,6 +41,7 @@ def test_all_scaffolded_modules_importable() -> None:
         "codegraph.ai",
         "codegraph.ai.llm",
         "codegraph.ai.graphrag",
+        "codegraph.ai.tokens",
         "codegraph.server",
         "codegraph.server.api",
         "codegraph.server.mcp_server",

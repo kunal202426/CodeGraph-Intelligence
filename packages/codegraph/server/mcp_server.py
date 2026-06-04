@@ -169,6 +169,14 @@ def tool_definitions() -> list[Tool]:
                             "sparingly, only for 1-2 entities."
                         ),
                     },
+                    "max_tokens": {
+                        "type": "integer",
+                        "default": 1500,
+                        "description": (
+                            "Approx output token budget; entities beyond it are dropped "
+                            "and 'truncated' is set in the response."
+                        ),
+                    },
                 },
                 "required": ["query"],
             },
@@ -410,9 +418,12 @@ def _get_context(args: dict[str, Any]) -> str:
     Defaults to token-lean summaries (signature + docstring + short source
     preview). Pass ``detail="full"`` to include complete ``raw_source`` bodies.
     """
+    from codegraph.ai.tokens import estimate_tokens
+
     query = str(args["query"])
     limit = max(1, min(int(args.get("limit", 5)), 10))
     detail = str(args.get("detail", "summary")).lower()
+    max_tokens = max(100, int(args.get("max_tokens", 1500)))
     full = detail == "full"
     columns = _ENTITY_COLUMNS if full else _SUMMARY_COLUMNS
 
@@ -422,9 +433,20 @@ def _get_context(args: dict[str, Any]) -> str:
         hits = hybrid_search(store.conn, query, vector, limit=limit)
 
         if not hits:
-            return json.dumps({"query": query, "total": 0, "detail": detail, "entities": []})
+            return json.dumps(
+                {
+                    "query": query,
+                    "total": 0,
+                    "detail": detail,
+                    "truncated": False,
+                    "tokens_estimated": 0,
+                    "entities": [],
+                }
+            )
 
         entities = []
+        used_tokens = 0
+        truncated = False
         col_select = ", ".join(columns)
         for hit in hits:
             eid = hit.entity_id
@@ -464,10 +486,25 @@ def _get_context(args: dict[str, Any]) -> str:
             ]
 
             entity["via"] = list(hit.retrievers)
+
+            # Token budget: always include the first entity, then stop once the
+            # running estimate would exceed max_tokens.
+            entity_tokens = estimate_tokens(json.dumps(entity))
+            if entities and used_tokens + entity_tokens > max_tokens:
+                truncated = True
+                break
+            used_tokens += entity_tokens
             entities.append(entity)
 
         return json.dumps(
-            {"query": query, "total": len(entities), "detail": detail, "entities": entities}
+            {
+                "query": query,
+                "total": len(entities),
+                "detail": detail,
+                "truncated": truncated,
+                "tokens_estimated": used_tokens,
+                "entities": entities,
+            }
         )
     finally:
         store.close()

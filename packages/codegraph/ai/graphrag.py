@@ -42,7 +42,8 @@ _PROMPTS_DIR = Path(__file__).with_name("prompts")
 _ASK_SYSTEM_PATH = _PROMPTS_DIR / "ask_system.md"
 _SUMMARIZE_SYSTEM_PATH = _PROMPTS_DIR / "summarize_system.md"
 _BODY_PREVIEW_LINES = 20  # show signature, else first N lines of raw_source
-_CONTEXT_CHAR_BUDGET = 12000  # ~3000 tokens of repository context
+_CONTEXT_TOKEN_BUDGET = 3000  # repository context budget, token-based (T15.2)
+_CONTEXT_CHAR_BUDGET = 12000  # deprecated ~char alias (~3000 tokens); back-compat only
 _DEFAULT_PER_DIR = 10  # representative entities sampled per top-level directory
 
 
@@ -336,14 +337,26 @@ def format_entity_block(entity: RetrievedEntity) -> str:
 def build_user_message(
     query: str,
     entities: list[RetrievedEntity],
-    char_budget: int = _CONTEXT_CHAR_BUDGET,
+    token_budget: int = _CONTEXT_TOKEN_BUDGET,
+    char_budget: int | None = None,
 ) -> str:
     """Assemble the user message: the question + a token-budgeted context section.
 
-    Entities are added in rank order until the character budget is reached, so
-    the most relevant context survives truncation. With no entities, the context
-    section says so explicitly (the system prompt tells the model to admit gaps).
+    Entities are added in rank order until the *token* budget is reached, so the
+    most relevant context survives truncation. Token counts use the shared
+    ``estimate_tokens`` heuristic rather than raw character length, so the budget
+    is meaningful across languages (a dense Go function and a docstring-heavy
+    Python class are measured comparably). With no entities, the context section
+    says so explicitly (the system prompt tells the model to admit gaps).
+
+    ``char_budget`` is a deprecated back-compat alias: when given, it is converted
+    to a token budget (~4 chars/token).
     """
+    from codegraph.ai.tokens import estimate_tokens
+
+    if char_budget is not None:
+        token_budget = max(1, char_budget // 4)
+
     lines = [f"QUESTION: {query}", "", "REPOSITORY CONTEXT:"]
     if not entities:
         lines.append("(no relevant entities were retrieved for this query)")
@@ -354,11 +367,12 @@ def build_user_message(
     # equals the number of blocks already included.
     for i, entity in enumerate(entities):
         block = format_entity_block(entity)
-        if i > 0 and used + len(block) > char_budget:
+        block_tokens = estimate_tokens(block)
+        if i > 0 and used + block_tokens > token_budget:
             break
         lines.append("")
         lines.append(block)
-        used += len(block)
+        used += block_tokens
     return "\n".join(lines)
 
 

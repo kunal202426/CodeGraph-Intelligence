@@ -332,6 +332,24 @@ def test_source_preview_keeps_short_bodies() -> None:
     assert _source_preview(None) == ""
 
 
+def test_get_context_reports_token_estimate(indexed_db: Path) -> None:
+    data = _call("get_context", {"query": "authenticate"})
+    assert "tokens_estimated" in data
+    assert isinstance(data["tokens_estimated"], int)
+    assert "truncated" in data
+
+
+def test_get_context_respects_token_budget(indexed_db: Path) -> None:
+    """A tiny budget caps the entity count and flags truncation."""
+    tiny = _call("get_context", {"query": "authenticate", "limit": 10, "max_tokens": 100})
+    big = _call("get_context", {"query": "authenticate", "limit": 10, "max_tokens": 100000})
+    # First entity always included; the tiny budget returns no more than the big one.
+    assert len(tiny["entities"]) >= 1
+    assert len(tiny["entities"]) <= len(big["entities"])
+    if len(big["entities"]) > len(tiny["entities"]):
+        assert tiny["truncated"] is True
+
+
 def test_get_context_authenticate_has_callers(indexed_db: Path) -> None:
     """The authenticate function is called by other entities in the fixture."""
     data = _call("get_context", {"query": "authenticate"})
