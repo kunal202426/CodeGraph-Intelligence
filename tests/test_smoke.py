@@ -52,6 +52,7 @@ def test_all_scaffolded_modules_importable() -> None:
         "codegraph.sync.watcher",
         "codegraph.installer",
         "codegraph.installer.base",
+        "codegraph.installer.guide",
         "codegraph.installer.registry",
         "codegraph.installer.targets",
         "codegraph.installer.targets.claude_code",
