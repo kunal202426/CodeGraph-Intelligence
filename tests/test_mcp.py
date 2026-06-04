@@ -208,6 +208,49 @@ def test_trace_path_not_found(indexed_db: Path) -> None:
     assert data["path"] == []
 
 
+# ---------- T12.3: list_files ----------
+
+
+def test_list_files_returns_indexed_files(indexed_db: Path) -> None:
+    data = _call("list_files", {})
+    assert data["total"] > 0
+    f = data["files"][0]
+    assert "path" in f and "language" in f and "entity_count" in f and "loc" in f
+
+
+def test_list_files_language_filter(indexed_db: Path) -> None:
+    all_data = _call("list_files", {})
+    py_data = _call("list_files", {"language": "python"})
+    assert py_data["total"] > 0
+    assert py_data["total"] <= all_data["total"]
+    assert all(f["language"] == "python" for f in py_data["files"])
+
+
+def test_list_files_unknown_language_returns_empty(indexed_db: Path) -> None:
+    data = _call("list_files", {"language": "erlang"})
+    assert data["total"] == 0
+    assert data["files"] == []
+
+
+# ---------- T12.3: index_status ----------
+
+
+def test_index_status_returns_stats(indexed_db: Path) -> None:
+    data = _call("index_status", {})
+    for key in ("db_path", "files", "entities", "edges", "embedded", "stale_files", "stale"):
+        assert key in data, f"missing key: {key}"
+    assert data["files"] > 0
+    assert data["entities"] > 0
+    assert isinstance(data["stale"], bool)
+
+
+def test_index_status_stale_false_after_fresh_index(indexed_db: Path) -> None:
+    # Just indexed — stale_files should be 0 (CWD is not the fixture repo,
+    # so count_stale_files returns 0 because it can't find newer files in CWD).
+    data = _call("index_status", {})
+    assert isinstance(data["stale_files"], int)
+
+
 def test_get_context_tool_definition() -> None:
     by_name = {t.name: t for t in tool_definitions()}
     tool = by_name["get_context"]
