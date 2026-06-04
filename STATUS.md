@@ -2,9 +2,9 @@
 
 ## Current
 
-- **Status:** ACTIVE — Phases 14-18 "actually usable" roadmap in progress.
-- **Phase:** 17 — Self-healing freshness [DONE 3/3]
-- **Next task:** T18.1 — model-download UX (first-run legibility)
+- **Status:** ACTIVE — Phases 14-18 "actually usable" roadmap COMPLETE.
+- **Phase:** 18 — First-run + distribution [DONE 5/5]
+- **Next task:** (roadmap complete — optional: PyPI publish (manual), CLI-subdir discovery, lock-contention hardening)
 - **Last session:** 2026-06-05
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -161,6 +161,32 @@
 - [x] T17.3 — STATUS.md update (this entry).
 
 **Phase 17 result: an agent can refresh a stale index from within the chat (`reindex`) and is told when semantic search is unavailable. Fixed a real staleness bug along the way. 754 tests passing.**
+
+### Phase 18 — First-run legibility + distribution [DONE 5/5]
+- [x] T18.1 — Model-download UX: `pipeline.model_is_cached()` best-effort HF-cache probe; `index` prints "Downloading embedding model (~80 MB, first run only)..." before the otherwise-silent download. Network/SSL embed failures now point at `--no-embed` for offline use. 4 tests (mocked, no real download).
+- [x] T18.2 — `codegraph init` one-shot: index (DB inside the repo for discovery) + register MCP entry (discovery mode) + write CLAUDE.md guide + print next steps. Fails fast on unknown target before indexing. Added to smoke expected-set. 5 tests.
+- [x] T18.3 — PyPI packaging metadata: `keywords`, trove `classifiers` (MIT, Python 3.11/3.12), `[project.urls]`; MIT `LICENSE` file. `uv build` produces a valid wheel + sdist; console script resolves. 6 metadata tests. (`twine upload` left as a manual owner step.)
+- [x] T18.4 — README refresh: `init` onboarding, discovery (one install/every repo), the CLAUDE.md mechanism, 9-tool MCP table (incl. `reindex`), Phases 14-18 roadmap, 9-language intro.
+- [x] T18.5 — STATUS.md update; roadmap marked complete (this entry).
+
+**Phase 18 result: zero-to-first-query is one command (`codegraph init`), the first-run model download is legible, and the package carries full PyPI metadata + a LICENSE ready to publish. 769 tests passing, 1 live-skip.**
+
+---
+
+## "Actually usable" roadmap (Phases 14-18) — COMPLETE
+
+The post-Phase-13 push that turned a feature-complete project into a tool a solo dev would
+leave installed. The two gates that decided it:
+
+- **Adoption (14):** agents now reach for CodeGraph — directive tool descriptions + an
+  auto-written `CLAUDE.md` ("call `index_status` at session start, `get_context` before
+  reading files").
+- **Value (15):** when they do, it's ~10x leaner — `get_context` returns summaries with a
+  token budget by default; full bodies are opt-in.
+
+Then: one install serves every project (16, walk-up discovery), agents self-heal a stale
+index (17, `reindex` — and a real `indexed_at` bug fixed), and onboarding is one command
+with a legible first run + publishable packaging (18). 705 -> 769 tests.
 
 - [x] T11.1 — `sync/watcher.py` module: `watchdog>=3.0` added; `packages/codegraph/sync/` subpackage with `RepoWatcher`, `index_one_file`, `delete_one_file`, `_DebounceHandler`, `ChangeEvent`. Debounce 300 ms default. Respects ALWAYS_EXCLUDE + .gitignore. Language-agnostic edge cleanup on re-index. 21 new tests. 566 tests passing.
 - [x] T11.2 — `codegraph watch <repo>` CLI command: long-running, ASCII status lines ([green]modified[/green] / [red]deleted[/red] with entity count + elapsed ms), Ctrl-C clean shutdown (stop + join with timeout). --no-embed, --debounce, --db flags. Note if index missing. Added "watch" to smoke expected set. 11 new tests. 577 tests passing.
