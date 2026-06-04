@@ -72,6 +72,9 @@ def test_cli_app_exposes_expected_commands() -> None:
         "summarize",
         "serve",
         "watch",  # T11.2
+        "context",  # T12.4
+        "trace",  # T12.4
+        "status",  # T12.4
     }
     # Typer stores explicit `name=` if given, else None — fall back to the function name.
     actual = {(cmd.name or cmd.callback.__name__) for cmd in app.registered_commands}

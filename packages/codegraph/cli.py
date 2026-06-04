@@ -903,6 +903,175 @@ def serve(
 
 
 @app.command()
+def context(
+    query: str = typer.Argument(..., help="Search query or symbol name."),
+    limit: int = typer.Option(5, "--limit", "-n", help="Max entities to return (1-10)."),
+    db: Path = typer.Option(DEFAULT_DB, "--db", help="DuckDB graph file path."),
+) -> None:
+    """Retrieve context: hybrid search + callers/callees in one shot. [T12.4]"""
+    if not db.exists():
+        console.print(
+            f"[red]No graph database at {db}.[/red] Run [bold]codegraph index <repo>[/bold] first."
+        )
+        raise typer.Exit(code=1)
+
+    limit = max(1, min(limit, 10))
+    query_vector: list[float] | None = None
+
+    with GraphStore(db) as store:
+        if store.count_embedded() > 0:
+            try:
+                from codegraph.embeddings.pipeline import embed_one
+
+                query_vector = embed_one(query).tolist()
+            except Exception:  # noqa: BLE001
+                pass
+        hits = hybrid_search(store.conn, query, query_vector, limit=limit)
+
+        if not hits:
+            console.print(f"[yellow]No results for {query!r}.[/yellow]")
+            return
+
+        table = Table(
+            title=f"Context for [bold]{query}[/bold]  "
+            f"({len(hits)} entit{'y' if len(hits) == 1 else 'ies'})",
+            show_header=True,
+            header_style="bold",
+        )
+        table.add_column("Type", style="cyan", no_wrap=True)
+        table.add_column("Name", style="bold", no_wrap=True)
+        table.add_column("Location", style="dim", no_wrap=True)
+        table.add_column("Via", style="magenta", no_wrap=True)
+        table.add_column("Callers", justify="right")
+        table.add_column("Callees", justify="right")
+        table.add_column("Doc", overflow="fold", max_width=40)
+
+        for hit in hits:
+            eid = hit.entity_id
+            row = store.conn.execute(
+                "SELECT type, name, file, start_line, docstring FROM entities WHERE entity_id = ?",
+                [eid],
+            ).fetchone()
+            if row is None:
+                continue
+            etype, name, file_, start_line, doc = row
+            n_called_by = store.conn.execute(
+                "SELECT COUNT(DISTINCT src_id) FROM edges WHERE dst_id = ? AND type = 'calls'",
+                [eid],
+            ).fetchone()[0]
+            n_depends_on = store.conn.execute(
+                "SELECT COUNT(DISTINCT dst_id) FROM edges "
+                "WHERE src_id = ? AND type IN ('calls', 'imports')",
+                [eid],
+            ).fetchone()[0]
+            loc = f"{file_}:{start_line}"
+            via = "+".join(hit.retrievers)
+            first_doc = (doc or "").split("\n", 1)[0].strip()
+            table.add_row(
+                etype,
+                name,
+                loc,
+                via,
+                str(n_called_by),
+                str(n_depends_on),
+                first_doc,
+            )
+
+    console.print(table)
+    console.print(
+        "[dim]Use [bold]codegraph deps <name>[/bold] or "
+        "[bold]codegraph impact <name>[/bold] to explore further.[/dim]"
+    )
+
+
+@app.command()
+def trace(
+    from_id: str = typer.Argument(..., help="Source entity_id (start of the call chain)."),
+    to_id: str = typer.Argument(..., help="Destination entity_id (end of the call chain)."),
+    max_hops: int = typer.Option(7, "--max-hops", help="BFS hop limit (default 7, max 20)."),
+    db: Path = typer.Option(DEFAULT_DB, "--db", help="DuckDB graph file path."),
+) -> None:
+    """Find the shortest call path between two entity_ids (BFS). [T12.4]"""
+    if not db.exists():
+        console.print(
+            f"[red]No graph database at {db}.[/red] Run [bold]codegraph index <repo>[/bold] first."
+        )
+        raise typer.Exit(code=1)
+
+    from codegraph.analysis.traversal import find_shortest_path
+
+    with GraphStore(db) as store:
+        path = find_shortest_path(store.conn, from_id, to_id, max_hops=max(1, min(max_hops, 20)))
+
+    if path is None:
+        console.print(
+            f"[yellow]No call path from {from_id!r} to {to_id!r} within {max_hops} hop(s).[/yellow]"
+        )
+        raise typer.Exit(code=1)
+
+    hops = len(path) - 1
+    hop_word = "hop" if hops == 1 else "hops"
+    if hops == 0:
+        console.print(f"[green]Same entity[/green] (0 hops):  [bold]{path[0]}[/bold]")
+        return
+
+    console.print(f"[green]Path[/green] ({hops} {hop_word}):")
+    for i, eid in enumerate(path):
+        if i == 0:
+            console.print(f"  [bold]{eid}[/bold]")
+        else:
+            console.print(f"  [cyan]->[/cyan] [bold]{eid}[/bold]")
+
+
+@app.command()
+def status(
+    db: Path = typer.Option(DEFAULT_DB, "--db", help="DuckDB graph file path."),
+    repo: Path = typer.Option(
+        Path("."), "--repo", help="Repo root for staleness check (default: CWD)."
+    ),
+) -> None:
+    """Show index statistics: file, entity, edge counts, and staleness. [T12.4]"""
+    if not db.exists():
+        console.print(
+            f"[red]No graph database at {db}.[/red] Run [bold]codegraph index <repo>[/bold] first."
+        )
+        raise typer.Exit(code=1)
+
+    with GraphStore(db) as store:
+        n_files = store.count_files()
+        n_entities = store.count_entities()
+        n_edges = store.count_edges()
+        n_embedded = store.count_embedded()
+
+    stale_files = 0
+    try:
+        from codegraph.sync.watcher import count_stale_files
+
+        stale_files = count_stale_files(repo, db)
+    except Exception:  # noqa: BLE001 — best-effort
+        pass
+
+    table = Table(show_header=False, box=None, padding=(0, 2))
+    table.add_column("Key", style="bold")
+    table.add_column("Value")
+
+    table.add_row("Database", str(db))
+    table.add_row("Files", str(n_files))
+    table.add_row("Entities", str(n_entities))
+    table.add_row("Edges", str(n_edges))
+    emb_pct = f"{100 * n_embedded // n_entities}%" if n_entities else "n/a"
+    table.add_row("Embedded", f"{n_embedded} / {n_entities}  ({emb_pct})")
+    if stale_files == 0:
+        stale_val = "[green]up to date[/green]"
+    else:
+        noun = "file" if stale_files == 1 else "files"
+        stale_val = f"[yellow]{stale_files} {noun} changed -- re-index recommended[/yellow]"
+    table.add_row("Staleness", stale_val)
+
+    console.print(table)
+
+
+@app.command()
 def watch(
     repo: Path = typer.Argument(
         ...,
