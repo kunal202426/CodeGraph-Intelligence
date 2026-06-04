@@ -170,3 +170,8 @@ CODEGRAPHS.
 Built on [tree-sitter](https://tree-sitter.github.io/), [DuckDB](https://duckdb.org/),
 [sentence-transformers](https://www.sbert.net/), and the
 [Anthropic API](https://docs.anthropic.com/). Progress tracked in [STATUS.md](STATUS.md).
+
+**RESEARCH**
+Its inspired by open source projects that solve the similar problem but on base levels, open source research papers
+also does not define a real problem solving tool that can actually be combined with agentic development tools for 
+product Development
