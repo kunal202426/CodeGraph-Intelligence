@@ -419,6 +419,65 @@ def _get_context(args: dict[str, Any]) -> str:
         store.close()
 
 
+def _list_files(args: dict[str, Any]) -> str:
+    """Return indexed files with language, LOC, and entity count (T12.3)."""
+    language_filter = args.get("language")
+
+    store = _open_store()
+    try:
+        if language_filter:
+            rows = store.conn.execute(
+                "SELECT f.path, f.language, f.loc, COUNT(e.entity_id) "
+                "FROM files f LEFT JOIN entities e ON e.file = f.path "
+                "WHERE f.language = ? "
+                "GROUP BY f.path, f.language, f.loc ORDER BY f.path",
+                [language_filter],
+            ).fetchall()
+        else:
+            rows = store.conn.execute(
+                "SELECT f.path, f.language, f.loc, COUNT(e.entity_id) "
+                "FROM files f LEFT JOIN entities e ON e.file = f.path "
+                "GROUP BY f.path, f.language, f.loc ORDER BY f.path"
+            ).fetchall()
+    finally:
+        store.close()
+
+    files = [{"path": r[0], "language": r[1], "loc": r[2] or 0, "entity_count": r[3]} for r in rows]
+    return json.dumps({"total": len(files), "files": files})
+
+
+def _index_status(_args: dict[str, Any]) -> str:
+    """Return index-level statistics and staleness indicator (T12.3)."""
+    store = _open_store()
+    try:
+        n_files = store.count_files()
+        n_entities = store.count_entities()
+        n_edges = store.count_edges()
+        n_embedded = store.count_embedded()
+    finally:
+        store.close()
+
+    stale_files = 0
+    try:
+        from codegraph.sync.watcher import count_stale_files
+
+        stale_files = count_stale_files(Path("."), get_db_path())
+    except Exception:  # noqa: BLE001 — staleness check is best-effort
+        pass
+
+    return json.dumps(
+        {
+            "db_path": str(get_db_path()),
+            "files": n_files,
+            "entities": n_entities,
+            "edges": n_edges,
+            "embedded": n_embedded,
+            "stale_files": stale_files,
+            "stale": stale_files > 0,
+        }
+    )
+
+
 _HANDLERS = {
     "search_code": _search_code,
     "get_entity_context": _get_entity_context,
@@ -426,6 +485,8 @@ _HANDLERS = {
     "ask_codebase": _ask_codebase,
     "trace_path": _trace_path,
     "get_context": _get_context,
+    "list_files": _list_files,
+    "index_status": _index_status,
 }
 
 
