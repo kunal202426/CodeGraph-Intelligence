@@ -1,9 +1,9 @@
 # CodeGraph (IN DEVELOPMENT)
 
-**A local-first AI memory layer for your codebase.** Index a Python or TypeScript
-repo into a queryable graph, search it by meaning, ask grounded questions over a
-local + Anthropic GraphRAG pipeline, explore it in a browser and expose it all
-to your coding agent over MCP.
+**A local-first AI memory layer for your codebase.** Index a repo (9 languages) into a
+queryable graph, search it by meaning, ask grounded questions over a local + Anthropic
+GraphRAG pipeline, explore it in a browser, and expose it all to your coding agent over
+MCP — so the agent queries the graph instead of re-reading your files every message.
 
 ![CodeGraph demo](docs/demo.gif)
 
@@ -30,9 +30,21 @@ to your coding agent over MCP.
 
 ## Quickstart
 
+**One command** — index your repo, wire up Claude Code, and write the agent guide:
+
 ```bash
 uv sync --extra dev
+cd /path/to/your/repo
+uv run codegraph init            # index + install MCP + CLAUDE.md, then restart Claude
+```
 
+After that, ask Claude *"use codegraph to explain how X works"* — it will query the
+graph instead of re-reading your files. `init --target cursor|codex|gemini` wires a
+different agent.
+
+Prefer the pieces individually:
+
+```bash
 # Index a repo (writes .codegraph/graph.duckdb + embeddings)
 uv run codegraph index /path/to/repo
 
@@ -43,11 +55,14 @@ uv run codegraph ask "how does login work?"      # needs ANTHROPIC_API_KEY
 
 # Browser UI: D3 graph + search + streaming AI chat
 uv run codegraph serve
+
+# Keep the index fresh as you edit
+uv run codegraph watch .
 ```
 
-Full command list: `uv run codegraph --help` — `index`, `search`, `deps`, `impact`,
-`cycles`, `smells`, `deadcode`, `owner`, `layers`, `ask`, `summarize`, `context`,
-`trace`, `status`, `watch`, `serve`, `install`, `uninstall`.
+Full command list: `uv run codegraph --help` — `init`, `index`, `search`, `deps`,
+`impact`, `cycles`, `smells`, `deadcode`, `owner`, `layers`, `ask`, `summarize`,
+`context`, `trace`, `status`, `watch`, `serve`, `install`, `uninstall`.
 
 ## Example queries
 
@@ -105,23 +120,20 @@ flowchart LR
 
 ## Agent installer
 
-`codegraph install` wires the MCP server into your agent in one command — no manual
-JSON editing needed.
+`codegraph init` does everything; `codegraph install` wires just the MCP server into a
+specific agent — no manual JSON editing either way.
 
 ```bash
-# Index your repo first
-uv run codegraph index /path/to/repo
+# One-shot: index + install + write CLAUDE.md (run inside your repo)
+uv run codegraph init
 
-# Install into Claude Code (writes ~/.claude.json)
-uv run codegraph install claude --db /path/to/repo/.codegraph/graph.duckdb
-
-# Install into Cursor (writes ~/.cursor/mcp.json)
-uv run codegraph install cursor --db /path/to/repo/.codegraph/graph.duckdb
+# Or wire up a specific agent without re-indexing
+uv run codegraph install cursor
 
 # Dry-run: print the JSON snippet without writing
-uv run codegraph install claude --db ... --print-config
+uv run codegraph install claude --print-config
 
-# Remove the entry
+# Remove the entry (and the CLAUDE.md block)
 uv run codegraph uninstall claude
 ```
 
@@ -134,33 +146,42 @@ uv run codegraph uninstall claude
 | `codex` | OpenAI Codex CLI | `~/.codex/config.json` |
 | `gemini` | Google Gemini CLI | `~/.gemini/settings.json` |
 
-Use `--location local` to write a project-scoped config instead (`.mcp.json`,
-`.cursor/mcp.json`, etc.). Use `--yes`/`-y` to skip the confirmation prompt in scripts.
+**One install, every project.** By default no `--db` is written: the MCP server discovers
+the nearest `.codegraph/graph.duckdb` from its working directory, so a single global entry
+serves all your repos. Pass `--db <path>` to pin one. Use `--location local` for a
+project-scoped config (`.mcp.json`, `.cursor/mcp.json`), and `--yes`/`-y` in scripts.
 
-Then ask your agent: *"Use codegraph to explain how authentication works in this repo."*
+**Why Claude actually uses it.** Install also drops a managed block into your repo's
+`CLAUDE.md` (idempotent `BEGIN/END` markers, never clobbers the rest) that tells the agent
+to call `index_status` at session start and `get_context` *before* reading files. Without
+this, an agent ignores the tools and keeps re-reading your source — so it's on by default
+(`--no-guide` to skip).
 
 ## MCP tools
 
-CodeGraph exposes 8 tools over the [MCP](https://modelcontextprotocol.io) stdio protocol.
+CodeGraph exposes 9 tools over the [MCP](https://modelcontextprotocol.io) stdio protocol.
+Every description is written to tell the agent *when to prefer it over reading files*.
 
 | Tool | What it does |
 |---|---|
-| `get_context` | **Primary tool.** One call = hybrid search + full source + callers/callees. Replaces 3-4 round-trips. |
+| `get_context` | **Start here.** Hybrid search + signatures + callers/callees, token-lean by default (`detail="full"` for bodies). Replaces 3-4 round-trips at ~10x fewer tokens. |
 | `search_code` | Hybrid literal + semantic search -> entities with `file:line` |
 | `get_entity_context` | Full source + neighbours (`depends_on`, `called_by`) for an `entity_id` |
 | `impact_analysis` | Reverse-call blast radius -- what breaks if an entity changes |
-| `trace_path` | Shortest call chain between two `entity_id`s (BFS, up to 7 hops) |
+| `trace_path` | Shortest call chain between two `entity_id`s (BFS), with readable labels |
 | `list_files` | All indexed files with language, LOC, and entity count; filterable by language |
 | `index_status` | File / entity / edge / embedding counts + staleness indicator |
+| `reindex` | Refresh only the files changed since the last index — no terminal needed |
 | `ask_codebase` | Natural-language question answered via GraphRAG with citations |
 
 `ask_codebase` requires embeddings and `ANTHROPIC_API_KEY`; all others work on any index.
-Set `CODEGRAPH_DB` to override the default DB path without passing `--db`.
+`CODEGRAPH_DB` overrides the discovered/default DB path.
 
 To run the MCP server manually (e.g. for a custom agent config):
 
 ```bash
-python -m codegraph.server.mcp_server --db /path/to/repo/.codegraph/graph.duckdb
+# Discovers the nearest .codegraph/graph.duckdb from the working directory
+python -m codegraph.server.mcp_server
 ```
 
 ## Stack
@@ -198,12 +219,17 @@ for entities whose input changed. `ask` latency depends on the Anthropic API.
 
 ## Roadmap
 
-Phases 10-13 ("best of both") are complete:
+Phases 10-13 ("best of both") and 14-18 ("actually usable") are complete:
 
 - **Phase 10** — 9 languages: Go, Rust, Java, Ruby, PHP, C, C++ added to Python + TS/JS
 - **Phase 11** — `codegraph watch`: debounced file watcher re-indexes in ~300 ms; staleness guard on `serve`/MCP startup
-- **Phase 12** — 8 MCP tools: `get_context` (3-in-1), `trace_path` (BFS), `list_files`, `index_status` + CLI mirrors (`context`, `trace`, `status`)
-- **Phase 13** — Agent installer: `codegraph install`/`uninstall` for Claude Code, Cursor, Codex, Gemini
+- **Phase 12** — richer MCP tools + CLI mirrors (`context`, `trace`, `status`)
+- **Phase 13** — agent installer for Claude Code, Cursor, Codex, Gemini
+- **Phase 14** — *adoption gate*: directive tool descriptions + auto-written `CLAUDE.md` so agents actually use the tools
+- **Phase 15** — *value gate*: token-lean `get_context` (summaries + token budget), readable labels — calling it is genuinely cheaper than reading files
+- **Phase 16** — multi-project: walk-up DB discovery so one install serves every repo
+- **Phase 17** — self-healing: a `reindex` MCP tool the agent can call to refresh a stale index from the chat
+- **Phase 18** — first-run legibility (model-download notice), `codegraph init` one-shot, PyPI metadata
 
 Deliberately **deferred**: deep TypeScript type resolution via `tsc`, framework-aware
 resolvers (Express/NestJS/Django/Rails), multi-client shared watcher daemon (Unix
