@@ -47,6 +47,7 @@ def test_all_scaffolded_modules_importable() -> None:
         "codegraph.analysis",
         "codegraph.analysis.cycles",
         "codegraph.analysis.smells",
+        "codegraph.analysis.traversal",
         "codegraph.sync",
         "codegraph.sync.watcher",
     ]
