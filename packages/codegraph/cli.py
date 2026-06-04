@@ -1155,9 +1155,13 @@ def install(
     print_config: bool = typer.Option(
         False, "--print-config", help="Print config JSON without writing (dry run)."
     ),
+    no_guide: bool = typer.Option(
+        False, "--no-guide", help="Skip writing the CLAUDE.md agent guide."
+    ),
 ) -> None:
     """Install CodeGraph as an MCP server in a supported agent. [T13.3]"""
     from codegraph.installer import get_target  # also triggers auto-registration
+    from codegraph.installer.guide import write_agent_guide
 
     if location not in ("global", "local"):
         console.print(f"[red]--location must be 'global' or 'local', got {location!r}.[/red]")
@@ -1198,6 +1202,13 @@ def install(
     )
     console.print(f"[dim]Config: {config_path}[/dim]")
 
+    if not no_guide:
+        guide_path = write_agent_guide(Path("."))
+        console.print(
+            f"[dim]Agent guide written to {guide_path} "
+            "(tells the agent to prefer CodeGraph over reading files).[/dim]"
+        )
+
 
 @app.command()
 def uninstall(
@@ -1206,9 +1217,13 @@ def uninstall(
         "global", "--location", help="Config scope: global (user) or local (project)."
     ),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt."),
+    no_guide: bool = typer.Option(
+        False, "--no-guide", help="Leave the CLAUDE.md agent guide in place."
+    ),
 ) -> None:
     """Remove CodeGraph MCP entry from a supported agent config. [T13.3]"""
     from codegraph.installer import get_target  # also triggers auto-registration
+    from codegraph.installer.guide import remove_agent_guide
 
     if location not in ("global", "local"):
         console.print(f"[red]--location must be 'global' or 'local', got {location!r}.[/red]")
@@ -1237,6 +1252,9 @@ def uninstall(
 
     t.uninstall(global_=global_)
     console.print(f"[green]Uninstalled.[/green] CodeGraph entry removed from {config_path}.")
+
+    if not no_guide and remove_agent_guide(Path(".")):
+        console.print("[dim]Removed the CodeGraph block from CLAUDE.md.[/dim]")
 
 
 if __name__ == "__main__":

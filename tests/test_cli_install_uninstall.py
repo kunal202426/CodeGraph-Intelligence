@@ -33,6 +33,9 @@ def patched_claude(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(t, "global_config_path", lambda: cfg)
     local_cfg = tmp_path / ".mcp.json"
     monkeypatch.setattr(t, "local_config_path", lambda: local_cfg)
+    # The agent guide is written to CWD; chdir into tmp_path so it never lands in
+    # the repo root during tests.
+    monkeypatch.chdir(tmp_path)
     orig = _registry._REGISTRY.copy()
     _registry._REGISTRY["claude"] = t
     yield t, cfg, local_cfg
@@ -193,3 +196,60 @@ def test_uninstall_prints_uninstalled(tmp_path: Path, patched_claude) -> None:
 def test_uninstall_unknown_target_exits_1() -> None:
     result = runner.invoke(app, ["uninstall", "unknown_agent_xyz", "--yes"])
     assert result.exit_code == 1
+
+
+# ---------------------------------------------------------------------------
+# T14.3 — agent guide (CLAUDE.md) wiring
+# ---------------------------------------------------------------------------
+
+
+def test_install_writes_agent_guide(tmp_path: Path, patched_claude) -> None:
+    db = tmp_path / "g.duckdb"
+    result = runner.invoke(app, ["install", "claude", "--db", str(db), "--yes"])
+    assert result.exit_code == 0
+    guide = tmp_path / "CLAUDE.md"
+    assert guide.exists()
+    text = guide.read_text(encoding="utf-8")
+    assert "<!-- BEGIN CODEGRAPH -->" in text
+    assert "get_context" in text
+
+
+def test_install_no_guide_skips_claude_md(tmp_path: Path, patched_claude) -> None:
+    db = tmp_path / "g.duckdb"
+    result = runner.invoke(app, ["install", "claude", "--db", str(db), "--yes", "--no-guide"])
+    assert result.exit_code == 0
+    assert not (tmp_path / "CLAUDE.md").exists()
+
+
+def test_install_guide_idempotent(tmp_path: Path, patched_claude) -> None:
+    db = tmp_path / "g.duckdb"
+    runner.invoke(app, ["install", "claude", "--db", str(db), "--yes"])
+    runner.invoke(app, ["install", "claude", "--db", str(db), "--yes"])
+    text = (tmp_path / "CLAUDE.md").read_text(encoding="utf-8")
+    assert text.count("<!-- BEGIN CODEGRAPH -->") == 1
+
+
+def test_install_guide_preserves_existing_claude_md(tmp_path: Path, patched_claude) -> None:
+    (tmp_path / "CLAUDE.md").write_text("# My rules\n\nKeep me.\n", encoding="utf-8")
+    db = tmp_path / "g.duckdb"
+    runner.invoke(app, ["install", "claude", "--db", str(db), "--yes"])
+    text = (tmp_path / "CLAUDE.md").read_text(encoding="utf-8")
+    assert "# My rules" in text
+    assert "Keep me." in text
+    assert "<!-- BEGIN CODEGRAPH -->" in text
+
+
+def test_uninstall_removes_agent_guide(tmp_path: Path, patched_claude) -> None:
+    db = tmp_path / "g.duckdb"
+    runner.invoke(app, ["install", "claude", "--db", str(db), "--yes"])
+    assert (tmp_path / "CLAUDE.md").exists()
+    runner.invoke(app, ["uninstall", "claude", "--yes"])
+    # Only the block was present, so the file is removed entirely.
+    assert not (tmp_path / "CLAUDE.md").exists()
+
+
+def test_uninstall_no_guide_leaves_claude_md(tmp_path: Path, patched_claude) -> None:
+    db = tmp_path / "g.duckdb"
+    runner.invoke(app, ["install", "claude", "--db", str(db), "--yes"])
+    runner.invoke(app, ["uninstall", "claude", "--yes", "--no-guide"])
+    assert (tmp_path / "CLAUDE.md").exists()
