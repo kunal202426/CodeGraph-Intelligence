@@ -3,9 +3,9 @@
 ## Current
 
 - **Status:** ACTIVE — Phases 10-13 "best of both" roadmap in progress.
-- **Phase:** 13 — Multi-agent installer [IN PROGRESS 3/4]
-- **Next task:** T13.4 — README install section
-- **Last session:** 2026-06-04
+- **Phase:** 13 — Multi-agent installer [DONE 4/4]
+- **Next task:** (all planned phases complete — see Future section)
+- **Last session:** 2026-06-05
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
 ## Phase progress
@@ -127,7 +127,9 @@
 - [x] T13.1 — Installer core + target registry: `codegraph/installer/` subpackage with `Target` ABC, `McpEntry` dataclass, JSON read-modify-write helpers (`_write_entry`/`_remove_entry`/`is_configured`), `_make_entry(db)` default entry builder (uses `sys.executable`), and registry (`register_target`/`get_target`/`list_targets`). Smoke importability list updated. 25 tests. 648 tests passing.
 - [x] T13.2 — Claude Code, Cursor, Codex, Gemini targets: `installer/targets/` subpackage with 4 classes auto-registered on `import codegraph.installer`. ClaudeCode: `~/.claude.json` / `.mcp.json`. Cursor: `~/.cursor/mcp.json` / `.cursor/mcp.json`. Codex: `~/.codex/config.json`. Gemini: `~/.gemini/settings.json`. `is_available()` checks `shutil.which` + dir heuristic. Smoke importability list updated. 42 tests. 690 tests passing.
 - [x] T13.3 — `codegraph install`/`uninstall` CLI: `install <target> [--db] [--location global|local] [--yes/-y] [--print-config]`; `uninstall <target> [--location] [--yes/-y]`. `--print-config` dry-run uses `_emit()` to avoid Rich line-wrapping JSON. Registry patched via fixture for tests (never touches real agent configs). Smoke expected-set updated. 15 tests. 705 tests passing.
-- [ ] T13.4 — README install section
+- [x] T13.4 — README install section: "Agent installer" section (4-target table, install/uninstall examples, --location/--yes/--print-config); MCP tools section expanded to 8 tools with get_context as primary; Stack table updated (9 languages, watchdog row); Roadmap updated to reflect Phases 10-13 completion.
+
+**Phase 13 result: `codegraph install <target>` wires the MCP server into Claude Code, Cursor, Codex, or Gemini in one command. Idempotent read-modify-write JSON; never clobbers other config entries. 705 tests passing.**
 
 - [x] T11.1 — `sync/watcher.py` module: `watchdog>=3.0` added; `packages/codegraph/sync/` subpackage with `RepoWatcher`, `index_one_file`, `delete_one_file`, `_DebounceHandler`, `ChangeEvent`. Debounce 300 ms default. Respects ALWAYS_EXCLUDE + .gitignore. Language-agnostic edge cleanup on re-index. 21 new tests. 566 tests passing.
 - [x] T11.2 — `codegraph watch <repo>` CLI command: long-running, ASCII status lines ([green]modified[/green] / [red]deleted[/red] with entity count + elapsed ms), Ctrl-C clean shutdown (stop + join with timeout). --no-embed, --debounce, --db flags. Note if index missing. Added "watch" to smoke expected set. 11 new tests. 577 tests passing.
