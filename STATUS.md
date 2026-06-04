@@ -3,8 +3,8 @@
 ## Current
 
 - **Status:** ACTIVE — Phases 10-13 "best of both" roadmap in progress.
-- **Phase:** 12 — Richer MCP tools [DONE 4/4]
-- **Next task:** T13.1 — Installer core + target registry
+- **Phase:** 13 — Multi-agent installer [IN PROGRESS 1/4]
+- **Next task:** T13.2 — Claude Code, Cursor, Codex, Gemini targets
 - **Last session:** 2026-06-04
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -122,6 +122,13 @@
 - [x] T12.4 — Mirror as CLI subcommands (`context`, `trace`, `status`): `context` (hybrid search + caller/callee counts table), `trace` (BFS shortest call path with arrow chain), `status` (files/entities/edges/embedded + staleness row). Smoke expected-set updated. 13 new tests. 623 tests passing.
 
 **Phase 12 result: MCP surface grew from 4 to 8 tools; 3 new CLI subcommands mirror the most useful tools for standalone use without an MCP client. 623 tests passing.**
+
+### Phase 13 — Multi-agent installer [IN PROGRESS 1/4]
+- [x] T13.1 — Installer core + target registry: `codegraph/installer/` subpackage with `Target` ABC, `McpEntry` dataclass, JSON read-modify-write helpers (`_write_entry`/`_remove_entry`/`is_configured`), `_make_entry(db)` default entry builder (uses `sys.executable`), and registry (`register_target`/`get_target`/`list_targets`). Smoke importability list updated. 25 tests. 648 tests passing.
+- [ ] T13.2 — Claude Code, Cursor, Codex, Gemini targets
+- [ ] T13.3 — `codegraph install`/`uninstall` CLI
+- [ ] T13.4 — README install section
+
 - [x] T11.1 — `sync/watcher.py` module: `watchdog>=3.0` added; `packages/codegraph/sync/` subpackage with `RepoWatcher`, `index_one_file`, `delete_one_file`, `_DebounceHandler`, `ChangeEvent`. Debounce 300 ms default. Respects ALWAYS_EXCLUDE + .gitignore. Language-agnostic edge cleanup on re-index. 21 new tests. 566 tests passing.
 - [x] T11.2 — `codegraph watch <repo>` CLI command: long-running, ASCII status lines ([green]modified[/green] / [red]deleted[/red] with entity count + elapsed ms), Ctrl-C clean shutdown (stop + join with timeout). --no-embed, --debounce, --db flags. Note if index missing. Added "watch" to smoke expected set. 11 new tests. 577 tests passing.
 - [x] T11.3 — Staleness guard: `count_stale_files(repo, db)` in sync/watcher.py compares file mtimes vs max(indexed_at). Wired into `codegraph serve` (yellow warning) and MCP `main()` (stderr). CWD used as repo root (best-effort heuristic). 9 new tests. 586 tests passing.
