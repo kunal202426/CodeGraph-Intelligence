@@ -1135,5 +1135,109 @@ def watch(
         console.print("Watcher stopped.")
 
 
+def _list_available_targets() -> None:
+    """Print available agent targets to the console."""
+    from codegraph.installer import list_targets  # also triggers auto-registration
+
+    targets = list_targets()
+    if targets:
+        console.print("Available targets: " + ", ".join(f"[bold]{t.name}[/bold]" for t in targets))
+
+
+@app.command()
+def install(
+    target: str = typer.Argument(..., help="Agent target: claude, cursor, codex, gemini."),
+    db: Path = typer.Option(DEFAULT_DB, "--db", help="DuckDB graph file path."),
+    location: str = typer.Option(
+        "global", "--location", help="Config scope: global (user) or local (project)."
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt."),
+    print_config: bool = typer.Option(
+        False, "--print-config", help="Print config JSON without writing (dry run)."
+    ),
+) -> None:
+    """Install CodeGraph as an MCP server in a supported agent. [T13.3]"""
+    from codegraph.installer import get_target  # also triggers auto-registration
+
+    if location not in ("global", "local"):
+        console.print(f"[red]--location must be 'global' or 'local', got {location!r}.[/red]")
+        raise typer.Exit(code=1)
+
+    try:
+        t = get_target(target)
+    except KeyError as exc:
+        console.print(f"[red]{exc}[/red]")
+        _list_available_targets()
+        raise typer.Exit(code=1) from exc
+
+    global_ = location == "global"
+    config_path = t.global_config_path() if global_ else t.local_config_path()
+
+    if print_config:
+        console.print(t.config_snippet(db))
+        return
+
+    already = t.is_configured(global_=global_)
+    action = "Update" if already else "Install"
+
+    console.print(f"\n{action} CodeGraph MCP server -> [bold]{t.display_name}[/bold]")
+    console.print(f"  Config:  [dim]{config_path}[/dim]")
+    entry = t.build_entry(db).to_dict()
+    console.print(f"  Command: [dim]{entry['command']} {' '.join(entry['args'])}[/dim]")
+    if already:
+        console.print("  [yellow]Note: existing entry will be replaced.[/yellow]")
+    console.print()
+
+    if not yes and not typer.confirm("Proceed?", default=False):
+        console.print("Aborted.")
+        raise typer.Exit()
+
+    t.install(db, global_=global_)
+    console.print(
+        f"[green]Installed.[/green] {t.display_name} can now use CodeGraph as an MCP tool."
+    )
+    console.print(f"[dim]Config: {config_path}[/dim]")
+
+
+@app.command()
+def uninstall(
+    target: str = typer.Argument(..., help="Agent target: claude, cursor, codex, gemini."),
+    location: str = typer.Option(
+        "global", "--location", help="Config scope: global (user) or local (project)."
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt."),
+) -> None:
+    """Remove CodeGraph MCP entry from a supported agent config. [T13.3]"""
+    from codegraph.installer import get_target  # also triggers auto-registration
+
+    if location not in ("global", "local"):
+        console.print(f"[red]--location must be 'global' or 'local', got {location!r}.[/red]")
+        raise typer.Exit(code=1)
+
+    try:
+        t = get_target(target)
+    except KeyError as exc:
+        console.print(f"[red]{exc}[/red]")
+        _list_available_targets()
+        raise typer.Exit(code=1) from exc
+
+    global_ = location == "global"
+    config_path = t.global_config_path() if global_ else t.local_config_path()
+
+    if not t.is_configured(global_=global_):
+        console.print(
+            f"[yellow]CodeGraph is not configured in {t.display_name} "
+            f"({config_path}). Nothing to remove.[/yellow]"
+        )
+        return
+
+    if not yes and not typer.confirm(f"Remove CodeGraph from {t.display_name}?", default=False):
+        console.print("Aborted.")
+        raise typer.Exit()
+
+    t.uninstall(global_=global_)
+    console.print(f"[green]Uninstalled.[/green] CodeGraph entry removed from {config_path}.")
+
+
 if __name__ == "__main__":
     app()
