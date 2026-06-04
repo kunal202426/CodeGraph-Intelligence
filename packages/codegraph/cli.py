@@ -1174,7 +1174,7 @@ def install(
     config_path = t.global_config_path() if global_ else t.local_config_path()
 
     if print_config:
-        console.print(t.config_snippet(db))
+        _emit(t.config_snippet(db) + "\n")
         return
 
     already = t.is_configured(global_=global_)
