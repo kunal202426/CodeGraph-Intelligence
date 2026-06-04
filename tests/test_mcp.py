@@ -18,7 +18,14 @@ from codegraph.server.mcp_server import (
 )
 from typer.testing import CliRunner
 
-_EXPECTED = {"search_code", "get_entity_context", "impact_analysis", "ask_codebase", "get_context"}
+_EXPECTED = {
+    "search_code",
+    "get_entity_context",
+    "impact_analysis",
+    "ask_codebase",
+    "get_context",
+    "trace_path",
+}
 SAMPLE_REPO = Path("tests/fixtures/sample_repo_py")
 
 
@@ -48,6 +55,7 @@ def test_each_tool_has_object_schema_with_required() -> None:
     assert by_name["impact_analysis"].inputSchema["required"] == ["entity_id"]
     assert by_name["ask_codebase"].inputSchema["required"] == ["query"]
     assert by_name["get_context"].inputSchema["required"] == ["query"]
+    assert by_name["trace_path"].inputSchema["required"] == ["from_id", "to_id"]
     for tool in by_name.values():
         assert tool.inputSchema["type"] == "object"
         assert tool.description  # non-empty description

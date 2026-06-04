@@ -102,6 +102,34 @@ def tool_definitions() -> list[Tool]:
             },
         ),
         Tool(
+            name="trace_path",
+            description=(
+                "Find the shortest call chain between two symbols via BFS over "
+                "directed call edges (max 7 hops by default). Returns the sequence "
+                "of entity_ids from source to destination. Useful for understanding "
+                "how one function transitively reaches another."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "from_id": {
+                        "type": "string",
+                        "description": "Source entity_id (start of the call chain).",
+                    },
+                    "to_id": {
+                        "type": "string",
+                        "description": "Destination entity_id (end of the call chain).",
+                    },
+                    "max_hops": {
+                        "type": "integer",
+                        "default": 7,
+                        "description": "Maximum call chain length to search.",
+                    },
+                },
+                "required": ["from_id", "to_id"],
+            },
+        ),
+        Tool(
             name="get_context",
             description=(
                 "Primary context tool — one call returns hybrid search results packed "
