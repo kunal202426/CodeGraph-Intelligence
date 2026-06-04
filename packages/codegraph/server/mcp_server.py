@@ -101,6 +101,32 @@ def tool_definitions() -> list[Tool]:
                 "required": ["query"],
             },
         ),
+        Tool(
+            name="get_context",
+            description=(
+                "Primary context tool — one call returns hybrid search results packed "
+                "with full source, signatures, docstrings, and each entity's immediate "
+                "callers and callees. Replaces 3-4 round-trips (search + entity + "
+                "impact) with a single request. Use this first when exploring an "
+                "unfamiliar codebase or when you need to understand how a symbol fits "
+                "into the call graph."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Natural-language question or symbol name.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "default": 5,
+                        "description": "Max entities to return (1-10, default 5).",
+                    },
+                },
+                "required": ["query"],
+            },
+        ),
     ]
 
 
@@ -246,11 +272,64 @@ def _ask_codebase(args: dict[str, Any]) -> str:
     return json.dumps({"answer": answer})
 
 
+def _get_context(args: dict[str, Any]) -> str:
+    """Hybrid search + full source + callers/callees in one response (T12.1)."""
+    query = str(args["query"])
+    limit = max(1, min(int(args.get("limit", 5)), 10))
+
+    store = _open_store()
+    try:
+        vector = _maybe_embed(query) if store.count_embedded() > 0 else None
+        hits = hybrid_search(store.conn, query, vector, limit=limit)
+
+        if not hits:
+            return json.dumps({"query": query, "total": 0, "entities": []})
+
+        entities = []
+        col_select = ", ".join(_ENTITY_COLUMNS)
+        for hit in hits:
+            eid = hit.entity_id
+            row = store.conn.execute(
+                f"SELECT {col_select} FROM entities WHERE entity_id = ?",
+                [eid],
+            ).fetchone()
+            if row is None:
+                continue
+            entity: dict[str, Any] = dict(zip(_ENTITY_COLUMNS, row, strict=True))
+
+            # Outbound: imports + calls (what this entity depends on)
+            entity["depends_on"] = [
+                r[0]
+                for r in store.conn.execute(
+                    "SELECT DISTINCT dst_id FROM edges "
+                    "WHERE src_id = ? AND type IN ('calls', 'imports')",
+                    [eid],
+                ).fetchall()
+            ]
+
+            # Inbound: direct callers of this entity
+            entity["called_by"] = [
+                r[0]
+                for r in store.conn.execute(
+                    "SELECT DISTINCT src_id FROM edges WHERE dst_id = ? AND type = 'calls'",
+                    [eid],
+                ).fetchall()
+            ]
+
+            entity["via"] = list(hit.retrievers)
+            entities.append(entity)
+
+        return json.dumps({"query": query, "total": len(entities), "entities": entities})
+    finally:
+        store.close()
+
+
 _HANDLERS = {
     "search_code": _search_code,
     "get_entity_context": _get_entity_context,
     "impact_analysis": _impact_analysis,
     "ask_codebase": _ask_codebase,
+    "get_context": _get_context,
 }
 
 

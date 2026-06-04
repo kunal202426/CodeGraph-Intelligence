@@ -18,7 +18,7 @@ from codegraph.server.mcp_server import (
 )
 from typer.testing import CliRunner
 
-_EXPECTED = {"search_code", "get_entity_context", "impact_analysis", "ask_codebase"}
+_EXPECTED = {"search_code", "get_entity_context", "impact_analysis", "ask_codebase", "get_context"}
 SAMPLE_REPO = Path("tests/fixtures/sample_repo_py")
 
 
@@ -36,7 +36,7 @@ def indexed_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return db
 
 
-def test_four_tools_declared() -> None:
+def test_five_tools_declared() -> None:
     tools = tool_definitions()
     assert {t.name for t in tools} == _EXPECTED
 
@@ -47,6 +47,7 @@ def test_each_tool_has_object_schema_with_required() -> None:
     assert by_name["get_entity_context"].inputSchema["required"] == ["entity_id"]
     assert by_name["impact_analysis"].inputSchema["required"] == ["entity_id"]
     assert by_name["ask_codebase"].inputSchema["required"] == ["query"]
+    assert by_name["get_context"].inputSchema["required"] == ["query"]
     for tool in by_name.values():
         assert tool.inputSchema["type"] == "object"
         assert tool.description  # non-empty description
@@ -132,3 +133,54 @@ def test_missing_db_returns_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(mcp_server, "_db_path", tmp_path / "nope.duckdb")
     data = _call("search_code", {"query": "x"})
     assert "error" in data
+
+
+# ---------- T12.1: get_context ----------
+
+
+def test_get_context_tool_definition() -> None:
+    by_name = {t.name: t for t in tool_definitions()}
+    tool = by_name["get_context"]
+    assert tool.inputSchema["required"] == ["query"]
+    props = tool.inputSchema["properties"]
+    assert "query" in props and "limit" in props
+    assert "default" in props["limit"]
+
+
+def test_get_context_returns_packed_result(indexed_db: Path) -> None:
+    data = _call("get_context", {"query": "authenticate"})
+    assert data["total"] >= 1
+    assert len(data["entities"]) >= 1
+
+    top = data["entities"][0]
+    # Full entity fields present
+    assert "entity_id" in top
+    assert "raw_source" in top
+    assert "signature" in top or "docstring" in top
+    # Graph neighbourhood present
+    assert "depends_on" in top
+    assert "called_by" in top
+    assert isinstance(top["depends_on"], list)
+    assert isinstance(top["called_by"], list)
+    # Retriever tags present
+    assert "via" in top and isinstance(top["via"], list)
+
+
+def test_get_context_authenticate_has_callers(indexed_db: Path) -> None:
+    """The authenticate function is called by other entities in the fixture."""
+    data = _call("get_context", {"query": "authenticate"})
+    # Find the authenticate entity specifically
+    auth_ents = [e for e in data["entities"] if e.get("name") == "authenticate"]
+    assert auth_ents, "authenticate should appear in get_context results"
+    assert auth_ents[0]["called_by"], "authenticate must have at least one caller"
+
+
+def test_get_context_no_match_returns_empty(indexed_db: Path) -> None:
+    data = _call("get_context", {"query": "zzz_does_not_exist_9999"})
+    assert data["total"] == 0
+    assert data["entities"] == []
+
+
+def test_get_context_limit_respected(indexed_db: Path) -> None:
+    data = _call("get_context", {"query": "def", "limit": 2})
+    assert len(data["entities"]) <= 2

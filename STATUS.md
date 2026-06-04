@@ -3,8 +3,8 @@
 ## Current
 
 - **Status:** ACTIVE — Phases 10-13 "best of both" roadmap in progress.
-- **Phase:** 11 — Freshness / Watch daemon [DONE 3/3]
-- **Next task:** T12.1 — `get_context` MCP tool (Phase 12 start)
+- **Phase:** 12 — Richer MCP tools [IN PROGRESS 1/4]
+- **Next task:** T12.2 — `trace_path` MCP tool
 - **Last session:** 2026-06-03
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -113,6 +113,13 @@
 **Phase 10 result: 3 → 9 languages (Go, Rust, Java, Ruby, PHP, C, C++ added). All emit into shared embedding/search/ask pipeline automatically. resolver extended for all 7 new languages. 545 tests passing.**
 
 ### Phase 11 — Freshness / Watch daemon [DONE 3/3]
+**Phase 11 result: Full watch daemon stack. sync/watcher.py with RepoWatcher + index_one_file + delete_one_file (T11.1); codegraph watch CLI (T11.2); staleness guard on serve/MCP startup (T11.3). 41 new tests. 586 tests passing.**
+
+### Phase 12 — Richer MCP tools [IN PROGRESS 1/4]
+- [x] T12.1 — `get_context` MCP tool (tool #5): one call = hybrid search + full source + callers/callees for each result. Replaces 3-4 round-trips. `_get_context` handler + `_ENTITY_COLUMNS` fields + `depends_on`/`called_by`/`via` per entity. Limit clamped 1-10. 5 new tests (updated test_mcp.py: `_EXPECTED` set, renamed `test_five_tools_declared`, added `get_context` schema check + 4 behavior tests). 591 tests passing.
+- [ ] T12.2 — `trace_path` MCP tool (BFS shortest call path between two symbols)
+- [ ] T12.3 — `list_files` + `index_status` tools
+- [ ] T12.4 — Mirror as CLI subcommands (`context`, `trace`, `status`)
 - [x] T11.1 — `sync/watcher.py` module: `watchdog>=3.0` added; `packages/codegraph/sync/` subpackage with `RepoWatcher`, `index_one_file`, `delete_one_file`, `_DebounceHandler`, `ChangeEvent`. Debounce 300 ms default. Respects ALWAYS_EXCLUDE + .gitignore. Language-agnostic edge cleanup on re-index. 21 new tests. 566 tests passing.
 - [x] T11.2 — `codegraph watch <repo>` CLI command: long-running, ASCII status lines ([green]modified[/green] / [red]deleted[/red] with entity count + elapsed ms), Ctrl-C clean shutdown (stop + join with timeout). --no-embed, --debounce, --db flags. Note if index missing. Added "watch" to smoke expected set. 11 new tests. 577 tests passing.
 - [x] T11.3 — Staleness guard: `count_stale_files(repo, db)` in sync/watcher.py compares file mtimes vs max(indexed_at). Wired into `codegraph serve` (yellow warning) and MCP `main()` (stderr). CWD used as repo root (best-effort heuristic). 9 new tests. 586 tests passing.
