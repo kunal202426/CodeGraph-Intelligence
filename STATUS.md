@@ -3,8 +3,8 @@
 ## Current
 
 - **Status:** ACTIVE — Phases 10-13 "best of both" roadmap in progress.
-- **Phase:** 11 — Freshness / Watch daemon [IN PROGRESS 2/3]
-- **Next task:** T11.3 — Staleness guard on serve/MCP startup
+- **Phase:** 11 — Freshness / Watch daemon [DONE 3/3]
+- **Next task:** T12.1 — `get_context` MCP tool (Phase 12 start)
 - **Last session:** 2026-06-03
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -112,10 +112,10 @@
 
 **Phase 10 result: 3 → 9 languages (Go, Rust, Java, Ruby, PHP, C, C++ added). All emit into shared embedding/search/ask pipeline automatically. resolver extended for all 7 new languages. 545 tests passing.**
 
-### Phase 11 — Freshness / Watch daemon [IN PROGRESS 1/3]
+### Phase 11 — Freshness / Watch daemon [DONE 3/3]
 - [x] T11.1 — `sync/watcher.py` module: `watchdog>=3.0` added; `packages/codegraph/sync/` subpackage with `RepoWatcher`, `index_one_file`, `delete_one_file`, `_DebounceHandler`, `ChangeEvent`. Debounce 300 ms default. Respects ALWAYS_EXCLUDE + .gitignore. Language-agnostic edge cleanup on re-index. 21 new tests. 566 tests passing.
 - [x] T11.2 — `codegraph watch <repo>` CLI command: long-running, ASCII status lines ([green]modified[/green] / [red]deleted[/red] with entity count + elapsed ms), Ctrl-C clean shutdown (stop + join with timeout). --no-embed, --debounce, --db flags. Note if index missing. Added "watch" to smoke expected set. 11 new tests. 577 tests passing.
-- [ ] T11.3 — Staleness guard on `serve`/MCP startup
+- [x] T11.3 — Staleness guard: `count_stale_files(repo, db)` in sync/watcher.py compares file mtimes vs max(indexed_at). Wired into `codegraph serve` (yellow warning) and MCP `main()` (stderr). CWD used as repo root (best-effort heuristic). 9 new tests. 586 tests passing.
 
 ## Blockers / Notes
 

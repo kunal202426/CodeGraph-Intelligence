@@ -39,7 +39,7 @@ import pathspec
 from codegraph.graph.resolver import resolve_symbols
 from codegraph.graph.store import GraphStore
 from codegraph.uir import hash_source
-from codegraph.walker import ALWAYS_EXCLUDE, detect_language
+from codegraph.walker import ALWAYS_EXCLUDE, detect_language, walk
 
 # --------------------------------------------------------------------------- #
 # Public data-transfer object
@@ -450,3 +450,61 @@ class RepoWatcher:
     def is_alive(self) -> bool:
         """True while the observer thread is running."""
         return self._observer is not None and self._observer.is_alive()
+
+
+# --------------------------------------------------------------------------- #
+# Staleness check (T11.3)
+# --------------------------------------------------------------------------- #
+
+
+def count_stale_files(repo: Path, db: Path) -> int:
+    """Count source files in repo modified more recently than the last index.
+
+    Compares each file's mtime against ``max(indexed_at)`` in the files table.
+    Returns 0 when the DB is missing, has no indexed files, or cannot be opened.
+    The repo path is used as-is so callers can pass ``Path(".")`` to check
+    relative to CWD (the common usage from ``serve`` / MCP startup).
+    """
+    if not db.exists():
+        return 0
+
+    try:
+        store = GraphStore(db)
+        try:
+            store.init_schema()
+            row = store.conn.execute("SELECT max(indexed_at) FROM files").fetchone()
+        finally:
+            store.close()
+    except Exception:  # noqa: BLE001 — DB locked, corrupt, etc.
+        return 0
+
+    if row is None or row[0] is None:
+        return 0
+
+    last_indexed = row[0]
+    # DuckDB returns TIMESTAMP as datetime.datetime; guard against string fallback.
+    if isinstance(last_indexed, str):
+        from datetime import datetime as _dt
+
+        try:
+            last_indexed = _dt.fromisoformat(last_indexed)
+        except ValueError:
+            return 0
+
+    try:
+        last_indexed_ts = last_indexed.timestamp()
+    except Exception:  # noqa: BLE001
+        return 0
+
+    stale = 0
+    try:
+        for path, _lang in walk(repo):
+            try:
+                if path.stat().st_mtime > last_indexed_ts:
+                    stale += 1
+            except OSError:
+                continue
+    except Exception:  # noqa: BLE001 — repo missing, permission error, etc.
+        return 0
+
+    return stale

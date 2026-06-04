@@ -283,6 +283,24 @@ def main() -> None:
     if args.db is not None:
         _db_path = args.db
 
+    # Staleness check (T11.3): warn to stderr if source files changed since last index.
+    # stdout is reserved for MCP framing; all diagnostics must go to stderr.
+    try:
+        from codegraph.sync.watcher import count_stale_files
+
+        stale = count_stale_files(Path("."), get_db_path())
+        if stale > 0:
+            import sys
+
+            noun = "file" if stale == 1 else "files"
+            print(
+                f"CodeGraph: {stale} {noun} changed since last index. "
+                "Re-run codegraph index to update.",
+                file=sys.stderr,
+            )
+    except Exception:  # noqa: BLE001 — staleness check is best-effort
+        pass
+
     import anyio
 
     anyio.run(_serve)

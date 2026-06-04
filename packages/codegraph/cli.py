@@ -863,6 +863,21 @@ def serve(
         )
         raise typer.Exit(code=1)
 
+    # Staleness check (T11.3): warn if any source files changed since last index.
+    try:
+        from codegraph.sync.watcher import count_stale_files
+
+        stale = count_stale_files(Path("."), db)
+        if stale > 0:
+            noun = "file" if stale == 1 else "files"
+            console.print(
+                f"[yellow]Warning: {stale} {noun} changed since last index.[/yellow] "
+                "Run [bold]codegraph index <repo>[/bold] or "
+                "[bold]codegraph watch <repo>[/bold] to keep the index current."
+            )
+    except Exception:  # noqa: BLE001 — staleness check is best-effort
+        pass
+
     import threading
     import webbrowser
 
