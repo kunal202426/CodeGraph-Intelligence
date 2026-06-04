@@ -3,8 +3,8 @@
 ## Current
 
 - **Status:** ACTIVE — Phases 10-13 "best of both" roadmap in progress.
-- **Phase:** 12 — Richer MCP tools [IN PROGRESS 2/4]
-- **Next task:** T12.3 — `list_files` + `index_status` MCP tools
+- **Phase:** 12 — Richer MCP tools [IN PROGRESS 3/4]
+- **Next task:** T12.4 — Mirror MCP tools as CLI subcommands
 - **Last session:** 2026-06-03
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -118,7 +118,7 @@
 ### Phase 12 — Richer MCP tools [IN PROGRESS 1/4]
 - [x] T12.1 — `get_context` MCP tool (tool #5): one call = hybrid search + full source + callers/callees for each result. Replaces 3-4 round-trips. `_get_context` handler + `_ENTITY_COLUMNS` fields + `depends_on`/`called_by`/`via` per entity. Limit clamped 1-10. 5 new tests (updated test_mcp.py: `_EXPECTED` set, renamed `test_five_tools_declared`, added `get_context` schema check + 4 behavior tests). 591 tests passing.
 - [x] T12.2 — `trace_path` MCP tool: `analysis/traversal.py` `find_shortest_path` (BFS, directed call edges, max_hops cap, external/provisional filtered); `_trace_path` MCP handler returns `{found, hops, path}`; 10 BFS unit tests + 4 MCP integration tests. 605 tests passing.
-- [ ] T12.3 — `list_files` + `index_status` tools
+- [x] T12.3 — `list_files` + `index_status` MCP tools: `_list_files` (path/language/loc/entity_count, optional language filter) + `_index_status` (file/entity/edge/embedded counts + staleness indicator). 5 new MCP tests. 610 tests passing.
 - [ ] T12.4 — Mirror as CLI subcommands (`context`, `trace`, `status`)
 - [x] T11.1 — `sync/watcher.py` module: `watchdog>=3.0` added; `packages/codegraph/sync/` subpackage with `RepoWatcher`, `index_one_file`, `delete_one_file`, `_DebounceHandler`, `ChangeEvent`. Debounce 300 ms default. Respects ALWAYS_EXCLUDE + .gitignore. Language-agnostic edge cleanup on re-index. 21 new tests. 566 tests passing.
 - [x] T11.2 — `codegraph watch <repo>` CLI command: long-running, ASCII status lines ([green]modified[/green] / [red]deleted[/red] with entity count + elapsed ms), Ctrl-C clean shutdown (stop + join with timeout). --no-embed, --debounce, --db flags. Note if index missing. Added "watch" to smoke expected set. 11 new tests. 577 tests passing.
