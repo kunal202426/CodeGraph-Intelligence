@@ -6,6 +6,29 @@ requires-python = ">=3.11"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "Kunal Mathur" }]
+keywords = [
+  "code-intelligence",
+  "mcp",
+  "graphrag",
+  "embeddings",
+  "semantic-search",
+  "code-graph",
+  "tree-sitter",
+  "duckdb",
+  "claude",
+  "ai-agents",
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+  "Topic :: Software Development :: Documentation",
+  "Operating System :: OS Independent",
+]
 dependencies = [
   "tree-sitter==0.21.*",
   "tree-sitter-languages>=1.10",
@@ -31,6 +54,11 @@ dev = [
   "ruff>=0.4",
   "httpx>=0.27",
 ]
+
+[project.urls]
+Homepage = "https://github.com/kunal202426/CodeGraph-Intelligence"
+Repository = "https://github.com/kunal202426/CodeGraph-Intelligence"
+Issues = "https://github.com/kunal202426/CodeGraph-Intelligence/issues"
 
 [project.scripts]
 codegraph = "codegraph.cli:app"
