@@ -411,6 +411,19 @@ def test_get_context_full_includes_raw_source(indexed_db: Path) -> None:
     assert "source_preview" not in top
 
 
+def test_get_context_warns_when_no_embeddings(indexed_db: Path) -> None:
+    """T17.2: a --no-embed index (the fixture) warns that semantic search is off."""
+    data = _call("get_context", {"query": "authenticate"})
+    assert "warnings" in data
+    assert any("embeddings" in w.lower() for w in data["warnings"])
+
+
+def test_get_context_warns_present_even_when_no_match(indexed_db: Path) -> None:
+    data = _call("get_context", {"query": "zzz_no_such_symbol_42"})
+    assert data["total"] == 0
+    assert any("embeddings" in w.lower() for w in data["warnings"])
+
+
 def test_source_preview_truncates_long_bodies() -> None:
     """The preview helper caps long source and adds a truncation marker."""
     from codegraph.server.mcp_server import _source_preview

@@ -479,8 +479,19 @@ def _get_context(args: dict[str, Any]) -> str:
 
     store = _open_store()
     try:
-        vector = _maybe_embed(query) if store.count_embedded() > 0 else None
+        has_vectors = store.count_embedded() > 0
+        vector = _maybe_embed(query) if has_vectors else None
         hits = hybrid_search(store.conn, query, vector, limit=limit)
+
+        # Surface the one failure that is otherwise silent: a --no-embed index
+        # degrades semantic search to literal-only with no signal to the agent.
+        warnings: list[str] = []
+        if not has_vectors:
+            warnings.append(
+                "No embeddings in this index -- results are literal matches only. "
+                "Run the reindex tool (or `codegraph index` without --no-embed) for "
+                "semantic search."
+            )
 
         if not hits:
             return json.dumps(
@@ -490,6 +501,7 @@ def _get_context(args: dict[str, Any]) -> str:
                     "detail": detail,
                     "truncated": False,
                     "tokens_estimated": 0,
+                    "warnings": warnings,
                     "entities": [],
                 }
             )
@@ -553,6 +565,7 @@ def _get_context(args: dict[str, Any]) -> str:
                 "detail": detail,
                 "truncated": truncated,
                 "tokens_estimated": used_tokens,
+                "warnings": warnings,
                 "entities": entities,
             }
         )
