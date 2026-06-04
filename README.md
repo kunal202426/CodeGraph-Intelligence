@@ -2,7 +2,7 @@
 
 **A local-first AI memory layer for your codebase.** Index a Python or TypeScript
 repo into a queryable graph, search it by meaning, ask grounded questions over a
-local + Anthropic GraphRAG pipeline, explore it in a browser — and expose it all
+local + Anthropic GraphRAG pipeline, explore it in a browser and expose it all
 to your coding agent over MCP.
 
 ![CodeGraph demo](docs/demo.gif)
@@ -102,6 +102,7 @@ flowchart LR
 
 CodeGraph ships an [MCP](https://modelcontextprotocol.io) server so an agent can query
 your code as a tool.
+[IN DEVELOPMENT]
 
 ```bash
 uv run codegraph index /path/to/repo
@@ -151,12 +152,17 @@ laptop — **6,065 entities, 14,601 edges**:
 faster than cold thanks to per-file SHA-256 hash-skipping; embeddings re-compute only
 for entities whose input changed. `ask` latency depends on the Anthropic API.
 
+[TEST RESULTS ARE SIMULATED WITH SCRIPTS NOT MANUALLY] 
+
 ## Roadmap
 
-CodeGraph is an MVP carve-out of a larger vision. Deliberately **deferred**: more
+CodeGraph is an MVP in development carve-out of a larger vision. Deliberately **deferred**: more
 language parsers (Rust/Java/Go/etc.), deep TypeScript type resolution via `tsc`,
 git-blame/ownership overlays, antipattern/architecture detection, a background
 re-indexing daemon, and cross-language HTTP edges. See [plan/09-stretch.md](plan/09-stretch.md).
+Other github repos consisting of architectural memoery does not solve the semantic meaning for the codebase,
+Which in development, models have to go through the whole code bases again defeating the point for
+CODEGRAPHS.
 
 ## Acknowledgments
 
