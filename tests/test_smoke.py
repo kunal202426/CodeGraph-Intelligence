@@ -50,6 +50,9 @@ def test_all_scaffolded_modules_importable() -> None:
         "codegraph.analysis.traversal",
         "codegraph.sync",
         "codegraph.sync.watcher",
+        "codegraph.installer",
+        "codegraph.installer.base",
+        "codegraph.installer.registry",
     ]
     for name in modules:
         importlib.import_module(name)
