@@ -3,8 +3,8 @@
 ## Current
 
 - **Status:** ACTIVE — Phases 14-18 "actually usable" roadmap in progress.
-- **Phase:** 15 — Value gate (lean output) [DONE 5/5]
-- **Next task:** T16.1 — walk-up DB discovery (one install, every project)
+- **Phase:** 16 — Multi-project (one install, every project) [DONE 3/3]
+- **Next task:** T17.1 — `reindex` MCP tool (self-healing freshness)
 - **Last session:** 2026-06-05
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -147,6 +147,13 @@
 - [x] T15.5 — STATUS.md update (this entry).
 
 **Phase 15 result: the value gate. get_context defaults to token-lean summaries (~10x smaller than dumping bodies), enforces a token budget, and reports its own size; full source is opt-in. GraphRAG budgets by tokens, not chars. trace_path output is human-readable. This is what makes calling CodeGraph genuinely cheaper than reading files. 737 tests passing.**
+
+### Phase 16 — Multi-project (one install, every project) [DONE 3/3]
+- [x] T16.1 — Walk-up DB discovery: `graph/locate.py` `discover_db(start)` climbs from CWD to root for the nearest `.codegraph/graph.duckdb`. Wired into `get_db_path()` below `CODEGRAPH_DB`: `--db` > `CODEGRAPH_DB` > discovered > default. 5 locate + 3 precedence tests.
+- [x] T16.2 — Installer defaults to discovery: `_make_entry(None)` omits `--db` so the server resolves per project; one install serves every repo. `install --db` still pins a DB; CLI prints which mode. `Target` methods accept `Path | None`. 4 tests.
+- [x] T16.3 — STATUS.md update (this entry). Note: CLI-from-subdirectory discovery (so `codegraph search` works below the repo root) deferred as low-value — the CLI is normally run from the repo root and `--db` is always available; the agent-facing MCP path is what needed discovery.
+
+**Phase 16 result: a single `codegraph install <agent>` (no `--db`) now works across every project on the machine — the MCP server discovers the nearest index from its working directory. 748 tests passing.**
 
 - [x] T11.1 — `sync/watcher.py` module: `watchdog>=3.0` added; `packages/codegraph/sync/` subpackage with `RepoWatcher`, `index_one_file`, `delete_one_file`, `_DebounceHandler`, `ChangeEvent`. Debounce 300 ms default. Respects ALWAYS_EXCLUDE + .gitignore. Language-agnostic edge cleanup on re-index. 21 new tests. 566 tests passing.
 - [x] T11.2 — `codegraph watch <repo>` CLI command: long-running, ASCII status lines ([green]modified[/green] / [red]deleted[/red] with entity count + elapsed ms), Ctrl-C clean shutdown (stop + join with timeout). --no-embed, --debounce, --db flags. Note if index missing. Added "watch" to smoke expected set. 11 new tests. 577 tests passing.
