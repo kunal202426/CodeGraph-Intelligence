@@ -43,6 +43,17 @@ def test_context_shows_column_headers(indexed_db: Path) -> None:
     assert "Type" in out and "Name" in out
 
 
+def test_context_output_is_lean_no_source_body(indexed_db: Path) -> None:
+    """T15.4: CLI context shows counts + doc, never the full source body.
+
+    `_PRIVATE_TOKEN` appears only in the authenticate() body, not its signature
+    or docstring, so it must not leak into the lean context table.
+    """
+    result = runner.invoke(app, ["context", "authenticate", "--db", str(indexed_db)])
+    assert result.exit_code == 0
+    assert "_PRIVATE_TOKEN" not in _plain(result.output)
+
+
 def test_context_no_match(indexed_db: Path) -> None:
     result = runner.invoke(app, ["context", "zzz_not_a_real_symbol_9999", "--db", str(indexed_db)])
     assert result.exit_code == 0

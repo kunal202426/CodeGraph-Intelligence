@@ -3,8 +3,8 @@
 ## Current
 
 - **Status:** ACTIVE — Phases 14-18 "actually usable" roadmap in progress.
-- **Phase:** 14 — Adoption gate [DONE 4/4]
-- **Next task:** T15.1 — `detail` param on get_context (lean output)
+- **Phase:** 15 — Value gate (lean output) [DONE 5/5]
+- **Next task:** T16.1 — walk-up DB discovery (one install, every project)
 - **Last session:** 2026-06-05
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -138,6 +138,15 @@
 - [x] T14.4 — STATUS.md update (this entry).
 
 **Phase 14 result: the adoption gate. Tool descriptions now direct Claude to prefer CodeGraph over reading files, and `install` drops a CLAUDE.md managed block that tells the agent to call `index_status` at session start and `get_context` before opening files. 725 tests passing.**
+
+### Phase 15 — Value gate (lean get_context) [DONE 5/5]
+- [x] T15.1 — `detail` param on get_context: summary (default) returns signature + docstring + 8-line `source_preview` + neighbour ids, omitting `raw_source`; `detail='full'` returns complete bodies. `_SUMMARY_COLUMNS` + `_source_preview` helper. Response reports `detail`. 6 tests.
+- [x] T15.2 — Token-aware budget: `ai/tokens.py` `estimate_tokens` (~4 chars/token, dependency-free). get_context `max_tokens` param (default 1500) caps entities by running token estimate; response adds `tokens_estimated` + `truncated` (first entity always included). `graphrag.build_user_message` retrofit to token budget (char_budget kept as back-compat alias). 7 tests.
+- [x] T15.3 — Readable labels: `_labels_for(conn, ids)` -> 'name (file:line)'; `trace_path` returns a parallel `labels` list (path stays ids). Not added to get_context neighbour lists (would re-inflate tokens). 1 test.
+- [x] T15.4 — CLI `context` leanness verified: regression test asserts body-only `_PRIVATE_TOKEN` never leaks into the counts-only table. 1 test.
+- [x] T15.5 — STATUS.md update (this entry).
+
+**Phase 15 result: the value gate. get_context defaults to token-lean summaries (~10x smaller than dumping bodies), enforces a token budget, and reports its own size; full source is opt-in. GraphRAG budgets by tokens, not chars. trace_path output is human-readable. This is what makes calling CodeGraph genuinely cheaper than reading files. 737 tests passing.**
 
 - [x] T11.1 — `sync/watcher.py` module: `watchdog>=3.0` added; `packages/codegraph/sync/` subpackage with `RepoWatcher`, `index_one_file`, `delete_one_file`, `_DebounceHandler`, `ChangeEvent`. Debounce 300 ms default. Respects ALWAYS_EXCLUDE + .gitignore. Language-agnostic edge cleanup on re-index. 21 new tests. 566 tests passing.
 - [x] T11.2 — `codegraph watch <repo>` CLI command: long-running, ASCII status lines ([green]modified[/green] / [red]deleted[/red] with entity count + elapsed ms), Ctrl-C clean shutdown (stop + join with timeout). --no-embed, --debounce, --db flags. Note if index missing. Added "watch" to smoke expected set. 11 new tests. 577 tests passing.
