@@ -28,6 +28,24 @@ _model_lock = threading.Lock()
 _model_cache: dict[str, SentenceTransformer] = {}
 
 
+def model_is_cached(model_name: str = DEFAULT_MODEL) -> bool:
+    """Best-effort check: is the model already in the local HuggingFace cache?
+
+    Used to decide whether to warn the user about a first-run download (~80 MB)
+    before it silently begins. Returns ``True`` (don't nag) when the answer can't
+    be determined -- a spurious skipped notice is better than a false alarm.
+    """
+    try:
+        from huggingface_hub import try_to_load_from_cache
+    except Exception:  # noqa: BLE001 — huggingface_hub missing/old: can't tell
+        return True
+    repo = model_name if "/" in model_name else f"sentence-transformers/{model_name}"
+    try:
+        return isinstance(try_to_load_from_cache(repo, "config.json"), str)
+    except Exception:  # noqa: BLE001 — cache probe failed: assume cached, don't nag
+        return True
+
+
 def _get_model(model_name: str = DEFAULT_MODEL) -> SentenceTransformer:
     """Lazy-load + cache the SentenceTransformer (thread-safe double-checked lock)."""
     model = _model_cache.get(model_name)

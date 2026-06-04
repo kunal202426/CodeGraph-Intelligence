@@ -102,9 +102,17 @@ def _embed_changed(store: GraphStore, batch_size: int = 256) -> tuple[int, str |
         return 0, None
 
     try:
-        from codegraph.embeddings.pipeline import embed_batch
+        from codegraph.embeddings.pipeline import embed_batch, model_is_cached
     except Exception as exc:  # noqa: BLE001 - import/torch failure → skip
         return 0, f"{type(exc).__name__}: {exc}"
+
+    # First-run legibility: the model is a ~80 MB download that otherwise begins
+    # silently, making `index` look frozen. Tell the user before it starts.
+    if not model_is_cached():
+        console.print(
+            "[dim]Downloading embedding model (~80 MB, first run only)... "
+            "this can take a minute.[/dim]"
+        )
 
     embedded = 0
     progress_cols = (
@@ -274,6 +282,14 @@ def index(
             f"[yellow]Embeddings skipped ({embed_error}). "
             f"Literal search still works; re-run to add semantic search.[/yellow]"
         )
+        # Network/SSL failures are the common first-run culprit (corporate proxies,
+        # offline). Point the user at the offline path so they aren't stuck.
+        low = embed_error.lower()
+        if any(k in low for k in ("ssl", "connection", "network", "timeout", "proxy", "http")):
+            console.print(
+                "[dim]Looks network-related. To work fully offline, run "
+                "[bold]codegraph index <repo> --no-embed[/bold] (literal search only).[/dim]"
+            )
     if skipped_lang:
         console.print(f"[dim]Skipped {skipped_lang} files with unsupported languages.[/dim]")
     if parse_errors:
