@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from codegraph.installer.base import (
     McpEntry,
     Target,
@@ -16,7 +15,6 @@ from codegraph.installer.base import (
     _write_json,
 )
 from codegraph.installer.registry import get_target, list_targets, register_target
-
 
 # ---------------------------------------------------------------------------
 # McpEntry

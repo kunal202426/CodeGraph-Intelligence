@@ -6,9 +6,8 @@ import re
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
-
 from codegraph.cli import app
+from typer.testing import CliRunner
 
 SAMPLE_REPO = Path("tests/fixtures/sample_repo_py")
 runner = CliRunner()
