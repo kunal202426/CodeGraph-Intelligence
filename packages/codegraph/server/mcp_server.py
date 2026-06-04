@@ -38,11 +38,21 @@ server: Server = Server("codegraph")
 
 
 def get_db_path() -> Path:
-    """Resolve the graph DB path: explicit --db > CODEGRAPH_DB env > default."""
+    """Resolve the graph DB path.
+
+    Precedence: explicit --db > CODEGRAPH_DB env > walk-up discovery from CWD >
+    default. Discovery lets one MCP server entry serve many projects: the nearest
+    ``.codegraph/graph.duckdb`` at or above the working directory wins.
+    """
     if _db_path is not None:
         return _db_path
     env = os.environ.get("CODEGRAPH_DB")
-    return Path(env) if env else DEFAULT_DB
+    if env:
+        return Path(env)
+    from codegraph.graph.locate import discover_db
+
+    discovered = discover_db()
+    return discovered if discovered is not None else DEFAULT_DB
 
 
 def tool_definitions() -> list[Tool]:

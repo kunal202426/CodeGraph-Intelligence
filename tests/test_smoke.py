@@ -35,6 +35,7 @@ def test_all_scaffolded_modules_importable() -> None:
         "codegraph.graph.store",
         "codegraph.graph.queries",
         "codegraph.graph.resolver",
+        "codegraph.graph.locate",
         "codegraph.embeddings",
         "codegraph.embeddings.pipeline",
         "codegraph.embeddings.chunking",

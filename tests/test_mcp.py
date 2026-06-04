@@ -91,7 +91,27 @@ def test_list_tools_handler_matches_definitions() -> None:
 def test_db_path_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CODEGRAPH_DB", raising=False)
     monkeypatch.setattr(mcp_server, "_db_path", None)
+    # Neutralize walk-up discovery so we test the pure default fallback.
+    monkeypatch.setattr("codegraph.graph.locate.discover_db", lambda *a, **k: None)
     assert get_db_path() == DEFAULT_DB
+
+
+def test_db_path_discovers_when_no_explicit_or_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CODEGRAPH_DB", raising=False)
+    monkeypatch.setattr(mcp_server, "_db_path", None)
+    sentinel = Path("/discovered/.codegraph/graph.duckdb")
+    monkeypatch.setattr("codegraph.graph.locate.discover_db", lambda *a, **k: sentinel)
+    assert get_db_path() == sentinel
+
+
+def test_db_path_env_beats_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(mcp_server, "_db_path", None)
+    monkeypatch.setenv("CODEGRAPH_DB", "/tmp/env.duckdb")
+    monkeypatch.setattr(
+        "codegraph.graph.locate.discover_db",
+        lambda *a, **k: Path("/discovered/g.duckdb"),
+    )
+    assert get_db_path() == Path("/tmp/env.duckdb")
 
 
 def test_db_path_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
