@@ -393,6 +393,7 @@ _HANDLERS = {
     "get_entity_context": _get_entity_context,
     "impact_analysis": _impact_analysis,
     "ask_codebase": _ask_codebase,
+    "trace_path": _trace_path,
     "get_context": _get_context,
 }
 
