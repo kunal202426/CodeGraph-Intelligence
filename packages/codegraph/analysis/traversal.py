@@ -8,7 +8,20 @@ find_shortest_path(conn, src_id, dst_id, max_hops=7) -> list[str] | None
 
 from __future__ import annotations
 
+from collections import deque
+
 import duckdb
+
+# SQL to fetch outgoing call targets for one entity, filtering out external
+# and unresolved (provisional) entities so BFS stays inside the index.
+_CALLS_SQL = """
+SELECT DISTINCT dst_id
+FROM edges
+WHERE src_id = ?
+  AND type = 'calls'
+  AND dst_id NOT LIKE 'external:%'
+  AND dst_id NOT LIKE '%:?%'
+"""
 
 
 def find_shortest_path(
@@ -35,4 +48,27 @@ def find_shortest_path(
     Returns:
         ``[src_id, ..., dst_id]`` on success, ``None`` if unreachable.
     """
-    raise NotImplementedError
+    if src_id == dst_id:
+        return [src_id]
+
+    # BFS: queue of (current_id, path_from_src_to_current)
+    queue: deque[tuple[str, list[str]]] = deque([(src_id, [src_id])])
+    visited: set[str] = {src_id}
+
+    while queue:
+        current, path = queue.popleft()
+
+        # Stop expanding this branch if we have already used max_hops edges.
+        if len(path) - 1 >= max_hops:
+            continue
+
+        for (next_id,) in conn.execute(_CALLS_SQL, [current]).fetchall():
+            if next_id in visited:
+                continue
+            new_path = [*path, next_id]
+            if next_id == dst_id:
+                return new_path
+            visited.add(next_id)
+            queue.append((next_id, new_path))
+
+    return None
