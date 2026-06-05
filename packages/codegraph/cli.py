@@ -63,13 +63,6 @@ _LANGUAGE_PARSERS = {
 }
 
 
-def _stub(name: str, lands_at: str) -> None:
-    console.print(
-        f"[yellow]codegraph {name}[/yellow] is not implemented yet — lands at [bold]{lands_at}[/bold]."
-    )
-    console.print("Run `codegraph --help` to see all commands and their target phases.")
-
-
 def _embed_changed(store: GraphStore, batch_size: int = 256) -> tuple[int, str | None]:
     """(Re-)embed entities whose embedding input changed (T3.5).
 
