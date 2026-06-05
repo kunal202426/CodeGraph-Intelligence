@@ -362,6 +362,33 @@ def test_reindex_missing_db_returns_error(tmp_path: Path, monkeypatch: pytest.Mo
     assert "error" in data
 
 
+def test_reindex_works_with_relative_db_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: a RELATIVE --db made _repo_root_for_db() return Path('.'),
+    so index_one_file's relative_to() raised and reindex silently did nothing.
+    """
+    import time
+
+    repo = tmp_path / "proj"
+    src = repo / "pkg" / "mod.py"
+    _index_temp_repo(repo, src, "def alpha():\n    return 1\n")
+    # Run as if launched from inside the repo with a RELATIVE db path.
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(mcp_server, "_db_path", Path(".codegraph/graph.duckdb"))
+
+    assert _call("index_status", {})["stale"] is False
+    time.sleep(0.05)
+    src.write_text("def alpha():\n    return 1\n\n\ndef beta():\n    return 2\n", encoding="utf-8")
+    assert _call("index_status", {})["stale"] is True
+
+    time.sleep(0.05)
+    result = _call("reindex", {"no_embed": True})
+    assert result["reindexed"] >= 1, result
+    assert result["failed"] == 0, result
+    assert _call("index_status", {})["stale"] is False
+
+
 def test_get_context_tool_definition() -> None:
     by_name = {t.name: t for t in tool_definitions()}
     tool = by_name["get_context"]

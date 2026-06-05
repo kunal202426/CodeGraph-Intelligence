@@ -601,15 +601,19 @@ def _list_files(args: dict[str, Any]) -> str:
 
 
 def _repo_root_for_db() -> Path:
-    """Best-effort repo root for the active DB.
+    """Best-effort repo root for the active DB, always absolute.
 
     A discovered/standard DB lives at ``<root>/.codegraph/graph.duckdb``, so the
     root is two levels up. Otherwise fall back to the current working directory.
+    The result is resolved to an absolute path: ``find_stale_files`` yields
+    absolute paths, and ``index_one_file`` does ``abs_path.relative_to(root)`` --
+    which raises (and silently no-ops the reindex) if *root* is relative like
+    ``Path('.')``. Resolving here keeps reindex working for a relative ``--db``.
     """
     db = get_db_path()
     if db.parent.name == ".codegraph":
-        return db.parent.parent
-    return Path(".")
+        return db.parent.parent.resolve()
+    return Path(".").resolve()
 
 
 # Cap on files reindexed in a single MCP call -- beyond this, suggest the CLI so
@@ -687,11 +691,13 @@ def _reindex(args: dict[str, Any]) -> str:
     start = time.monotonic()
     total_entities = 0
     reindexed = 0
+    failed = 0
     for abs_path in stale:
         try:
             total_entities += index_one_file(root, abs_path, db, no_embed=no_embed)
             reindexed += 1
         except Exception:  # noqa: BLE001 — one bad file shouldn't abort the batch
+            failed += 1
             continue
     elapsed_ms = (time.monotonic() - start) * 1000.0
 
@@ -699,6 +705,7 @@ def _reindex(args: dict[str, Any]) -> str:
         {
             "reindexed": reindexed,
             "entities": total_entities,
+            "failed": failed,
             "elapsed_ms": round(elapsed_ms, 1),
             "no_embed": no_embed,
         }
