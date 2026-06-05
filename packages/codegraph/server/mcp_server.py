@@ -277,6 +277,10 @@ _SUMMARY_COLUMNS = tuple(c for c in _ENTITY_COLUMNS if c != "raw_source")
 # Lines of source shown as a preview in summary mode.
 _SOURCE_PREVIEW_LINES = 8
 
+# Max neighbour ids listed per entity in get_context summary mode (counts are
+# always exact; the full lists are available via impact_analysis / full detail).
+_NEIGHBOR_CAP = 8
+
 
 def _source_preview(raw_source: str | None, max_lines: int = _SOURCE_PREVIEW_LINES) -> str:
     """Return the first *max_lines* lines of source with a truncation marker."""
@@ -529,7 +533,7 @@ def _get_context(args: dict[str, Any]) -> str:
                 entity["source_preview"] = _source_preview(preview_row[0] if preview_row else None)
 
             # Outbound: imports + calls (what this entity depends on)
-            entity["depends_on"] = [
+            deps = [
                 r[0]
                 for r in store.conn.execute(
                     "SELECT DISTINCT dst_id FROM edges "
@@ -537,15 +541,27 @@ def _get_context(args: dict[str, Any]) -> str:
                     [eid],
                 ).fetchall()
             ]
-
             # Inbound: direct callers of this entity
-            entity["called_by"] = [
+            callers = [
                 r[0]
                 for r in store.conn.execute(
                     "SELECT DISTINCT src_id FROM edges WHERE dst_id = ? AND type = 'calls'",
                     [eid],
                 ).fetchall()
             ]
+
+            # Always report the true neighbour counts. In summary mode cap the
+            # actual id lists so a hub function (many callers) can't bloat the
+            # response -- the agent gets the count + a sample, and can call
+            # impact_analysis / get_entity_context for the complete list.
+            entity["depends_on_count"] = len(deps)
+            entity["called_by_count"] = len(callers)
+            if full:
+                entity["depends_on"] = deps
+                entity["called_by"] = callers
+            else:
+                entity["depends_on"] = deps[:_NEIGHBOR_CAP]
+                entity["called_by"] = callers[:_NEIGHBOR_CAP]
 
             entity["via"] = list(hit.retrievers)
 

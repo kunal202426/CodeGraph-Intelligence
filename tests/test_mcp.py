@@ -416,8 +416,23 @@ def test_get_context_returns_packed_result(indexed_db: Path) -> None:
     assert "called_by" in top
     assert isinstance(top["depends_on"], list)
     assert isinstance(top["called_by"], list)
+    # Exact neighbour counts always reported
+    assert "depends_on_count" in top and "called_by_count" in top
     # Retriever tags present
     assert "via" in top and isinstance(top["via"], list)
+
+
+def test_get_context_summary_caps_neighbor_lists(indexed_db: Path) -> None:
+    """Summary mode caps the id lists at _NEIGHBOR_CAP but reports the true count."""
+    from codegraph.server.mcp_server import _NEIGHBOR_CAP
+
+    data = _call("get_context", {"query": "authenticate", "limit": 10})
+    for ent in data["entities"]:
+        assert len(ent["depends_on"]) <= _NEIGHBOR_CAP
+        assert len(ent["called_by"]) <= _NEIGHBOR_CAP
+        # Count is the source of truth and is >= the (possibly capped) list length.
+        assert ent["depends_on_count"] >= len(ent["depends_on"])
+        assert ent["called_by_count"] >= len(ent["called_by"])
 
 
 def test_get_context_summary_omits_raw_source(indexed_db: Path) -> None:
