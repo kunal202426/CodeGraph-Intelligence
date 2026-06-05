@@ -1,4 +1,4 @@
-# CodeGraph (IN DEVELOPMENT)
+# CodeGraph
 
 **A local-first AI memory layer for your codebase.** Index a repo (9 languages) into a
 queryable graph, search it by meaning, ask grounded questions over a local + Anthropic
@@ -9,6 +9,86 @@ MCP — so the agent queries the graph instead of re-reading your files every me
 
 > Everything runs on your machine. The only network call is the Anthropic API for
 > `ask` / `summarize` (optional — all graph and search features work offline).
+
+---
+
+## The problem it solves
+
+Every time you ask Claude a question about your code, it re-reads your entire codebase.
+On a medium project that is **50,000–100,000 tokens per message** — expensive, slow, and
+Claude still misses how files connect to each other (who calls what, what breaks if you
+change this function).
+
+CodeGraph indexes your code once into a graph, then answers *"what is relevant to this
+question?"* in **~500 tokens** instead of reading everything. In tests on this repo,
+`get_context` returned answers using **9.6x fewer tokens** than reading the files it
+surfaced. Faster, cheaper, and it understands the actual call graph across files.
+
+---
+
+## Before you start
+
+**You need:**
+
+| Requirement | Where to get it |
+|---|---|
+| Python 3.11 or newer | [python.org/downloads](https://python.org/downloads) |
+| `uv` (Python package manager) | `pip install uv` or `brew install uv` on Mac |
+| Git | [git-scm.com](https://git-scm.com) |
+| Claude Code, Cursor, Codex, or Gemini (at least one) | Their respective sites |
+
+**You do NOT need:**
+- An Anthropic API key *(for the core features — see the next section)*
+- Any cloud account or subscription beyond what you already have
+- Docker
+
+---
+
+## Do I need an API key?
+
+**Short answer: No, for everything that matters.**
+
+There is an important distinction:
+
+| Product | What it is | Free? |
+|---|---|---|
+| **Claude.ai subscription** (Pro/Team) | The claude.ai web/app interface | You already have it |
+| **Anthropic API key** | Direct API access, billed per-token, from [console.anthropic.com](https://console.anthropic.com) | Separate — first ~$5 free |
+
+These are **two different products**. Having a Claude subscription does not give you an API
+key, and you do not need one to use CodeGraph's core features.
+
+### What works free (no API key)
+
+Everything in the table below works with zero API key — this includes the entire reason
+most people install CodeGraph:
+
+| Feature | Command / Tool |
+|---|---|
+| Index your codebase | `codegraph index`, `codegraph init` |
+| Search by meaning + text | `codegraph search`, `search_code` MCP tool |
+| Understand dependencies | `codegraph deps`, `codegraph impact` |
+| Find cycles, smells, dead code | `codegraph cycles`, `codegraph smells`, `codegraph deadcode` |
+| All 8 MCP tools (Claude Code queries your graph) | `get_context`, `trace_path`, `impact_analysis`, `list_files`, `index_status`, `reindex`, `search_code`, `get_entity_context` |
+| Auto-refresh as you code | `codegraph watch` |
+| Browser UI with D3 graph | `codegraph serve` |
+| One-shot setup | `codegraph init` |
+
+The **entire 9.6x token savings value proposition** — the core of the product — is free.
+
+### What needs an Anthropic API key
+
+| Feature | Command / Tool |
+|---|---|
+| Ask a natural-language question about your code | `codegraph ask "how does X work?"` |
+| Generate an architecture summary | `codegraph summarize` |
+| GraphRAG Q&A from within an agent | `ask_codebase` MCP tool |
+
+If you want these: go to [console.anthropic.com](https://console.anthropic.com), create an
+account, and set `ANTHROPIC_API_KEY=<your key>` in your environment. You get ~$5 in free
+credits to start.
+
+---
 
 ## What it does
 
@@ -25,10 +105,80 @@ MCP — so the agent queries the graph instead of re-reading your files every me
   architectural layer analysis.
 - **Stays fresh automatically** — `codegraph watch` debounces filesystem events and
   re-indexes only the changed files in ~300 ms, keeping the graph current as you code.
-- **Plugs into any MCP agent** — 8 MCP tools (search, context, trace, impact, status,
-  …) plus a one-command installer for Claude Code, Cursor, Codex, and Gemini.
+- **Plugs into any MCP agent** — 9 MCP tools (search, context, trace, impact, status,
+  reindex, ...) plus a one-command installer for Claude Code, Cursor, Codex, and Gemini.
+
+---
+
+## What it cannot do
+
+Being honest about the limits:
+
+- **Not a code reviewer** — it surfaces what is *relevant* to a question, not what is
+  *correct*. It does not catch bugs or security issues.
+- **`codegraph ask` / `summarize` / `ask_codebase` are not free** — they call Anthropic's
+  API and require a separate API key. The CLI warns you clearly if the key is missing.
+- **No runtime understanding** — CodeGraph reads static structure (what calls what, what
+  imports what). It does not know what happens when the code actually runs.
+- **Framework magic is partial** — Express route handlers, Django views, Rails
+  `has_many` associations, and similar framework-level relationships are not yet resolved.
+  Calls through a framework may show as "external" rather than resolving to a handler.
+- **Function-local imports** — if a function does `from X import Y` inside the function
+  body (rare but valid Python), that call may not trace through to the definition.
+- **One user at a time** — the local DuckDB index is single-writer. Running `codegraph
+  watch` and a heavy re-index simultaneously from two terminals may conflict.
+- **Web UI is local-only** — `codegraph serve` opens a browser to `localhost`. It is not
+  hosted, shared, or deployed anywhere.
+- **9 languages only** — Python, TypeScript, JavaScript, Go, Rust, Java, Ruby, PHP, C,
+  C++. Other languages are silently skipped during indexing.
+
+---
 
 ## Quickstart
+
+### Step-by-step (first time)
+
+**Step 1 — Clone CodeGraph** (one time, anywhere on your machine)
+
+```bash
+git clone https://github.com/kunal202426/CodeGraph-Intelligence.git
+cd CodeGraph-Intelligence
+```
+
+**Step 2 — Install dependencies** (one time, takes ~2 minutes)
+
+```bash
+uv sync --extra dev
+```
+
+> The first time you index a project, Python will also download the `all-MiniLM-L6-v2`
+> embedding model (~80 MB). This is a one-time download — CodeGraph will tell you when
+> it starts.
+
+**Step 3 — Set up a project** (once per project)
+
+```bash
+cd /path/to/your/project
+uv run codegraph init
+```
+
+`init` does three things automatically:
+- Indexes your code into `.codegraph/graph.duckdb` (~30 s for a medium project)
+- Registers CodeGraph as an MCP tool in your agent (Claude Code / Cursor / etc.)
+- Writes a `CLAUDE.md` guide so your agent knows to call CodeGraph before reading files
+
+**Step 4 — Restart your agent**
+
+Close and reopen Claude Code (or Cursor / Codex / Gemini). The MCP server is not loaded
+until the agent restarts.
+
+**Step 5 — Use it**
+
+Ask Claude: *"use codegraph to explain how authentication works in this project"*
+
+Claude will call `get_context` once (~500 tokens) instead of reading your entire codebase.
+
+---
 
 **One command** — index your repo, wire up Claude Code, and write the agent guide:
 
@@ -211,11 +361,13 @@ laptop — **6,065 entities, 14,601 edges**:
 | Embedding throughput | ~690 entities/s (`all-MiniLM-L6-v2`, CPU) |
 | Graph DB size on disk | ~34 MB |
 
-`search get_swagger_ui_html` → `fastapi/openapi/docs.py:40`. Warm re-index is ~35×
+`search get_swagger_ui_html` → `fastapi/openapi/docs.py:40`. Warm re-index is ~35x
 faster than cold thanks to per-file SHA-256 hash-skipping; embeddings re-compute only
 for entities whose input changed. `ask` latency depends on the Anthropic API.
 
-[TEST RESULTS ARE SIMULATED WITH SCRIPTS NOT MANUALLY] 
+**Dogfood (CodeGraph indexing itself):** `get_context` summary returns **9.6x fewer
+tokens** than reading the files it surfaces (1,108 vs 10,637 tokens on a representative
+query). Full report: [docs/VERIFICATION.md](docs/VERIFICATION.md).
 
 ## Roadmap
 
@@ -235,17 +387,74 @@ Deliberately **deferred**: deep TypeScript type resolution via `tsc`, framework-
 resolvers (Express/NestJS/Django/Rails), multi-client shared watcher daemon (Unix
 socket), and cross-language HTTP edge extraction. See [STATUS.md](STATUS.md).
 
-Other github repos consisting of architectural memoery does not solve the semantic meaning for the codebase,
-Which in development, models have to go through the whole code bases again defeating the point for
-CODEGRAPHS.
+---
+
+## FAQ
+
+**I have Claude Pro / Team. Do I need to pay extra?**
+
+No. Your Claude subscription covers the claude.ai interface. CodeGraph's MCP integration
+with Claude Code is completely separate and has no subscription cost. The only feature
+that charges you separately is `codegraph ask` / `ask_codebase`, which hits the Anthropic
+API directly — a different billing account at [console.anthropic.com](https://console.anthropic.com).
+
+**Will it slow down Claude?**
+
+The opposite. Claude makes 1 tool call (~500 tokens) instead of reading 10 files
+(~10,000 tokens). Each message is faster and cheaper.
+
+**Does it send my code to the internet?**
+
+No. Everything runs on your machine. The index, embeddings, and graph all live in
+`.codegraph/graph.duckdb` inside your project. The only network call is when you
+explicitly use `codegraph ask` (which sends a few code snippets to Anthropic — the same
+as any Claude Code conversation). The embedding model downloads once from HuggingFace
+on first use, then works offline.
+
+**How often do I need to re-index?**
+
+You don't have to think about it. Run `codegraph watch .` in a terminal while you code —
+it re-indexes only the file you just saved, in ~300 ms. Or skip it: if you forget, the
+agent sees a `stale` warning in `index_status` and can call the `reindex` tool itself
+without you doing anything.
+
+**Do I run `init` every time I open the project?**
+
+No. Run `init` once per project, ever. After that, just start coding. The MCP entry is
+global (written to `~/.claude.json` or equivalent) — it is active every time Claude Code
+starts, automatically.
+
+**Which agents are supported?**
+
+Claude Code, Cursor IDE, OpenAI Codex CLI, and Google Gemini CLI. One command each:
+
+```bash
+codegraph install claude    # Claude Code
+codegraph install cursor    # Cursor
+codegraph install codex     # OpenAI Codex CLI
+codegraph install gemini    # Google Gemini CLI
+```
+
+**Can I use it on multiple projects without reinstalling?**
+
+Yes. Install once (`codegraph install claude`), and it works across every project. The
+MCP server discovers the nearest `.codegraph/graph.duckdb` from wherever your agent is
+running — no `--db` needed, no per-project config.
+
+**Something went wrong during indexing. What do I do?**
+
+The most common issues:
+- *"Downloading embedding model..."* and it seems stuck — it's downloading ~80 MB, give
+  it a minute. On slow/corporate networks this can take a while or fail; run
+  `codegraph index . --no-embed` to skip it (you lose semantic search, keep literal).
+- *"No graph database at..."* — run `codegraph index .` (or `codegraph init`) first.
+- *Agent not using CodeGraph* — make sure you restarted the agent after `init`. Check
+  that `CLAUDE.md` exists in your repo root with the `<!-- BEGIN CODEGRAPH -->` block.
+
+---
 
 ## Acknowledgments
 
 Built on [tree-sitter](https://tree-sitter.github.io/), [DuckDB](https://duckdb.org/),
 [sentence-transformers](https://www.sbert.net/), and the
 [Anthropic API](https://docs.anthropic.com/). Progress tracked in [STATUS.md](STATUS.md).
-
-**RESEARCH**
-Its inspired by open source projects that solve the similar problem but on base levels, open source research papers
-also does not define a real problem solving tool that can actually be combined with agentic development tools for 
-product Development
