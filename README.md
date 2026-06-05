@@ -4,6 +4,7 @@
 queryable graph, search it by meaning, ask grounded questions over a local + Anthropic
 GraphRAG pipeline, explore it in a browser, and expose it all to your coding agent over
 MCP — so the agent queries the graph instead of re-reading your files every message.
+**[In Development]**
 
 ![CodeGraph demo](docs/demo.gif)
 
@@ -23,6 +24,9 @@ CodeGraph indexes your code once into a graph, then answers *"what is relevant t
 question?"* in **~500 tokens** instead of reading everything. In tests on this repo,
 `get_context` returned answers using **9.6x fewer tokens** than reading the files it
 surfaced. Faster, cheaper, and it understands the actual call graph across files.
+
+**THE TEST RESULTS ARE SIMULATED USING SCRIPTS FOR NOW**
+**NEXT PHASE IS USER TESTING WITH DISTRIBUTION TO FIRST %) USERS**
 
 ---
 
@@ -458,3 +462,12 @@ The most common issues:
 Built on [tree-sitter](https://tree-sitter.github.io/), [DuckDB](https://duckdb.org/),
 [sentence-transformers](https://www.sbert.net/), and the
 [Anthropic API](https://docs.anthropic.com/). Progress tracked in [STATUS.md](STATUS.md).
+
+
+## Research
+Other Github repos that share similar functionalities are not consistant with the architecture graphs and they do not contain the semantic meaning layer
+increasing their effeciency but not solving the context or re-reading codebase problem for models. Sharing shallow context and semantic meaning to a 
+component can break the code. This tool provides you with both problems solved , with moderate token reduction compared to other graph tools.
+
+Existing research papers do not cover the scope of solving a problem by giving semantic layer and reduction in tokenization for a codebase graph 
+which again puts the performance and code generation at risk.
