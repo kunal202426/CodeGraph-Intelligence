@@ -1,3 +1,6 @@
+# CodeGraph -- Copyright (c) 2026 Kunal Mathur.
+# Source-available under PolyForm Noncommercial 1.0.0. See LICENSE.
+# https://github.com/kunal202426/CodeGraph-Intelligence
 """Unified Intermediate Representation.
 
 Every parser emits UIREntity + Edge. Every store, search, and AI layer consumes

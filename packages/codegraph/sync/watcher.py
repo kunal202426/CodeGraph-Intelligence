@@ -1,3 +1,6 @@
+# CodeGraph -- Copyright (c) 2026 Kunal Mathur.
+# Source-available under PolyForm Noncommercial 1.0.0. See LICENSE.
+# https://github.com/kunal202426/CodeGraph-Intelligence
 """Debounced filesystem watcher — keeps the CodeGraph index current on save.
 
 Watches a repository root and re-parses only the changed file(s) whenever a

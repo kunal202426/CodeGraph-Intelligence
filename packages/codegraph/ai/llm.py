@@ -1,3 +1,6 @@
+# CodeGraph -- Copyright (c) 2026 Kunal Mathur.
+# Source-available under PolyForm Noncommercial 1.0.0. See LICENSE.
+# https://github.com/kunal202426/CodeGraph-Intelligence
 """Anthropic SDK wrapper: streaming generation with prompt caching (T5.1).
 
 A thin, testable seam over `anthropic.Anthropic`. The graph/AI layers depend on

@@ -1,3 +1,6 @@
+# CodeGraph -- Copyright (c) 2026 Kunal Mathur.
+# Source-available under PolyForm Noncommercial 1.0.0. See LICENSE.
+# https://github.com/kunal202426/CodeGraph-Intelligence
 """Canned graph queries used by the CLI and (later) the FastAPI / MCP servers.
 
 Each function takes a raw `duckdb.DuckDBPyConnection` (i.e. `store.conn`) and

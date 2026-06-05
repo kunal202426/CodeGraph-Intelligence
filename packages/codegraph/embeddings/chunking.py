@@ -1,3 +1,6 @@
+# CodeGraph -- Copyright (c) 2026 Kunal Mathur.
+# Source-available under PolyForm Noncommercial 1.0.0. See LICENSE.
+# https://github.com/kunal202426/CodeGraph-Intelligence
 """Build the text that represents an entity for embedding.
 
 The embedding input combines an entity's structural identity (type + qualified

@@ -1,3 +1,6 @@
+# CodeGraph -- Copyright (c) 2026 Kunal Mathur.
+# Source-available under PolyForm Noncommercial 1.0.0. See LICENSE.
+# https://github.com/kunal202426/CodeGraph-Intelligence
 """GraphStore — DuckDB-backed persistence for files / entities / edges.
 
 The store is the only place that touches DuckDB. Parsers emit UIREntity / Edge

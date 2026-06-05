@@ -13,6 +13,29 @@ MCP — so the agent queries the graph instead of re-reading your files every me
 
 ---
 
+## License & attribution
+
+**CodeGraph is source-available, not open-source.** It is licensed under the
+[PolyForm Noncommercial License 1.0.0](LICENSE).
+
+**You may:**
+- Read the code, learn from it, and run it locally for your own work.
+- Modify it and contribute changes back via pull requests.
+- Use it personally, for research, hobby projects, study, or inside a nonprofit /
+  educational / public-sector organization.
+
+**You may NOT:**
+- Use it commercially — selling it, hosting it as a paid service, embedding it in a
+  product you sell, or shipping it as part of a for-profit offering.
+- Re-publish it under your own name, rebrand it, or claim it as your own work.
+
+**For commercial use,** contact me via my GitHub profile: [github.com/kunal202426](https://github.com/kunal202426).
+
+Built and maintained by **Kunal Mathur**. Every source file carries an attribution
+header — please keep it intact in copies and forks.
+
+---
+
 ## The problem it solves
 
 Every time you ask Claude a question about your code, it re-reads your entire codebase.

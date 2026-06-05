@@ -1,3 +1,6 @@
+# CodeGraph -- Copyright (c) 2026 Kunal Mathur.
+# Source-available under PolyForm Noncommercial 1.0.0. See LICENSE.
+# https://github.com/kunal202426/CodeGraph-Intelligence
 """Cross-file symbol resolver — closes provisional import dst_ids to real entity_ids.
 
 After T2.1, the graph contains import edges whose `dst_id` follows one of these

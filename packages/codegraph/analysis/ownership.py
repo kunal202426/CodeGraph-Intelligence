@@ -1,3 +1,6 @@
+# CodeGraph -- Copyright (c) 2026 Kunal Mathur.
+# Source-available under PolyForm Noncommercial 1.0.0. See LICENSE.
+# https://github.com/kunal202426/CodeGraph-Intelligence
 """Per-entity code ownership via `git blame` (T9.1).
 
 Given an entity's file + line span, run `git blame --line-porcelain` over just

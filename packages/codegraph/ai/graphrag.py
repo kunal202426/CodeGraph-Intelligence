@@ -1,3 +1,6 @@
+# CodeGraph -- Copyright (c) 2026 Kunal Mathur.
+# Source-available under PolyForm Noncommercial 1.0.0. See LICENSE.
+# https://github.com/kunal202426/CodeGraph-Intelligence
 """GraphRAG retrieval: vector seeds + 1-hop graph expansion, re-ranked (T5.2).
 
 The retrieval core for `ask` / `summarize`. Pure-text vector search alone misses

@@ -34,8 +34,19 @@ def test_urls_point_at_repo() -> None:
 
 def test_classifiers_declare_license_and_python() -> None:
     classifiers = _project()["classifiers"]
-    assert any("MIT License" in c for c in classifiers)
+    # Source-available under PolyForm Noncommercial 1.0.0; no SPDX trove classifier
+    # exists for it, so PyPI's "Other/Proprietary License" is the canonical fallback.
+    assert any("Other/Proprietary License" in c for c in classifiers)
     assert any("Python :: 3.11" in c for c in classifiers)
+
+
+def test_license_text_is_polyform_noncommercial() -> None:
+    p = _project()
+    assert p["license"]["text"] == "PolyForm-Noncommercial-1.0.0"
+    license_file = _PYPROJECT.parent / "LICENSE"
+    text = license_file.read_text(encoding="utf-8")
+    assert "PolyForm Noncommercial" in text
+    assert "Kunal Mathur" in text
 
 
 def test_keywords_present() -> None:

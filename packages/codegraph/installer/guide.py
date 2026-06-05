@@ -1,3 +1,6 @@
+# CodeGraph -- Copyright (c) 2026 Kunal Mathur.
+# Source-available under PolyForm Noncommercial 1.0.0. See LICENSE.
+# https://github.com/kunal202426/CodeGraph-Intelligence
 """Agent-guide writer: manages a CodeGraph block inside a project's CLAUDE.md.
 
 The block tells the agent to prefer CodeGraph's MCP tools over reading files.

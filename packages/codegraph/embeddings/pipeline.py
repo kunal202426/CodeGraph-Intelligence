@@ -1,3 +1,6 @@
+# CodeGraph -- Copyright (c) 2026 Kunal Mathur.
+# Source-available under PolyForm Noncommercial 1.0.0. See LICENSE.
+# https://github.com/kunal202426/CodeGraph-Intelligence
 """Local embedding pipeline using sentence-transformers.
 
 The model (`all-MiniLM-L6-v2`, 384-dim, ~80 MB) is downloaded to the HuggingFace

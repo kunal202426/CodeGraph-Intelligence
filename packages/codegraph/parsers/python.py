@@ -1,3 +1,6 @@
+# CodeGraph -- Copyright (c) 2026 Kunal Mathur.
+# Source-available under PolyForm Noncommercial 1.0.0. See LICENSE.
+# https://github.com/kunal202426/CodeGraph-Intelligence
 """Python parser — tree-sitter recursive walk → UIREntity stream.
 
 Emits one Module entity per file plus one Function/Class/Method per top-level

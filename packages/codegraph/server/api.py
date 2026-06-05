@@ -1,3 +1,6 @@
+# CodeGraph -- Copyright (c) 2026 Kunal Mathur.
+# Source-available under PolyForm Noncommercial 1.0.0. See LICENSE.
+# https://github.com/kunal202426/CodeGraph-Intelligence
 """FastAPI app exposing the graph for the web UI (T6.1).
 
 `create_app(db_path)` builds an app bound to one indexed DuckDB file. Each
