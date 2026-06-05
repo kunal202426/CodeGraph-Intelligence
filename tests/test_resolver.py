@@ -441,3 +441,71 @@ def test_resolved_edge_keeps_src_id_and_type_and_line(tmp_path: Path) -> None:
     assert src_id == "py:main.py:main"
     assert edge_type == "imports"
     assert line == 3
+
+
+# ---------- src-layout (packages/ src/ app/) resolution ----------
+
+
+def test_strip_source_roots_helper() -> None:
+    from codegraph.graph.resolver import _strip_source_roots
+
+    assert _strip_source_roots("packages.codegraph.graph.queries") == "codegraph.graph.queries"
+    assert _strip_source_roots("src.myapp.util") == "myapp.util"
+    assert _strip_source_roots("app.handlers") == "handlers"
+    # No source root -> None (nothing stripped).
+    assert _strip_source_roots("codegraph.graph.queries") is None
+    assert _strip_source_roots("util") is None
+
+
+def test_src_layout_absolute_import_resolves(tmp_path: Path) -> None:
+    """A `packages/` src-layout: `from myapp.util import compute` must resolve to
+    the in-repo entity, not fall through to external (the bug that gutted the
+    call graph on every src-layout project)."""
+    db = _index(
+        tmp_path,
+        {
+            "packages/myapp/__init__.py": "",
+            "packages/myapp/util.py": "def compute():\n    return 1\n",
+            "packages/myapp/main.py": (
+                "from myapp.util import compute\n\n\ndef caller():\n    return compute()\n"
+            ),
+        },
+    )
+    store = GraphStore(db)
+    try:
+        dsts = {dst for _, dst, _ in _edges(store)}
+        # Import resolved to the real entity (not external:myapp.util.compute).
+        assert "py:packages/myapp/util.py:compute" in dsts
+        # And the CALL caller()->compute() resolved in-repo, so impact works:
+        callers = store.conn.execute(
+            "SELECT src_id FROM edges WHERE dst_id = ? AND type = 'calls'",
+            ["py:packages/myapp/util.py:compute"],
+        ).fetchall()
+    finally:
+        store.close()
+    assert any("caller" in c[0] for c in callers), f"expected caller->compute call edge: {callers}"
+
+
+def test_src_layout_module_import_resolves_to_real_module_id(tmp_path: Path) -> None:
+    """`import myapp.util` under a src-layout resolves to the module entity whose
+    id keeps the file-derived qname (with the `packages.` prefix)."""
+    db = _index(
+        tmp_path,
+        {
+            "packages/myapp/__init__.py": "",
+            "packages/myapp/util.py": "def f():\n    return 1\n",
+            "packages/myapp/main.py": "import myapp.util\n",
+        },
+    )
+    store = GraphStore(db)
+    try:
+        dsts = {dst for _, dst, _ in _edges(store)}
+        # The reconstructed id must be the real module entity, which exists.
+        assert "py:packages/myapp/util.py:packages.myapp.util" in dsts
+        exists = store.conn.execute(
+            "SELECT 1 FROM entities WHERE entity_id = ?",
+            ["py:packages/myapp/util.py:packages.myapp.util"],
+        ).fetchone()
+    finally:
+        store.close()
+    assert exists is not None, "module import must resolve to an entity that actually exists"

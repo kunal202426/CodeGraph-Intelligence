@@ -226,9 +226,19 @@ def _build_indexes(store: GraphStore) -> _Indexes:
 
     by_module_qname: dict[str, str] = {}
     known_files: set[str] = set()
+    aliases: list[tuple[str, str]] = []  # (src-root-stripped qname, path)
     for (path,) in store.conn.execute("SELECT path FROM files").fetchall():
         known_files.add(path)
-        by_module_qname[_path_to_module_qname(path)] = path
+        qname = _path_to_module_qname(path)
+        by_module_qname[qname] = path
+        stripped = _strip_source_roots(qname)
+        if stripped:
+            aliases.append((stripped, path))
+    # Register src-layout aliases after all full qnames, and never clobber a real
+    # full qname (setdefault) — so `codegraph.x` resolves to `packages/codegraph/x.py`
+    # without shadowing an actual top-level `codegraph/x.py`.
+    for stripped, path in aliases:
+        by_module_qname.setdefault(stripped, path)
 
     return _Indexes(
         by_file_name=by_file_name,
@@ -274,6 +284,28 @@ def _path_to_module_qname(path: str) -> str:
             stem = stem[: -len(ext)]
             break
     return stem.replace("/", ".")
+
+
+# Common source-root directory names. In a src-layout repo the importable package
+# starts *below* one of these (e.g. `packages/codegraph/...` is imported as
+# `codegraph...`). The file-derived module qname keeps the prefix, so without
+# stripping it, every internal absolute import — and therefore every cross-module
+# call — would fall through to `external:`, gutting impact/trace on real projects.
+_SOURCE_ROOT_SEGMENTS = frozenset({"src", "packages", "lib", "app", "source"})
+
+
+def _strip_source_roots(qname: str) -> str | None:
+    """Drop leading source-root segments from a module qname.
+
+    `packages.codegraph.graph.queries` → `codegraph.graph.queries`. Returns the
+    stripped qname only if something was stripped (and a non-empty remainder
+    survives), else ``None``.
+    """
+    parts = qname.split(".")
+    i = 0
+    while i < len(parts) - 1 and parts[i] in _SOURCE_ROOT_SEGMENTS:
+        i += 1
+    return ".".join(parts[i:]) if i > 0 else None
 
 
 # ----------------------------------------------------------------------
@@ -340,7 +372,10 @@ def _resolve_absolute(
     # The whole path *is* a module (e.g. `import auth.login`).
     if qname in by_module_qname:
         file = by_module_qname[qname]
-        return f"py:{file}:{qname}", 1.0
+        # Reconstruct from the file's real module qname, not the lookup key: a
+        # src-layout alias (`codegraph.graph.queries`) differs from the module
+        # entity's actual qname (`packages.codegraph.graph.queries`).
+        return f"py:{file}:{_path_to_module_qname(file)}", 1.0
 
     # Try splitting `module.name`.
     if "." in qname:
