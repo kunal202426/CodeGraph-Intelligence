@@ -2,9 +2,9 @@
 
 ## Current
 
-- **Status:** ACTIVE — Phases 14-18 "actually usable" roadmap COMPLETE.
-- **Phase:** 18 — First-run + distribution [DONE 5/5]
-- **Next task:** (roadmap complete — optional: PyPI publish (manual), CLI-subdir discovery, lock-contention hardening)
+- **Status:** ACTIVE — roadmap complete; product audit + E2E verification done.
+- **Phase:** Audit & verification (dogfood CodeGraph on CodeGraph) [DONE]
+- **Next task:** (optional: capture function-local imports — parsers/python.py:184-186; PyPI publish (manual); lock-contention hardening)
 - **Last session:** 2026-06-05
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
@@ -187,6 +187,33 @@ leave installed. The two gates that decided it:
 Then: one install serves every project (16, walk-up discovery), agents self-heal a stale
 index (17, `reindex` — and a real `indexed_at` bug fixed), and onboarding is one command
 with a legible first run + publishable packaging (18). 705 -> 769 tests.
+
+---
+
+## Product audit + E2E verification (dogfood CodeGraph on CodeGraph)
+
+Indexed this repo with itself (128 files, 1,507 entities, 6,186 edges, 100% embedded) and
+ran the full agent workflow locally (no paid LLM). Full report: [docs/VERIFICATION.md](docs/VERIFICATION.md).
+Headline: `get_context` summary is **9.6x** fewer tokens than reading the files it surfaces
+(1,108 vs 10,637) on a representative query. All 9 MCP tools verified live.
+
+Dogfooding surfaced issues the fixture suite missed — **3 fixed, 1 flagged**:
+- **[fixed]** `reindex` silently no-op'd with a relative `--db` (`_repo_root_for_db()` returned a
+  relative `Path('.')` vs absolute stale paths -> `relative_to()` raised, swallowed). Resolve
+  the root; surface a `failed` count.
+- **[fixed]** Cross-module call resolution broke on **src-layout** repos (`src/`/`packages/`/`app/`):
+  file-derived qnames keep the source-root prefix that imports omit, so internal imports/calls
+  fell to `external:`. Source-root-stripped qname aliases. **Impact on this repo: in-repo call
+  edges 1,145 -> 1,735 (+51%), `hybrid_search` callers 0 -> 11, impact blast radius works.**
+- **[fixed]** `get_context` summaries could re-bloat on hub functions -> cap neighbour lists at 8,
+  always report exact counts.
+- **[flagged]** Function-local imports (`from X import Y` inside a function) aren't captured
+  (`parsers/python.py:184-186`, module-level only by design), so calls via local imports resolve
+  external. Design-sensitive (conditional / TYPE_CHECKING imports); candidate next fix.
+
+Also confirmed solid (no action): MCP `call_tool` wraps every handler (never crashes); keyless
+`ask` degrades gracefully; entity_ids are Windows-safe (`.as_posix()` + validator); walker excludes
+`node_modules`/`.venv`. Removed dead `_stub` helper. 774 tests pass / 1 live-skip.
 
 - [x] T11.1 — `sync/watcher.py` module: `watchdog>=3.0` added; `packages/codegraph/sync/` subpackage with `RepoWatcher`, `index_one_file`, `delete_one_file`, `_DebounceHandler`, `ChangeEvent`. Debounce 300 ms default. Respects ALWAYS_EXCLUDE + .gitignore. Language-agnostic edge cleanup on re-index. 21 new tests. 566 tests passing.
 - [x] T11.2 — `codegraph watch <repo>` CLI command: long-running, ASCII status lines ([green]modified[/green] / [red]deleted[/red] with entity count + elapsed ms), Ctrl-C clean shutdown (stop + join with timeout). --no-embed, --debounce, --db flags. Note if index missing. Added "watch" to smoke expected set. 11 new tests. 577 tests passing.
