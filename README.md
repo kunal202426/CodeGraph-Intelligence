@@ -5,6 +5,8 @@ queryable graph, search it by meaning, ask grounded questions over a local + Ant
 GraphRAG pipeline, explore it in a browser, and expose it all to your coding agent over
 MCP — so the agent queries the graph instead of re-reading your files every message.
 **[In Development]**
+Manual Testing is going and there will be an update and release soon.
+meanwhile the secuirty potential vulnerabilites are fixed , i request you all to not use the MCP tool.
 
 ![CodeGraph demo](docs/demo.gif)
 
