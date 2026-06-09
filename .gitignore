@@ -58,3 +58,15 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# Local env / secrets
+.env
+.env.local
+.env.*.local
+
+# Editor / OS scratch
+*.bak
+*.tmp
+*.orig
+*~
+*.swn
