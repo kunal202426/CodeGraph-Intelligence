@@ -1,0 +1,18 @@
+# Normalize line endings across platforms.
+* text=auto eol=lf
+
+# Windows-only files keep CRLF.
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+
+# Binary assets — never munge.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.duckdb binary
+*.onnx  binary
+*.gguf  binary
+*.safetensors binary
