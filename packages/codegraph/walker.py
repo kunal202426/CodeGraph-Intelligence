@@ -71,6 +71,14 @@ ALWAYS_EXCLUDE: frozenset[str] = frozenset(
         ".tox",
         ".idea",
         ".vscode",
+        # Rust / Cargo / Maven build output — can contain millions of generated files.
+        "target",
+        # Python egg directories produced by setuptools.
+        ".eggs",
+        "eggs",
+        # Coverage / profiling artefacts.
+        "htmlcov",
+        ".coverage",
     }
 )
 
