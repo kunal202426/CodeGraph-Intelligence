@@ -13,6 +13,8 @@ Public API
 ----------
 estimate_tokens(text) -> int
     Approximate token count for a string (>= 1 for any non-empty text).
+truncate_to_tokens(text, max_tokens) -> str
+    Return a prefix of *text* that fits within *max_tokens* (best-effort).
 """
 
 from __future__ import annotations
@@ -31,3 +33,19 @@ def estimate_tokens(text: str) -> int:
     if not text:
         return 0
     return max(1, len(text) // _CHARS_PER_TOKEN)
+
+
+def truncate_to_tokens(text: str, max_tokens: int) -> str:
+    """Return a prefix of *text* that fits within *max_tokens*.
+
+    Uses the same heuristic as `estimate_tokens`. The truncation is done on a
+    character boundary (never splits mid-word or mid-line); the returned string
+    satisfies ``estimate_tokens(result) <= max_tokens``.
+
+    Returns the original string unchanged when it already fits. Returns an
+    empty string when *max_tokens* is <= 0.
+    """
+    if max_tokens <= 0:
+        return ""
+    max_chars = max_tokens * _CHARS_PER_TOKEN
+    return text[:max_chars]
