@@ -16,7 +16,9 @@ import duckdb
 
 # Entity-id language prefixes — used by `find_entity_by_name_or_id` to tell
 # "this is an entity_id, not a free-form name" without a regex.
-_ENTITY_ID_PREFIXES = ("py:", "ts:", "js:")
+# Must cover every lang CodeGraph indexes so that passing a full entity_id as
+# a query (e.g. "go:pkg/server.go:Handler") triggers the exact-match branch.
+_ENTITY_ID_PREFIXES = ("py:", "ts:", "js:", "go:", "rs:", "java:", "rb:", "php:", "c:", "cpp:")
 
 
 @dataclass(frozen=True)
