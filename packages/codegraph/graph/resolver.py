@@ -3,23 +3,34 @@
 # https://github.com/kunal202426/CodeGraph-Intelligence
 """Cross-file symbol resolver — closes provisional import dst_ids to real entity_ids.
 
-After T2.1, the graph contains import edges whose `dst_id` follows one of these
-provisional encodings:
+After the parse pass, the graph contains import edges whose `dst_id` follows
+provisional encodings (one per language). This module rewrites them in-place
+to real entity_ids or stable external/wildcard markers.
 
-- `py:?:<module>.<name>`     — `from <module> import <name>` (absolute)
-- `py:?:<module>`            — `import <module>` (the module itself)
-- `py:?:<module>.*`          — `from <module> import *` (wildcard)
-- `py:?rel<N>:<rest>`        — relative import, N leading dots
+Provisional → resolved mapping (Python example):
 
-This pass rewrites them in-place:
+  py:?:<module>.<name>    from <module> import <name> (absolute)
+  py:?:<module>           import <module>              (the module itself)
+  py:?:<module>.*         from <module> import *       (wildcard)
+  py:?rel<N>:<rest>       relative import, N leading dots
 
-- Resolved to a known entity_id:   `dst_id = py:<file>:<qualified_name>`, conf=1.0
-- Resolved to a module entity:     `dst_id = py:<file>:<module_qname>`, conf=1.0
-- Wildcard, module known:          `dst_id = wildcard:py:<file>`, conf=0.7
-- Anything else (stdlib, 3rd-party, broken path): `dst_id = external:<dotted>`, conf=0.5
+Output edge categories:
 
-The resolver is idempotent: a second run is a no-op since nothing left starts
-with `py:?`.
+  conf=1.0  → resolved to a known entity_id:  `py:<file>:<qualified_name>`
+  conf=1.0  → resolved to a module entity:    `py:<file>:<module_qname>`
+  conf=0.9  → resolved via import table (call resolved to an imported name)
+  conf=0.7  → wildcard, module known:         `wildcard:py:<file>`
+  conf=0.5  → stdlib / 3rd-party / unresolvable: `external:<dotted>`
+
+Supported languages: Python, TypeScript/JS, Go, Rust, Java, Ruby, PHP, C, C++.
+
+The resolver is idempotent — a second run is a no-op because no provisional
+`lang:?:...` edges remain after the first pass.
+
+Public API
+----------
+resolve_symbols(store) -> ResolutionStats
+    Rewrite all provisional edges in the graph. Returns counts.
 """
 
 from __future__ import annotations

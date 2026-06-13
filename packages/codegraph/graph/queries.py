@@ -1,11 +1,20 @@
 # CodeGraph -- Copyright (c) 2026 Kunal Mathur.
 # Source-available under PolyForm Noncommercial 1.0.0. See LICENSE.
 # https://github.com/kunal202426/CodeGraph-Intelligence
-"""Canned graph queries used by the CLI and (later) the FastAPI / MCP servers.
+"""Canned graph queries used by the CLI, FastAPI server, and MCP tools.
 
 Each function takes a raw `duckdb.DuckDBPyConnection` (i.e. `store.conn`) and
-returns plain Python tuples / dataclasses. Keep these query functions side-
-effect-free: callers wrap them in transactions or surface them as JSON.
+returns plain Python dataclasses. Keep these query functions side-effect-free:
+callers wrap them in transactions or surface them as JSON.
+
+Module layout
+-------------
+search_literal     — substring + docstring ILIKE, ranked by match quality
+vector_search      — cosine similarity over entity embeddings
+hybrid_search      — Reciprocal Rank Fusion of literal + vector results
+find_entity_by_name_or_id — resolve a user-typed reference to EntityRow(s)
+find_dependencies  — BFS outbound walk (imports + calls) → DepTree
+find_callers       — BFS inbound walk (reverse calls) → ImpactTree
 """
 
 from __future__ import annotations
