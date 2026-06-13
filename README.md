@@ -4,9 +4,10 @@
 queryable graph, search it by meaning, ask grounded questions over a local + Anthropic
 GraphRAG pipeline, explore it in a browser, and expose it all to your coding agent over
 MCP — so the agent queries the graph instead of re-reading your files every message.
-**[In Development]**
-Manual Testing is going and there will be an update and release soon.
-meanwhile the security potential vulnerabilites are fixed , i request you all to not use the MCP tool.
+
+> **Status: active development.** Core indexing, search, and MCP tools are stable.
+> Manual testing is underway ahead of a first wider release. The MCP server is
+> functional but not yet recommended for production use — treat it as a preview.
 
 ![CodeGraph demo](docs/demo.gif)
 
@@ -46,12 +47,13 @@ Claude still misses how files connect to each other (who calls what, what breaks
 change this function).
 
 CodeGraph indexes your code once into a graph, then answers *"what is relevant to this
-question?"* in **~500 tokens** instead of reading everything. In tests on this repo,
+question?"* in **~500 tokens** instead of reading everything. In benchmarks on this repo,
 `get_context` returned answers using **9.6x fewer tokens** than reading the files it
 surfaced. Faster, cheaper, and it understands the actual call graph across files.
 
-**THE TEST RESULTS ARE SIMULATED USING SCRIPTS FOR NOW**
-**NEXT PHASE IS USER TESTING WITH DISTRIBUTION TO FIRST %) USERS**
+> **Note:** the 9.6x figure comes from a benchmark script run against this repo's own
+> index. Real-world savings will vary by project size and query type. User testing
+> across diverse repos is in progress.
 
 ---
 
