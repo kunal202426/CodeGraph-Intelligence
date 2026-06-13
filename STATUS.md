@@ -3,10 +3,16 @@
 ## Current
 
 - **Status:** ACTIVE — roadmap complete; product audit + E2E verification done.
-- **Phase:** Audit & verification (dogfood CodeGraph on CodeGraph) [DONE]
+- **Phase:** Maintenance & hardening (post-audit fixes, repo hygiene)
 - **Next task:** (optional: capture function-local imports — parsers/python.py:184-186; PyPI publish (manual); lock-contention hardening)
-- **Last session:** 2026-06-05
+- **Last session:** 2026-06-14
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
+
+### Session 2026-06-14 — maintenance round
+- `fix: extend entity-id prefix list` — `_ENTITY_ID_PREFIXES` now covers all 9 indexed languages so Go/Rust/Java/etc entity IDs are exact-matched in `find_entity_by_name_or_id` instead of falling through to name lookup.
+- `walker: exclude target/, .eggs, htmlcov` — Rust/Cargo/Maven build output and Python egg dirs are now pruned during traversal, preventing build artefacts from polluting the index.
+- `resolver: expand C/C++ stdlib header exclusion list` — ~50 missing C++ stdlib headers (optional, variant, span, ranges, concepts, semaphore, expected, …) no longer get probed against user files.
+- `tokens: add truncate_to_tokens() helper` — callers that budget with `estimate_tokens` can now enforce the budget consistently with the same heuristic.
 
 ## Phase progress
 
