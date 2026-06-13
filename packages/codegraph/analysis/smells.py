@@ -3,17 +3,30 @@
 # https://github.com/kunal202426/CodeGraph-Intelligence
 """Heuristic code-smell detection (T4.5).
 
-Four cheap, graph/AST-derived heuristics — no LLM, no full type analysis:
+Four cheap, graph/AST-derived heuristics — no LLM, no full type analysis.
+All four run on whatever data is already in the DuckDB graph; no extra passes.
 
   * god-class        — a class with too many methods (low cohesion / does too much)
-  * large-class      — a class spanning too many lines
-  * high-coupling    — a module that imports from too many other places (high fan-out)
-  * complex-function — a function/method with high cyclomatic complexity
+  * large-class      — a class spanning too many lines (harder to reason about)
+  * high-coupling    — a module that imports from too many other places (high fan-out,
+                       brittle to upstream changes)
+  * complex-function — a function/method with high approximate cyclomatic complexity
+                       (counted from decision keywords in raw_source — fast but noisy)
 
 Each detector compares a measured metric against a configurable threshold and
 emits a `Smell`. Results are ranked by *severity* = metric / threshold (how many
 times over the limit it is), so the worst offenders sort first regardless of
 which heuristic flagged them.
+
+All thresholds are intentionally conservative — the defaults flag genuinely large
+entities, not merely above-average ones. Tune via `detect_smells(...)` kwargs.
+
+Public API
+----------
+detect_smells(conn, **threshold_kwargs) -> list[Smell]
+    Run all four detectors and return smells ranked worst-first.
+cyclomatic_complexity(source) -> int
+    Standalone complexity estimate (useful for one-off checks outside the DB).
 """
 
 from __future__ import annotations

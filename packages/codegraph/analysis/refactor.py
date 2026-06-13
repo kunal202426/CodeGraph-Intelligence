@@ -5,16 +5,23 @@
 
 Currently: dead-code detection — top-level functions and classes that nothing in
 the indexed graph calls or imports. This is a *candidate* list, not proof: a
-symbol can be reached in ways the static graph can't see, so the detector errs
-toward excluding likely-live entities.
+symbol can be reached in ways the static graph can't see (dynamic dispatch,
+decorator-registered routes, external consumers), so the detector errs toward
+excluding likely-live entities rather than flooding the caller with noise.
 
-Known false positives (documented, conservatively handled):
-  * framework entrypoints reached via decorators (FastAPI routes, CLI commands)
-    or dynamic dispatch — not visible as in-graph edges;
-  * public API exported for external consumers;
-  * test functions and dunder methods (excluded by name);
-  * methods (excluded by default — `self.x()` call resolution is weak, so methods
-    produce too many false positives; pass include_methods=True to opt in).
+Excluded by design:
+  * `main` / `__main__` — conventional entrypoints, always live.
+  * Names starting with `test_` — invoked by the test runner, not the call graph.
+  * Dunder methods (`__init__`, `__str__`, …) — called implicitly by Python.
+  * Methods (by default) — `self.x()` call resolution is lossy in a static graph
+    and produces far too many false positives. Pass `include_methods=True` to
+    opt in when you understand the trade-off.
+
+Public API
+----------
+find_dead_code(conn, *, include_methods=False) -> list[DeadEntity]
+    Return functions/classes with no inbound calls or imports, sorted by
+    file and start line.
 """
 
 from __future__ import annotations
