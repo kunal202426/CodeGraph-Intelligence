@@ -60,6 +60,16 @@ def test_context_no_match(indexed_db: Path) -> None:
     assert "No results" in _plain(result.output)
 
 
+def test_context_shows_token_savings_footer(indexed_db: Path) -> None:
+    """The context command prints a token-savings line so the user sees the win."""
+    result = runner.invoke(app, ["context", "authenticate", "--db", str(indexed_db)])
+    assert result.exit_code == 0
+    out = _plain(result.output)
+    assert "tokens returned" in out
+    assert "to read these files" in out
+    assert "less" in out
+
+
 def test_context_missing_db(tmp_path: Path) -> None:
     result = runner.invoke(app, ["context", "foo", "--db", str(tmp_path / "nope.duckdb")])
     assert result.exit_code == 1

@@ -29,7 +29,7 @@ from typing import Any
 from mcp.server import Server
 from mcp.types import TextContent, Tool
 
-from codegraph.graph.queries import find_callers, hybrid_search
+from codegraph.graph.queries import find_callers, hybrid_search, read_baseline_tokens
 from codegraph.graph.store import GraphStore
 
 DEFAULT_DB = Path(".codegraph/graph.duckdb")
@@ -508,6 +508,9 @@ def _get_context(args: dict[str, Any]) -> str:
                     "detail": detail,
                     "truncated": False,
                     "tokens_estimated": 0,
+                    "tokens_if_read": 0,
+                    "tokens_saved": 0,
+                    "savings_ratio": 0.0,
                     "warnings": warnings,
                     "entities": [],
                 }
@@ -577,6 +580,14 @@ def _get_context(args: dict[str, Any]) -> str:
             used_tokens += entity_tokens
             entities.append(entity)
 
+        # Savings: how many tokens reading the surfaced entities' files in full
+        # would cost, versus the (lean) context we actually returned.
+        tokens_if_read = read_baseline_tokens(
+            store.conn, [e["file"] for e in entities if e.get("file")]
+        )
+        tokens_saved = max(0, tokens_if_read - used_tokens)
+        savings_ratio = round(tokens_if_read / used_tokens, 1) if used_tokens else 0.0
+
         return json.dumps(
             {
                 "query": query,
@@ -584,6 +595,9 @@ def _get_context(args: dict[str, Any]) -> str:
                 "detail": detail,
                 "truncated": truncated,
                 "tokens_estimated": used_tokens,
+                "tokens_if_read": tokens_if_read,
+                "tokens_saved": tokens_saved,
+                "savings_ratio": savings_ratio,
                 "warnings": warnings,
                 "entities": entities,
             }

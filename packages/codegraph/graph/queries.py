@@ -19,15 +19,40 @@ find_callers       — BFS inbound walk (reverse calls) → ImpactTree
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 import duckdb
+
+from codegraph.ai.tokens import estimate_tokens
 
 # Entity-id language prefixes — used by `find_entity_by_name_or_id` to tell
 # "this is an entity_id, not a free-form name" without a regex.
 # Must cover every lang CodeGraph indexes so that passing a full entity_id as
 # a query (e.g. "go:pkg/server.go:Handler") triggers the exact-match branch.
 _ENTITY_ID_PREFIXES = ("py:", "ts:", "js:", "go:", "rs:", "java:", "rb:", "php:", "c:", "cpp:")
+
+
+def read_baseline_tokens(conn: duckdb.DuckDBPyConnection, files: Iterable[str]) -> int:
+    """Estimate the tokens an agent would spend reading *files* in full.
+
+    Sums ``estimate_tokens`` over the ``raw_source`` of every indexed entity in
+    the given files — i.e. roughly what it costs to read those whole files. Used
+    to show how many tokens ``get_context`` / the ``context`` CLI saved versus
+    opening the files directly. The result is an estimate (4-chars/token
+    heuristic, and it omits non-entity lines like imports/blank space), so it is
+    a conservative lower bound on the real read cost.
+    """
+    unique = [f for f in dict.fromkeys(files) if f]
+    if not unique:
+        return 0
+    placeholders = ",".join(["?"] * len(unique))
+    rows = conn.execute(
+        f"SELECT raw_source FROM entities "
+        f"WHERE file IN ({placeholders}) AND raw_source IS NOT NULL",
+        unique,
+    ).fetchall()
+    return sum(estimate_tokens(r[0]) for r in rows)
 
 
 @dataclass(frozen=True)

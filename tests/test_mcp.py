@@ -492,6 +492,25 @@ def test_get_context_reports_token_estimate(indexed_db: Path) -> None:
     assert "truncated" in data
 
 
+def test_get_context_reports_token_savings(indexed_db: Path) -> None:
+    """get_context surfaces a savings comparison vs reading the files in full."""
+    data = _call("get_context", {"query": "authenticate"})
+    for key in ("tokens_if_read", "tokens_saved", "savings_ratio"):
+        assert key in data
+    # Reading the full files costs at least as much as the lean context.
+    assert data["tokens_if_read"] >= data["tokens_estimated"]
+    assert data["tokens_saved"] == max(0, data["tokens_if_read"] - data["tokens_estimated"])
+    assert data["savings_ratio"] >= 1.0
+
+
+def test_get_context_no_match_has_zero_savings(indexed_db: Path) -> None:
+    data = _call("get_context", {"query": "zzz_no_such_symbol_42"})
+    assert data["total"] == 0
+    assert data["tokens_if_read"] == 0
+    assert data["tokens_saved"] == 0
+    assert data["savings_ratio"] == 0.0
+
+
 def test_get_context_respects_token_budget(indexed_db: Path) -> None:
     """A tiny budget caps the entity count and flags truncation."""
     tiny = _call("get_context", {"query": "authenticate", "limit": 10, "max_tokens": 100})

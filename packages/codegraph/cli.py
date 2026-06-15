@@ -26,6 +26,7 @@ from codegraph.graph.queries import (
     find_dependencies,
     find_entity_by_name_or_id,
     hybrid_search,
+    read_baseline_tokens,
 )
 from codegraph.graph.resolver import resolve_symbols
 from codegraph.graph.store import GraphStore
@@ -963,15 +964,20 @@ def context(
         table.add_column("Callees", justify="right")
         table.add_column("Doc", overflow="fold", max_width=40)
 
+        from codegraph.ai.tokens import estimate_tokens
+
+        files_seen: list[str] = []
+        returned_tokens = 0
         for hit in hits:
             eid = hit.entity_id
             row = store.conn.execute(
-                "SELECT type, name, file, start_line, docstring FROM entities WHERE entity_id = ?",
+                "SELECT type, name, file, start_line, signature, docstring "
+                "FROM entities WHERE entity_id = ?",
                 [eid],
             ).fetchone()
             if row is None:
                 continue
-            etype, name, file_, start_line, doc = row
+            etype, name, file_, start_line, signature, doc = row
             n_called_by = store.conn.execute(
                 "SELECT COUNT(DISTINCT src_id) FROM edges WHERE dst_id = ? AND type = 'calls'",
                 [eid],
@@ -993,8 +999,21 @@ def context(
                 str(n_depends_on),
                 first_doc,
             )
+            # Lean summary an agent would consume for this entity.
+            returned_tokens += estimate_tokens(f"{name} {signature or ''} {doc or ''} {loc}")
+            if file_:
+                files_seen.append(file_)
+
+        tokens_if_read = read_baseline_tokens(store.conn, files_seen)
 
     console.print(table)
+    if returned_tokens and tokens_if_read > returned_tokens:
+        ratio = tokens_if_read / returned_tokens
+        console.print(
+            f"[green]~{returned_tokens:,} tokens returned[/green] vs "
+            f"[yellow]~{tokens_if_read:,} to read these files[/yellow] "
+            f"-- ~{ratio:.1f}x less [dim](estimate)[/dim]"
+        )
     console.print(
         "[dim]Use [bold]codegraph deps <name>[/bold] or "
         "[bold]codegraph impact <name>[/bold] to explore further.[/dim]"
