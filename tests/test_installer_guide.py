@@ -36,6 +36,17 @@ def test_write_block_is_under_400_tokens(tmp_path: Path) -> None:
     assert len(text) / 4 < 400
 
 
+def test_guide_is_strong_mandate_with_savings_instruction(tmp_path: Path) -> None:
+    """The guide must (a) require CodeGraph before reading files and (b) tell the
+    agent to report the token savings — the two levers behind 'auto-use'."""
+    text = write_agent_guide(tmp_path).read_text(encoding="utf-8")
+    assert "REQUIRED" in text
+    assert "Do NOT open a source file" in text
+    # Savings-reporting instruction references the get_context response fields.
+    assert "savings_ratio" in text
+    assert "tokens_if_read" in text
+
+
 def test_write_is_idempotent(tmp_path: Path) -> None:
     write_agent_guide(tmp_path)
     first = (tmp_path / GUIDE_FILENAME).read_text(encoding="utf-8")

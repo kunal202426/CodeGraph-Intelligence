@@ -27,31 +27,33 @@ _END = "<!-- END CODEGRAPH -->"
 # The managed block body (between the markers). Kept under ~400 tokens because the
 # agent reads it every message. ASCII-only.
 _BLOCK_BODY = """\
-## CodeGraph (code intelligence over MCP)
+## CodeGraph -- REQUIRED workflow (code intelligence over MCP)
 
-This repo is indexed by CodeGraph. **Prefer CodeGraph tools over reading files** -- they
-return ~10x fewer tokens and capture cross-file call/import relationships that reading
-single files misses.
+This repo is indexed by CodeGraph. Its tools return ~10x fewer tokens than reading files
+and capture cross-file call/import edges single files miss. Use them by default.
 
-**Every session:**
-1. Call `index_status` once. If it reports `stale: true`, call `reindex`.
-2. Before opening a source file to understand code, call
-   `get_context("<concept or symbol>")` FIRST. Only read a raw file when you need the
-   exact full body of one specific entity.
+**Rules (every task):**
+1. Call `index_status` once. If `stale: true`, call `reindex`.
+2. Do NOT open a source file to understand code until you have called
+   `get_context("<concept>")`. Read a raw file only for the exact full body of an entity
+   `get_context` surfaced.
+3. After a `get_context` call, report the savings: `CodeGraph: ~<tokens_estimated> vs
+   ~<tokens_if_read> tokens (<savings_ratio>x less)`.
 
 **Which tool:**
-- `get_context(query)` -- START HERE. Hybrid search + signatures + callers/callees.
-  Pass `detail="full"` only when you need complete source (1-2 entities max).
-- `get_entity_context(entity_id)` -- full source + neighbours for ONE known entity.
+- `get_context(query)` -- START HERE. Search + signatures + callers/callees, plus
+  `tokens_estimated` / `tokens_if_read` / `savings_ratio`. `detail="full"` = complete
+  source (1-2 entities max).
+- `get_entity_context(entity_id)` -- full source + neighbours for ONE entity.
 - `impact_analysis(entity_id)` -- what breaks if I change this (reverse callers).
-- `trace_path(from_id, to_id)` -- how does A reach B (shortest call chain).
-- `search_code(query)` -- fast id-only lookup when you just need entity_ids.
+- `trace_path(from_id, to_id)` -- shortest call chain A to B.
+- `search_code(query)` -- fast id-only lookup.
 
 **entity_id format:** `{lang}:{rel_path}:{qualified_name}`, e.g.
-`py:auth/login.py:authenticate`. Paths always use forward slashes.
+`py:auth/login.py:authenticate`. Forward slashes always.
 
-**Token discipline:** `get_context` defaults to summaries -- keep it that way. Don't
-request `detail="full"` for many entities at once."""
+**Token discipline:** keep `get_context` in summary mode; don't request `detail="full"`
+for many entities at once."""
 
 # The full managed block including markers.
 _MANAGED_BLOCK = f"{_BEGIN}\n{_BLOCK_BODY}\n{_END}"
