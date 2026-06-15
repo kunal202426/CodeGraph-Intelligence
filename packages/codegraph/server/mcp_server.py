@@ -772,6 +772,37 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> list[TextCon
     return [TextContent(type="text", text=text)]
 
 
+def _warm_embedding_model() -> None:
+    """Load the embedding model in the MAIN thread at startup.
+
+    ``get_context`` embeds its query for semantic search. Sync MCP handlers run
+    via ``anyio.to_thread``, so a lazy first load would import the heavy
+    sentence-transformers / torch / scikit-learn stack inside a worker thread
+    while the asyncio stdio loop runs in the main thread -- and a first-time
+    import of that stack off the main thread can deadlock or stall for minutes,
+    making the first ``get_context`` appear frozen. Pre-loading here, in the main
+    thread before the serve loop starts, makes the first call fast and reliable.
+
+    Skipped when the index has no embeddings. Non-fatal: any failure just falls
+    back to lazy loading + literal-only search (handlers already handle that).
+    """
+    import sys
+
+    try:
+        db = get_db_path()
+        if not db.exists():
+            return
+        with GraphStore(db, read_only=True) as store:
+            if store.count_embedded() == 0:
+                return
+        from codegraph.embeddings.pipeline import embed_one
+
+        embed_one("warmup")
+        print("CodeGraph: embedding model ready.", file=sys.stderr)
+    except Exception:  # noqa: BLE001 — warmup is best-effort; lazy load still works
+        pass
+
+
 async def _serve() -> None:
     from mcp.server.stdio import stdio_server
 
@@ -804,6 +835,10 @@ def main() -> None:
             )
     except Exception:  # noqa: BLE001 — staleness check is best-effort
         pass
+
+    # Warm the embedding model in the main thread BEFORE serving, so the first
+    # get_context doesn't trigger a heavy off-main-thread import that can hang.
+    _warm_embedding_model()
 
     import anyio
 

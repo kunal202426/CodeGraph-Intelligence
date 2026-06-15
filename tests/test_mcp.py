@@ -511,6 +511,30 @@ def test_get_context_no_match_has_zero_savings(indexed_db: Path) -> None:
     assert data["savings_ratio"] == 0.0
 
 
+# ---------- startup model warmup ----------
+
+
+def test_warm_embedding_model_skips_without_embeddings(
+    indexed_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A --no-embed index has no vectors, so startup must NOT load the model
+    (which would import the heavy torch/sklearn stack for nothing)."""
+    import codegraph.embeddings.pipeline as pipeline
+
+    called = {"n": 0}
+    monkeypatch.setattr(pipeline, "embed_one", lambda *_a, **_k: called.__setitem__("n", 1))
+    mcp_server._warm_embedding_model()
+    assert called["n"] == 0
+
+
+def test_warm_embedding_model_is_noop_when_db_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Warmup must never raise, even if the DB doesn't exist yet."""
+    monkeypatch.setattr(mcp_server, "_db_path", tmp_path / "nope.duckdb")
+    mcp_server._warm_embedding_model()  # should return quietly
+
+
 def test_get_context_respects_token_budget(indexed_db: Path) -> None:
     """A tiny budget caps the entity count and flags truncation."""
     tiny = _call("get_context", {"query": "authenticate", "limit": 10, "max_tokens": 100})
