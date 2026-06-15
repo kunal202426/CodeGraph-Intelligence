@@ -9,7 +9,23 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from codegraph.embeddings.pipeline import EMBEDDING_DIM, embed_batch, embed_one
+from codegraph.embeddings.pipeline import (
+    EMBEDDING_DIM,
+    _hf_cache_has_model,
+    embed_batch,
+    embed_one,
+)
+
+
+def test_hf_cache_has_model_detects_presence(tmp_path, monkeypatch) -> None:
+    """The filesystem cache probe (used to decide offline mode) finds a model
+    folder when present and reports absence otherwise."""
+    monkeypatch.setenv("HUGGINGFACE_HUB_CACHE", str(tmp_path))
+    monkeypatch.delenv("HF_HOME", raising=False)
+
+    assert _hf_cache_has_model("all-MiniLM-L6-v2") is False
+    (tmp_path / "models--sentence-transformers--all-MiniLM-L6-v2").mkdir()
+    assert _hf_cache_has_model("all-MiniLM-L6-v2") is True
 
 
 @pytest.fixture(scope="module", autouse=True)

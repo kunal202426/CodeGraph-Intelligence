@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import threading
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -26,6 +27,36 @@ if TYPE_CHECKING:
 
 DEFAULT_MODEL = "all-MiniLM-L6-v2"
 EMBEDDING_DIM = 384
+
+
+def _hf_cache_has_model(model_name: str) -> bool:
+    """True if the model's HF cache directory already exists on disk.
+
+    Deliberately a pure-filesystem check that does NOT import ``huggingface_hub``,
+    so we can decide to go offline *before* HF is ever imported (HF reads its
+    offline flags at import time). Honours HF_HOME / HUGGINGFACE_HUB_CACHE.
+    """
+    repo = model_name if "/" in model_name else f"sentence-transformers/{model_name}"
+    folder = "models--" + repo.replace("/", "--")
+    hub_cache = os.environ.get("HUGGINGFACE_HUB_CACHE")
+    if hub_cache:
+        root = Path(hub_cache)
+    else:
+        hf_home = os.environ.get("HF_HOME")
+        base = Path(hf_home) if hf_home else Path.home() / ".cache" / "huggingface"
+        root = base / "hub"
+    return (root / folder).is_dir()
+
+
+# When the model is already cached locally, load it fully offline. This skips the
+# HuggingFace Hub network round-trip (faster startup) and silences the misleading
+# "sending unauthenticated requests to the HF Hub" warning that the tokenizers
+# backend prints on every load — CodeGraph is offline-first and never needs the
+# Hub once the model is local. First-run downloads still work: if the model isn't
+# cached we leave HF online so it can fetch. Set before any HF import (below).
+if _hf_cache_has_model(DEFAULT_MODEL):
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 _model_lock = threading.Lock()
 _model_cache: dict[str, SentenceTransformer] = {}

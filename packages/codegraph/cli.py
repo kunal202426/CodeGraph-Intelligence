@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import sys
 import time
 from pathlib import Path
@@ -911,7 +912,11 @@ def serve(
     if open_browser:
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
     console.print(f"[green]Serving CodeGraph at[/green] [bold]{url}[/bold]  (Ctrl+C to stop)")
-    uvicorn.run(application, host=host, port=port, log_level="warning")
+    # Ctrl+C: uvicorn already tears down the server; suppress the resulting
+    # KeyboardInterrupt so it exits cleanly instead of unwinding as a traceback.
+    with contextlib.suppress(KeyboardInterrupt):
+        uvicorn.run(application, host=host, port=port, log_level="warning")
+    console.print("Server stopped.")
 
 
 @app.command()
