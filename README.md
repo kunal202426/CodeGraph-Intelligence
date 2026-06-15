@@ -198,18 +198,32 @@ uv run codegraph init
 `init` does three things automatically:
 - Indexes your code into `.codegraph/graph.duckdb` (~30 s for a medium project)
 - Registers CodeGraph as an MCP tool in your agent (Claude Code / Cursor / etc.)
-- Writes a `CLAUDE.md` guide so your agent knows to call CodeGraph before reading files
+- Writes a `CLAUDE.md` guide that **requires** your agent to call CodeGraph before reading
+  files — and to report the token savings back to you
 
-**Step 4 — Restart your agent**
+It finishes by self-verifying the index (`Verified: N entities`).
+
+**Step 4 — Confirm it's wired (optional but reassuring)**
+
+```bash
+uv run codegraph doctor
+```
+
+`doctor` prints a `PASS`/`FAIL` line for the index, MCP config, agent guide, and
+freshness — with the exact fix command for anything that needs attention.
+
+**Step 5 — Restart your agent**
 
 Close and reopen Claude Code (or Cursor / Codex / Gemini). The MCP server is not loaded
-until the agent restarts.
+until the agent restarts. *(This is the #1 step people miss.)*
 
-**Step 5 — Use it**
+**Step 6 — Use it**
 
-Ask Claude: *"use codegraph to explain how authentication works in this project"*
+Just ask Claude normally: *"explain how authentication works in this project"*
 
-Claude will call `get_context` once (~500 tokens) instead of reading your entire codebase.
+Because of the guide, Claude calls `get_context` first (~500 tokens instead of reading your
+whole codebase) and tells you the savings, e.g. *"CodeGraph: ~480 vs ~6,200 tokens (13x
+less)"*. You don't need to remember any commands — it uses CodeGraph automatically.
 
 ---
 
@@ -243,7 +257,7 @@ uv run codegraph serve
 uv run codegraph watch .
 ```
 
-Full command list: `uv run codegraph --help` — `init`, `index`, `search`, `deps`,
+Full command list: `uv run codegraph --help` — `init`, `doctor`, `index`, `search`, `deps`,
 `impact`, `cycles`, `smells`, `deadcode`, `owner`, `layers`, `ask`, `summarize`,
 `context`, `trace`, `status`, `watch`, `serve`, `install`, `uninstall`.
 

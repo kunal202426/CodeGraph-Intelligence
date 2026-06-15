@@ -2,11 +2,17 @@
 
 ## Current
 
-- **Status:** ACTIVE — roadmap complete; product audit + E2E + manual test passes done.
-- **Phase:** Maintenance & hardening (post-audit fixes, repo hygiene)
+- **Status:** ACTIVE — roadmap complete; product audit + E2E + manual test + usability passes done.
+- **Phase:** Maintenance & hardening (post-audit fixes, usability, repo hygiene)
 - **Next task:** (optional: persistent model service to kill per-CLI reload — see manual test #3; capture function-local imports — parsers/python.py:184-186; PyPI publish (manual))
 - **Last session:** 2026-06-15
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
+
+### Session 2026-06-15 (pm) — usability & auto-use pass
+Goal from owner feedback: connect a repo once → agent auto-uses CodeGraph → user sees the token savings → one command confirms setup. Three pillars:
+- `guide: make CLAUDE.md a required workflow + savings reporting` — the managed agent guide is now a REQUIRED workflow (call get_context before reading files) and tells the agent to report `~N vs ~M tokens (Xx less)`. This is what makes auto-use real.
+- `context: surface token savings vs reading files` — `read_baseline_tokens` helper in graph/queries; `get_context` MCP returns tokens_if_read/tokens_saved/savings_ratio; CLI `context` prints a savings footer.
+- `cli: add doctor health-check + init self-verify` — new `codegraph doctor` (index/MCP/guide/freshness with fix hints); `init` self-verifies and points to doctor.
 
 ### Session 2026-06-15 — manual test pass + fixes
 Full interactive manual test of every user-facing surface (CLI, web UI, watch, MCP install→query→uninstall). 21/21 surfaces passed; report at [docs/MANUAL_TEST_REPORT.md](docs/MANUAL_TEST_REPORT.md). Six issues found, all fixed or root-caused:
