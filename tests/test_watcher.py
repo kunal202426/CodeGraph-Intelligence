@@ -328,6 +328,36 @@ def test_debounce_handler_fires_callback_for_python_file(tmp_path: Path) -> None
     assert fired[0].elapsed_ms >= 0
 
 
+def test_debounce_handler_reports_db_lock_without_crashing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A DB held by another process must surface a clean error event, not a
+    thread crash (regression for the single-writer lock-contention finding)."""
+    import duckdb
+    from codegraph.sync import watcher as watcher_mod
+
+    fired: list = []
+    handler, repo, _ = _make_handler(tmp_path, fired, debounce_sec=0.0)
+
+    src = repo / "app.py"
+    src.write_text("def run():\n    pass\n", encoding="utf-8")
+
+    def _always_locked(*_args, **_kwargs):
+        raise duckdb.IOException("Cannot open file: used by another process")
+
+    # Zero backoff so the retry loop completes instantly (sleep(0) is a no-op).
+    monkeypatch.setattr(watcher_mod, "index_one_file", _always_locked)
+    monkeypatch.setattr(watcher_mod, "_LOCK_RETRY_BACKOFF_SEC", 0.0)
+
+    handler.dispatch(_MockEvent(src_path=src.resolve(), event_type="modified"))
+    time.sleep(0.4)
+
+    assert len(fired) == 1
+    assert fired[0].error is not None
+    assert "busy" in fired[0].error
+    assert fired[0].n_entities == 0
+
+
 def test_debounce_handler_fires_delete_callback(tmp_path: Path) -> None:
     fired: list = []
     handler, repo, db = _make_handler(tmp_path, fired, debounce_sec=0.0)

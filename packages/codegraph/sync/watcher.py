@@ -37,6 +37,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+import duckdb
 import pathspec
 
 from codegraph.graph.resolver import resolve_symbols
@@ -51,12 +52,21 @@ from codegraph.walker import ALWAYS_EXCLUDE, detect_language, walk
 
 @dataclass
 class ChangeEvent:
-    """Emitted to the on_change callback after each successful re-index."""
+    """Emitted to the on_change callback after each re-index attempt."""
 
     path: str  # repo-relative POSIX path, e.g. "src/auth/login.py"
     action: str  # "modified" | "created" | "deleted"
     n_entities: int  # entity count for the file after the update (0 if deleted)
     elapsed_ms: float  # wall-clock time for the re-index in milliseconds
+    error: str | None = None  # set when the re-index was skipped/failed (e.g. DB locked)
+
+
+# How many times to retry a re-index when the DB is locked by another process
+# (the MCP server, `serve`, or a concurrent `index`), and the backoff between
+# tries. DuckDB is single-writer, so a held lock is transient, not fatal — we
+# wait it out rather than letting the watcher thread crash.
+_LOCK_RETRY_ATTEMPTS = 4
+_LOCK_RETRY_BACKOFF_SEC = 0.25
 
 
 # --------------------------------------------------------------------------- #
@@ -351,18 +361,34 @@ class _DebounceHandler:
         rel_path = abs_path.relative_to(self._repo).as_posix()
         t0 = time.monotonic()
 
+        n_entities = 0
+        error: str | None = None
         with self._lock:
-            if action == "deleted":
-                delete_one_file(rel_path, self._db)
-                n_entities = 0
-            else:
-                n_entities = index_one_file(
-                    self._repo,
-                    abs_path,
-                    self._db,
-                    no_embed=self._no_embed,
-                    _parsers=self._parsers,
-                )
+            for attempt in range(_LOCK_RETRY_ATTEMPTS):
+                try:
+                    if action == "deleted":
+                        delete_one_file(rel_path, self._db)
+                        n_entities = 0
+                    else:
+                        n_entities = index_one_file(
+                            self._repo,
+                            abs_path,
+                            self._db,
+                            no_embed=self._no_embed,
+                            _parsers=self._parsers,
+                        )
+                    error = None
+                    break
+                except duckdb.IOException:
+                    # DB is held by another process (single-writer limit). Back off
+                    # and retry; only report if it never frees up.
+                    if attempt < _LOCK_RETRY_ATTEMPTS - 1:
+                        time.sleep(_LOCK_RETRY_BACKOFF_SEC * (attempt + 1))
+                        continue
+                    error = "database busy (held by another process) — change not indexed"
+                except Exception as exc:  # noqa: BLE001 — a watcher thread must never die
+                    error = f"re-index failed: {exc}"
+                    break
 
         elapsed_ms = (time.monotonic() - t0) * 1000
         if self._on_change is not None:
@@ -372,6 +398,7 @@ class _DebounceHandler:
                     action=action,
                     n_entities=n_entities,
                     elapsed_ms=elapsed_ms,
+                    error=error,
                 )
             )
 

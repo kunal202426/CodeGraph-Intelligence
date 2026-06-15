@@ -1118,7 +1118,9 @@ def watch(
 
     def _on_change(evt: ChangeEvent) -> None:
         ms = f"{evt.elapsed_ms:.0f}ms"
-        if evt.action == "deleted":
+        if evt.error is not None:
+            console.print(f"[yellow]skipped[/yellow]  {evt.path}  [dim]{evt.error}[/dim]")
+        elif evt.action == "deleted":
             console.print(f"[red]deleted[/red]  {evt.path}  [dim]{ms}[/dim]")
         else:
             n = evt.n_entities
