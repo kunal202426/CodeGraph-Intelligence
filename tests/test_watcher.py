@@ -328,9 +328,7 @@ def test_debounce_handler_fires_callback_for_python_file(tmp_path: Path) -> None
     assert fired[0].elapsed_ms >= 0
 
 
-def test_debounce_handler_reports_db_lock_without_crashing(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_debounce_handler_reports_db_lock_without_crashing(tmp_path: Path, monkeypatch) -> None:
     """A DB held by another process must surface a clean error event, not a
     thread crash (regression for the single-writer lock-contention finding)."""
     import duckdb
