@@ -92,6 +92,40 @@ def test_dunder_excluded(runner: CliRunner, tmp_path: Path) -> None:
     assert "__init__" not in names
 
 
+def test_framework_registered_excluded(runner: CliRunner, tmp_path: Path) -> None:
+    """Typer commands, HTTP routes, and pytest fixtures are invoked indirectly —
+    they must not be flagged as dead even with no in-graph callers."""
+    repo = tmp_path / "repo"
+    _make_repo(
+        repo,
+        {
+            "app.py": (
+                "import typer\n"
+                "app = typer.Typer()\n"
+                "\n"
+                "@app.command()\n"
+                "def serve():\n"
+                "    return 1\n"
+                "\n"
+                "@app.get('/health')\n"
+                "def health():\n"
+                "    return 'ok'\n"
+                "\n"
+                "def really_dead():\n"
+                "    return 2\n"
+            ),
+            "conftest.py": (
+                "import pytest\n\n@pytest.fixture\ndef client():\n    return object()\n"
+            ),
+        },
+    )
+    names = _names(repo, tmp_path / "g.duckdb", runner)
+    assert "serve" not in names  # @app.command()
+    assert "health" not in names  # @app.get(...)
+    assert "client" not in names  # @pytest.fixture
+    assert "really_dead" in names  # genuinely unreferenced, no decorator
+
+
 # ---------- CLI ----------
 
 

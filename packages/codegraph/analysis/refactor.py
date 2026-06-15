@@ -13,6 +13,10 @@ Excluded by design:
   * `main` / `__main__` — conventional entrypoints, always live.
   * Names starting with `test_` — invoked by the test runner, not the call graph.
   * Dunder methods (`__init__`, `__str__`, …) — called implicitly by Python.
+  * Framework-registered entities — anything decorated with a registration
+    decorator (Typer `@app.command`, FastAPI/Flask routes, pytest `@fixture`,
+    Celery `@task`, …). These are invoked indirectly, so no in-graph caller is
+    expected; flagging them was the dominant source of false positives.
   * Methods (by default) — `self.x()` call resolution is lossy in a static graph
     and produces far too many false positives. Pass `include_methods=True` to
     opt in when you understand the trade-off.
@@ -26,12 +30,37 @@ find_dead_code(conn, *, include_methods=False) -> list[DeadEntity]
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 import duckdb
 
 # Names that are entrypoints / implicitly invoked, never "dead" even with no callers.
 _ENTRYPOINT_NAMES = frozenset({"main", "__main__"})
+
+# Final segment of a decorator that registers an entity with a framework or the
+# test runner — the entity is invoked indirectly (CLI dispatch, HTTP routing,
+# fixture injection, task queue), which the static call graph cannot see. Such an
+# entity having no in-graph callers does NOT make it dead, so we exclude it.
+_REGISTRATION_DECORATORS = frozenset(
+    {
+        "command",  # Typer / Click
+        "callback",  # Typer
+        "fixture",  # pytest
+        "route",  # Flask / Starlette
+        "websocket",  # FastAPI / Starlette
+        "get",  # HTTP route verbs (FastAPI / Flask / APIRouter)
+        "post",
+        "put",
+        "delete",
+        "patch",
+        "head",
+        "options",
+        "task",  # Celery / task queues
+    }
+)
+
+_DECORATOR_RE = re.compile(r"^\s*@\s*([\w.]+)")
 
 
 @dataclass(frozen=True)
@@ -53,6 +82,31 @@ def _is_excluded(name: str) -> bool:
     return name.startswith("__") and name.endswith("__")  # dunders (implicit)
 
 
+def _is_framework_registered(raw_source: str | None) -> bool:
+    """True if the entity's leading decorators register it with a framework or
+    the test runner (Typer command, HTTP route, pytest fixture, …).
+
+    Inspects only the decorator block at the top of `raw_source` (lines before
+    the `def`/`class`). Matches on the decorator's final dotted segment, so both
+    ``@app.command()`` and ``@fixture`` are caught.
+    """
+    if not raw_source:
+        return False
+    for line in raw_source.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("@"):
+            match = _DECORATOR_RE.match(line)
+            if match and match.group(1).split(".")[-1] in _REGISTRATION_DECORATORS:
+                return True
+            continue
+        if stripped.startswith(("def ", "async def ", "class ")):
+            break  # reached the definition — no more decorators
+        if stripped == "":
+            continue  # blank line between decorators
+        break  # anything else: not a decorator block
+    return False
+
+
 def find_dead_code(
     conn: duckdb.DuckDBPyConnection,
     *,
@@ -70,7 +124,7 @@ def find_dead_code(
 
     rows = conn.execute(
         f"""
-        SELECT e.entity_id, e.type, e.name, e.file, e.start_line
+        SELECT e.entity_id, e.type, e.name, e.file, e.start_line, e.raw_source
         FROM entities e
         WHERE e.type IN ({type_placeholders})
           AND NOT EXISTS (
@@ -85,5 +139,5 @@ def find_dead_code(
     return [
         DeadEntity(entity_id=r[0], type=r[1], name=r[2], file=r[3], start_line=r[4])
         for r in rows
-        if not _is_excluded(r[2])
+        if not _is_excluded(r[2]) and not _is_framework_registered(r[5])
     ]
