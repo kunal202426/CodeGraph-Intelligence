@@ -400,6 +400,11 @@ for entities whose input changed. `ask` latency depends on the Anthropic API.
 tokens** than reading the files it surfaces (1,108 vs 10,637 tokens on a representative
 query). Full report: [docs/VERIFICATION.md](docs/VERIFICATION.md).
 
+**Manual test pass (2026-06-15):** every user-facing surface — CLI, web UI, watch
+daemon, and the MCP server (install → live query → uninstall) — run by hand on this repo.
+21/21 surfaces passed; 6 quality-of-life / robustness issues logged. Full report:
+[docs/MANUAL_TEST_REPORT.md](docs/MANUAL_TEST_REPORT.md).
+
 ## Roadmap
 
 Phases 10-13 ("best of both") and 14-18 ("actually usable") are complete:
