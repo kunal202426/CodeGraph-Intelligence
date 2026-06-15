@@ -70,6 +70,16 @@ def test_init_prints_three_steps_and_next_steps(tmp_path: Path, patched_claude) 
     assert "Done." in out
 
 
+def test_init_self_verifies_index(tmp_path: Path, patched_claude) -> None:
+    """init confirms the index resolved and is non-empty, and points at doctor."""
+    repo = _make_repo(tmp_path)
+    result = runner.invoke(app, ["init", str(repo), "--no-embed"])
+    out = _plain(result.output)
+    assert "Verified:" in out
+    assert "entities" in out
+    assert "codegraph doctor" in out
+
+
 def test_init_unknown_target_fails_before_indexing(tmp_path: Path, patched_claude) -> None:
     repo = _make_repo(tmp_path)
     result = runner.invoke(app, ["init", str(repo), "--target", "no_such_agent", "--no-embed"])

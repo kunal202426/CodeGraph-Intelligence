@@ -89,6 +89,7 @@ def test_cli_app_exposes_expected_commands() -> None:
         "install",  # T13.3
         "uninstall",  # T13.3
         "init",  # T18.2
+        "doctor",  # setup health check
     }
     # Typer stores explicit `name=` if given, else None — fall back to the function name.
     actual = {(cmd.name or cmd.callback.__name__) for cmd in app.registered_commands}

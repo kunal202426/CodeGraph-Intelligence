@@ -1307,6 +1307,88 @@ def uninstall(
         console.print("[dim]Removed the CodeGraph block from CLAUDE.md.[/dim]")
 
 
+def _count_entities(db: Path) -> int:
+    """Entity count in the index, or 0 if the DB is missing/unreadable."""
+    if not db.exists():
+        return 0
+    try:
+        with GraphStore(db) as store:
+            row = store.conn.execute("SELECT count(*) FROM entities").fetchone()
+        return int(row[0]) if row else 0
+    except Exception:  # noqa: BLE001 — a broken/locked DB just reads as "no index"
+        return 0
+
+
+@app.command()
+def doctor(
+    db: Path | None = typer.Option(
+        None, "--db", help="DuckDB graph file path (default: auto-discover from CWD)."
+    ),
+) -> None:
+    """Check that CodeGraph is set up correctly for this project.
+
+    Read-only health check: confirms the index exists, the MCP server is wired
+    into an agent, the agent guide is present, and the index is fresh. Prints a
+    fix command for anything that needs attention. Always exits 0.
+    """
+    from codegraph.graph.locate import discover_db
+    from codegraph.installer import list_targets
+    from codegraph.installer.guide import has_agent_guide
+    from codegraph.sync.watcher import count_stale_files
+
+    ok = "[green]PASS[/green]"
+    bad = "[red]FAIL[/red]"
+    console.print("[bold]CodeGraph doctor[/bold]\n")
+
+    # 1. Index present and non-empty.
+    resolved = db if db is not None else discover_db()
+    n_entities = _count_entities(resolved) if resolved is not None else 0
+    if n_entities > 0:
+        console.print(f"{ok}  Index: {n_entities} entities [dim]({resolved})[/dim]")
+    else:
+        console.print(f"{bad}  Index: none found -- run [bold]codegraph index .[/bold]")
+
+    # 2. MCP server wired into at least one agent.
+    configured = [
+        t.display_name
+        for t in list_targets()
+        if t.is_configured(global_=True) or t.is_configured(global_=False)
+    ]
+    if configured:
+        console.print(f"{ok}  MCP server wired into: {', '.join(configured)}")
+    else:
+        console.print(
+            f"{bad}  MCP server: not configured -- run [bold]codegraph install claude[/bold]"
+        )
+
+    # 3. Agent guide present (CLAUDE.md managed block).
+    if has_agent_guide(Path(".")):
+        console.print(f"{ok}  Agent guide present [dim](CLAUDE.md)[/dim]")
+    else:
+        console.print(
+            f"{bad}  Agent guide missing -- run [bold]codegraph install claude[/bold] (writes CLAUDE.md)"
+        )
+
+    # 4. Index freshness.
+    if resolved is not None and resolved.exists():
+        try:
+            stale = count_stale_files(Path("."), resolved)
+        except Exception:  # noqa: BLE001 — freshness check is best-effort
+            stale = 0
+        if stale > 0:
+            noun = "file" if stale == 1 else "files"
+            console.print(
+                f"{bad}  Index stale: {stale} {noun} changed -- "
+                "run [bold]codegraph index .[/bold] or [bold]codegraph watch .[/bold]"
+            )
+        else:
+            console.print(f"{ok}  Index is up to date")
+
+    console.print(
+        "\n[dim]Tip: restart your agent after any install so it loads the MCP server.[/dim]"
+    )
+
+
 @app.command()
 def init(
     repo: Path = typer.Argument(
@@ -1363,11 +1445,27 @@ def init(
     guide_path = write_agent_guide(repo)
     console.print(f"[green]Guide written[/green] [dim]({guide_path})[/dim]")
 
+    # Self-verify: confirm the index really resolved and is non-empty, so the
+    # user gets a clear pass/fail instead of trusting three silent steps.
+    n_entities = _count_entities(db)
+    if n_entities > 0:
+        console.print(
+            f"\n[green bold]Verified:[/green bold] index has {n_entities} entities; "
+            f"MCP entry written for {t.display_name}."
+        )
+    else:
+        console.print(
+            "\n[yellow]Warning:[/yellow] the index looks empty. "
+            "Re-run [bold]codegraph index .[/bold] before using the agent."
+        )
+
     console.print(
         f"\n[green bold]Done.[/green bold] {t.display_name} can now use CodeGraph on this repo.\n"
         "Next steps:\n"
-        f"  - Restart {t.display_name} so it picks up the new MCP server.\n"
-        '  - Ask it something like: [italic]"use codegraph to explain how X works"[/italic].\n'
+        f"  - [bold]Restart {t.display_name}[/bold] -- the MCP server only loads on startup "
+        "(this is the #1 step people miss).\n"
+        '  - Ask it: [italic]"use codegraph to explain how X works"[/italic].\n'
+        "  - Run [bold]codegraph doctor[/bold] anytime to confirm everything is wired.\n"
         "  - Keep the index fresh with [bold]codegraph watch .[/bold] (optional)."
     )
 
