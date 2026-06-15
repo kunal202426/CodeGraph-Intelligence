@@ -62,52 +62,82 @@ no-key failure path is verified (#17); the graph-retrieval half of `get_context`
 ## Issues found
 
 Manual testing on a real, concurrently-accessed index surfaced issues the fixture-based
-unit suite does not. None are data-corrupting; severities below reflect user impact.
+unit suite does not. None are data-corrupting; severities below reflect user impact. All
+six were addressed in the follow-up pass on the same day (see **Fixes applied**).
 
-### Issue #1 — DuckDB single-writer lock contention (MEDIUM)
+### Issue #1 — DuckDB single-writer lock contention (MEDIUM) — ✅ FIXED
 Running `codegraph watch` **while the MCP server (or `serve`) holds the database open**
 produces a cascade of:
 ```
 _duckdb.IOException: IO Error: Cannot open file "...graph.duckdb":
 The process cannot access the file because it is being used by another process.
 ```
-Each blocked re-index runs on a watcher thread, so the failure surfaces as raw
+Each blocked re-index ran on a watcher thread, so the failure surfaced as raw
 `Exception in thread Thread-N` tracebacks rather than a handled, user-readable message.
-The watcher *recovers* once the lock frees (it later re-indexed successfully), so no data
-is lost — but the UX is alarming and the behaviour is only documented in the README's
-"limitations" prose, not handled in code.
+The watcher *recovered* once the lock freed (no data lost), but the UX was alarming.
 **Repro:** `watch` in terminal A + an active MCP server (or `serve`) in terminal B, then
 edit a file.
+**Fix:** the re-index now retries with backoff (DuckDB locks are transient) and, if the
+lock never frees, emits a clean `skipped — database busy` event instead of crashing the
+thread. The watcher thread can no longer die. Regression test added.
 
-### Issue #2 — Noisy traceback on `serve` shutdown (LOW / cosmetic)
-Stopping `codegraph serve` with Ctrl+C prints a multi-frame
+### Issue #2 — Noisy traceback on `serve` shutdown (LOW / cosmetic) — ✅ FIXED
+Stopping `codegraph serve` with Ctrl+C printed a multi-frame
 `KeyboardInterrupt` / `asyncio.CancelledError` traceback from uvicorn before exiting.
-The server started and served correctly (browser graph + search confirmed working); this
-is purely a messy shutdown on Windows, but it reads like a crash to a new user.
+The server itself started and served correctly (browser graph + search confirmed
+working) — purely a messy shutdown, but it read like a crash.
+**Fix:** the Ctrl+C `KeyboardInterrupt` is now suppressed; shutdown prints
+`Server stopped.`
 
-### Issue #3 — Embedding model reloads on every CLI invocation (MEDIUM)
+### Issue #3 — Embedding model reloads on every CLI invocation (MEDIUM) — ◑ PARTIAL
 Every command that touches semantic search (`search`, `context`, `ask`, first `watch`
-re-index) reloads the `all-MiniLM-L6-v2` weights from scratch (`Loading weights ... 103/103`).
-On the first `watch` change this added a **~27-second** stall before the re-index
-completed. For one-shot CLI calls it adds a few seconds each. The model is cached on
-disk but re-loaded into memory per process.
+re-index) reloads the `all-MiniLM-L6-v2` weights (`Loading weights ... 103/103`). On the
+first `watch` change this added a **~27-second** stall; for one-shot CLI calls, a few
+seconds each. Because each CLI invocation is a fresh process, the in-memory model
+singleton cannot persist across calls.
+**Fix (partial):** when the model is cached, it now loads in **offline mode**, skipping the
+HuggingFace Hub network round-trip on startup (measurably faster cold load). A full fix —
+persisting the loaded model across CLI invocations via a small local service — remains
+future work (tracked in the improvement plan).
 
-### Issue #4 — Watch re-indexed the entire repo after a single event (MEDIUM)
-After the lock errors in Issue #1, a single file change appears to have triggered a
-re-index of **100+ files** (the whole tree), not just the changed file. Whether this was
-the watcher's recovery path re-scanning everything or an over-broad event match, a single
-save should only re-index the file(s) that actually changed.
+### Issue #4 — Watch re-indexed the entire repo after a single event (MEDIUM) — ✅ ROOT-CAUSED
+A single file change *appeared* to trigger a re-index of 100+ files. **Root cause:** this
+was not a watcher over-trigger. A `.gitattributes` line-ending normalization (added
+earlier in the session) caused git operations to rewrite many working-tree files on disk;
+watchdog correctly saw each as genuinely modified (new content hash), so re-indexing them
+was the *correct* response. `index_one_file` already hash-skips files whose content is
+unchanged, so no redundant work occurs for untouched files. No code change needed; the #1
+fix additionally ensures such a mass event degrades gracefully under lock contention.
 
-### Issue #5 — `HF_TOKEN` warning on every semantic op (LOW)
-`Warning: You are sending unauthenticated requests to the HF Hub...` prints on every
-embedding load. The model is already cached locally, so this network-tinged warning is
-misleading noise for an offline-first tool.
+### Issue #5 — `HF_TOKEN` warning on every semantic op (LOW) — ✅ FIXED
+`Warning: You are sending unauthenticated requests to the HF Hub...` printed on every
+embedding load even though the model is cached locally — misleading noise for an
+offline-first tool (it originates in the `tokenizers` backend, not CodeGraph).
+**Fix:** loading the cached model in offline mode (see #3) stops the Hub request entirely,
+so the warning no longer appears. First-run downloads stay online and unaffected.
 
-### Issue #6 — Dead-code report is noisy (LOW)
-`deadcode` returned 111 candidates, but a large share are *known* false positives:
-Typer-decorated CLI command functions (reached via decorator registration, invisible to
-the static graph), pytest fixtures, and framework entrypoints. The footer warns about
-this, but the signal-to-noise ratio limits the feature's usefulness as-is.
+### Issue #6 — Dead-code report is noisy (LOW) — ✅ FIXED
+`deadcode` returned **111** candidates, dominated by *known* false positives:
+Typer-decorated CLI commands (reached via decorator registration, invisible to the static
+graph), pytest fixtures, and FastAPI routes.
+**Fix:** `find_dead_code` now inspects each entity's leading decorator block and excludes
+framework-registered entities (`@app.command`, `@app.get`, `@pytest.fixture`, `@task`, …).
+On this repo the list drops from **111 → 54**, removing the dominant false-positive class
+while keeping genuinely-unreferenced code. Regression test added.
+
+---
+
+## Fixes applied (2026-06-15 follow-up)
+
+| Issue | Commit subject | Tests |
+|---|---|---|
+| #1 | `watch: survive DB lock contention instead of crashing the thread` | +1 regression |
+| #2, #5 | `serve/embeddings: clean Ctrl+C shutdown + silence HF Hub token warning` | +1 unit |
+| #3 | (partial) offline model load, same commit as #5 | — |
+| #6 | `deadcode: exclude framework-registered entities to cut false positives` | +1 regression |
+| #4 | root-caused (external git renormalization); no code change | — |
+
+Full suite after fixes: **778 passed, 1 skipped**; `ruff check` clean.
 
 ---
 
@@ -119,7 +149,7 @@ daemon, and the MCP server (install → live query → uninstall) all passed. Th
 unverified surface is live LLM generation, which is gated on a paid API key, not a
 product defect.
 
-The issues above are quality-of-life and robustness gaps — chiefly around **concurrent
-DB access (#1, #4)** and **process-level UX polish (#2, #3, #5)** — not correctness bugs
-in the graph itself. They are the natural next work item; see the improvement plan that
-follows from this report.
+Every issue surfaced by this pass was a quality-of-life or robustness gap — none were
+correctness bugs in the graph itself — and all six have since been fixed or root-caused.
+The one remaining piece of future work is fully eliminating per-invocation model reload
+(#3), which needs a persistent local model service.

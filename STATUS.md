@@ -2,11 +2,19 @@
 
 ## Current
 
-- **Status:** ACTIVE — roadmap complete; product audit + E2E verification done.
+- **Status:** ACTIVE — roadmap complete; product audit + E2E + manual test passes done.
 - **Phase:** Maintenance & hardening (post-audit fixes, repo hygiene)
-- **Next task:** (optional: capture function-local imports — parsers/python.py:184-186; PyPI publish (manual); lock-contention hardening)
-- **Last session:** 2026-06-14
+- **Next task:** (optional: persistent model service to kill per-CLI reload — see manual test #3; capture function-local imports — parsers/python.py:184-186; PyPI publish (manual))
+- **Last session:** 2026-06-15
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
+
+### Session 2026-06-15 — manual test pass + fixes
+Full interactive manual test of every user-facing surface (CLI, web UI, watch, MCP install→query→uninstall). 21/21 surfaces passed; report at [docs/MANUAL_TEST_REPORT.md](docs/MANUAL_TEST_REPORT.md). Six issues found, all fixed or root-caused:
+- `watch: survive DB lock contention` — retry-with-backoff + clean `skipped` event instead of thread-crash tracebacks (issue #1).
+- `serve/embeddings: clean Ctrl+C shutdown + silence HF Hub token warning` — suppress KeyboardInterrupt traceback (#2); offline model load when cached, kills the misleading HF unauthenticated warning + speeds cold load (#3 partial, #5).
+- `deadcode: exclude framework-registered entities` — skip @app.command/@app.get/@pytest.fixture/@task; candidates 111 → 54 on this repo (#6).
+- #4 (mass re-index) root-caused to external git line-ending renormalization, not a watcher bug — no change needed.
+- Remaining future work: persistent model service to remove per-invocation reload (#3 full).
 
 ### Session 2026-06-14 — maintenance round
 - `fix: extend entity-id prefix list` — `_ENTITY_ID_PREFIXES` now covers all 9 indexed languages so Go/Rust/Java/etc entity IDs are exact-matched in `find_entity_by_name_or_id` instead of falling through to name lookup.
