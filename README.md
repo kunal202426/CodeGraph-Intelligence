@@ -6,8 +6,10 @@ GraphRAG pipeline, explore it in a browser, and expose it all to your coding age
 MCP — so the agent queries the graph instead of re-reading your files every message.
 
 > **Status: active development.** Core indexing, search, and MCP tools are stable.
-> Manual testing is underway ahead of a first wider release. The MCP server is
-> functional but not yet recommended for production use — treat it as a preview.
+> Every user-facing surface has been manually tested end-to-end on this repo —
+> **21/21 surfaces passed**; the 6 issues found were fixed or root-caused. Read the
+> full run-through: **[Manual Test Report →](docs/MANUAL_TEST_REPORT.md)**. The MCP
+> server is functional but still a preview — not yet recommended for production use.
 
 ![CodeGraph demo](docs/demo.gif)
 
