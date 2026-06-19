@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from codegraph.parsers.base import IParser
 from codegraph.parsers.bash import BashParser
 from codegraph.parsers.csharp import CSharpParser
@@ -17,7 +16,6 @@ from codegraph.parsers.ocaml import OCamlParser
 from codegraph.parsers.r import RParser
 from codegraph.parsers.scala import ScalaParser
 from codegraph.uir import EntityType, Language
-
 
 # ------------------------------------------------------------------
 # Protocol conformance

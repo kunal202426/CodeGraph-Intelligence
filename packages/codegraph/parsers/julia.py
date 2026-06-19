@@ -82,9 +82,7 @@ class JuliaParser:
     ) -> None:
         for node in nodes:
             kind = node.type
-            if kind == "function_definition":
-                self._emit_named(node, source, file, parent_id, EntityType.FUNCTION, entities)
-            elif kind == "macro_definition":
+            if kind in ("function_definition", "macro_definition"):
                 self._emit_named(node, source, file, parent_id, EntityType.FUNCTION, entities)
             elif kind == "struct_definition":
                 self._emit_named(node, source, file, parent_id, EntityType.CLASS, entities)
