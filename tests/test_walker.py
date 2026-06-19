@@ -51,7 +51,6 @@ def test_detect_language_case_insensitive() -> None:
 def test_detect_language_unknown_returns_none() -> None:
     assert detect_language(Path("README.md")) is None
     assert detect_language(Path("config.yaml")) is None
-    assert detect_language(Path("style.css")) is None
     assert detect_language(Path("no_extension")) is None
 
 

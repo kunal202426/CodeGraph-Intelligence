@@ -52,6 +52,9 @@ class Language(StrEnum):
     JULIA = "julia"
     HASKELL = "haskell"
     OCAML = "ocaml"
+    HTML = "html"
+    CSS = "css"
+    SQL = "sql"
 
 
 LANGUAGE_PREFIX: dict[Language, str] = {
@@ -74,6 +77,9 @@ LANGUAGE_PREFIX: dict[Language, str] = {
     Language.JULIA: "jl",
     Language.HASKELL: "hs",
     Language.OCAML: "ml",
+    Language.HTML: "html",
+    Language.CSS: "css",
+    Language.SQL: "sql",
 }
 
 

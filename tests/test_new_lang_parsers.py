@@ -1,4 +1,4 @@
-"""Smoke tests for the new language parsers (Kotlin, C#, Scala, Bash, Elixir, R, Julia, Haskell, OCaml)."""
+"""Smoke tests for the new language parsers (Kotlin, C#, Scala, Bash, Elixir, R, Julia, Haskell, OCaml, HTML, CSS, SQL)."""
 
 from __future__ import annotations
 
@@ -8,13 +8,16 @@ import pytest
 from codegraph.parsers.base import IParser
 from codegraph.parsers.bash import BashParser
 from codegraph.parsers.csharp import CSharpParser
+from codegraph.parsers.css import CSSParser
 from codegraph.parsers.elixir import ElixirParser
 from codegraph.parsers.haskell import HaskellParser
+from codegraph.parsers.html import HTMLParser
 from codegraph.parsers.julia import JuliaParser
 from codegraph.parsers.kotlin import KotlinParser
 from codegraph.parsers.ocaml import OCamlParser
 from codegraph.parsers.r import RParser
 from codegraph.parsers.scala import ScalaParser
+from codegraph.parsers.sql import SQLParser
 from codegraph.uir import EntityType, Language
 
 # ------------------------------------------------------------------
@@ -33,6 +36,9 @@ from codegraph.uir import EntityType, Language
         (JuliaParser(), Language.JULIA),
         (HaskellParser(), Language.HASKELL),
         (OCamlParser(), Language.OCAML),
+        (HTMLParser(), Language.HTML),
+        (CSSParser(), Language.CSS),
+        (SQLParser(), Language.SQL),
     ],
 )
 def test_implements_iparser_protocol(parser, expected_lang) -> None:
@@ -52,6 +58,9 @@ def test_implements_iparser_protocol(parser, expected_lang) -> None:
         (JuliaParser(), Path("src/main.jl"), ""),
         (HaskellParser(), Path("src/Main.hs"), ""),
         (OCamlParser(), Path("lib/lib.ml"), ""),
+        (HTMLParser(), Path("templates/index.html"), ""),
+        (CSSParser(), Path("styles/main.css"), ""),
+        (SQLParser(), Path("migrations/001.sql"), ""),
     ],
 )
 def test_empty_source_yields_only_module(parser, path, empty_src) -> None:
@@ -368,3 +377,89 @@ def test_ocaml_module_entity_id() -> None:
     file_mod = r.entities[0]
     assert file_mod.entity_id == "ml:lib/main.ml:lib.main"
     assert file_mod.language == Language.OCAML
+
+
+# ------------------------------------------------------------------
+# HTML
+
+
+def test_html_id_elements() -> None:
+    src = '<html><body><div id="hero"><section id="features"></section></div></body></html>'
+    r = HTMLParser().parse(Path("index.html"), src)
+    names = {e.name for e in r.entities}
+    assert "hero" in names
+    assert "features" in names
+
+    hero = next(e for e in r.entities if e.name == "hero")
+    assert hero.type == EntityType.FUNCTION
+
+
+def test_html_script_import_edge() -> None:
+    src = '<script src="app.js"></script>'
+    r = HTMLParser().parse(Path("index.html"), src)
+    assert any(e.dst_id == "html:?:app.js" for e in r.edges)
+
+
+def test_html_module_entity_id() -> None:
+    r = HTMLParser().parse(Path("templates/index.html"), "")
+    mod = r.entities[0]
+    assert mod.entity_id == "html:templates/index.html:templates.index"
+    assert mod.language == Language.HTML
+
+
+# ------------------------------------------------------------------
+# CSS
+
+
+def test_css_rule_set() -> None:
+    src = ".button { color: red; }\n#header { background: blue; }"
+    r = CSSParser().parse(Path("main.css"), src)
+    names = {e.name for e in r.entities}
+    assert ".button" in names
+    assert "#header" in names
+
+    btn = next(e for e in r.entities if e.name == ".button")
+    assert btn.type == EntityType.FUNCTION
+
+
+def test_css_keyframes() -> None:
+    src = "@keyframes spin { from { } to { } }"
+    r = CSSParser().parse(Path("main.css"), src)
+    kf = next((e for e in r.entities if e.name == "spin"), None)
+    assert kf is not None
+    assert kf.type == EntityType.FUNCTION
+    assert kf.qualified_name == "@keyframes spin"
+
+
+def test_css_module_entity_id() -> None:
+    r = CSSParser().parse(Path("styles/main.css"), "")
+    mod = r.entities[0]
+    assert mod.entity_id == "css:styles/main.css:styles.main"
+    assert mod.language == Language.CSS
+
+
+# ------------------------------------------------------------------
+# SQL
+
+
+def test_sql_create_table() -> None:
+    src = "CREATE TABLE users (id INT, name VARCHAR(100));"
+    r = SQLParser().parse(Path("schema.sql"), src)
+    tbl = next((e for e in r.entities if e.name == "users"), None)
+    assert tbl is not None
+    assert tbl.type == EntityType.CLASS
+
+
+def test_sql_create_view() -> None:
+    src = "CREATE VIEW active AS SELECT * FROM users WHERE active = 1;"
+    r = SQLParser().parse(Path("schema.sql"), src)
+    view = next((e for e in r.entities if e.name == "active"), None)
+    assert view is not None
+    assert view.type == EntityType.CLASS
+
+
+def test_sql_module_entity_id() -> None:
+    r = SQLParser().parse(Path("migrations/001.sql"), "")
+    mod = r.entities[0]
+    assert mod.entity_id == "sql:migrations/001.sql:migrations.001"
+    assert mod.language == Language.SQL

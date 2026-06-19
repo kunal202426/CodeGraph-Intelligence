@@ -1,6 +1,6 @@
 # CodeGraph
 
-**A local-first AI memory layer for your codebase.** Index a repo (19 languages) into a
+**A local-first AI memory layer for your codebase.** Index a repo (22 languages) into a
 queryable graph, search it by meaning, ask grounded questions over a local + Anthropic
 GraphRAG pipeline, explore it in a browser, and expose it all to your coding agent over
 MCP — so the agent queries the graph instead of re-reading your files every message.
@@ -166,9 +166,9 @@ credits to start.
 
 ## What it does
 
-- **Understands your code as a graph** — tree-sitter parses 19 languages (Python,
+- **Understands your code as a graph** — tree-sitter parses 22 languages (Python,
   TypeScript/JS, Go, Rust, Java, Ruby, PHP, C, C++, Kotlin, C#, Scala, Bash, Elixir,
-  R, Julia, Haskell, OCaml) into a unified entity/edge model (functions, classes,
+  R, Julia, Haskell, OCaml, HTML, CSS, SQL) into a unified entity/edge model (functions, classes,
   methods, modules + `imports`/`calls` edges), stored in a single DuckDB file with
   cross-file symbol resolution.
 - **Search by meaning, not just text** — local `all-MiniLM-L6-v2` embeddings + DuckDB
@@ -208,9 +208,9 @@ Being honest about the limits:
   watch` and a heavy re-index simultaneously from two terminals may conflict.
 - **Web UI is local-only** — `codegraph serve` opens a browser to `localhost`. It is not
   hosted, shared, or deployed anywhere.
-- **19 languages** — Python, TypeScript, JavaScript, Go, Rust, Java, Ruby, PHP, C, C++,
-  Kotlin, C#, Scala, Bash, Elixir, R, Julia, Haskell, OCaml. Other languages are
-  silently skipped during indexing.
+- **22 languages** — Python, TypeScript, JavaScript, Go, Rust, Java, Ruby, PHP, C, C++,
+  Kotlin, C#, Scala, Bash, Elixir, R, Julia, Haskell, OCaml, HTML, CSS, SQL. Other
+  languages are silently skipped during indexing.
 
 ---
 
@@ -472,7 +472,7 @@ daemon, and the MCP server (install → live query → uninstall) — run by han
 
 Phases 10-13 ("best of both") and 14-18 ("actually usable") are complete:
 
-- **Phase 10** — 9 languages: Go, Rust, Java, Ruby, PHP, C, C++ added to Python + TS/JS; extended to 19 with Kotlin, C#, Scala, Bash, Elixir, R, Julia, Haskell, OCaml
+- **Phase 10** — 9 languages: Go, Rust, Java, Ruby, PHP, C, C++ added to Python + TS/JS; extended to 19 with Kotlin, C#, Scala, Bash, Elixir, R, Julia, Haskell, OCaml; further to 22 with HTML, CSS, SQL
 - **Phase 11** — `codegraph watch`: debounced file watcher re-indexes in ~300 ms; staleness guard on `serve`/MCP startup
 - **Phase 12** — richer MCP tools + CLI mirrors (`context`, `trace`, `status`)
 - **Phase 13** — agent installer for Claude Code, Cursor, Codex, Gemini

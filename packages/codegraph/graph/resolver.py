@@ -84,7 +84,7 @@ _PROVISIONAL_WHERE = (
     "OR dst_id LIKE 'scala:?%' OR dst_id LIKE 'sh:?%' "
     "OR dst_id LIKE 'ex:?%' OR dst_id LIKE 'r:?%' "
     "OR dst_id LIKE 'jl:?%' OR dst_id LIKE 'hs:?%' "
-    "OR dst_id LIKE 'ml:?%'"
+    "OR dst_id LIKE 'ml:?%' OR dst_id LIKE 'html:?%'"
 )
 
 # Rust standard / core library namespace prefixes → always external.

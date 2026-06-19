@@ -58,6 +58,10 @@ LANGUAGE_BY_EXT: dict[str, Language] = {
     ".hs": Language.HASKELL,
     ".ml": Language.OCAML,
     ".mli": Language.OCAML,
+    ".html": Language.HTML,
+    ".htm": Language.HTML,
+    ".css": Language.CSS,
+    ".sql": Language.SQL,
 }
 
 ALWAYS_EXCLUDE: frozenset[str] = frozenset(
