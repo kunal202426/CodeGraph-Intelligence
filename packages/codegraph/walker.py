@@ -45,6 +45,19 @@ LANGUAGE_BY_EXT: dict[str, Language] = {
     ".cxx": Language.CPP,
     ".hpp": Language.CPP,
     ".hxx": Language.CPP,
+    ".kt": Language.KOTLIN,
+    ".kts": Language.KOTLIN,
+    ".cs": Language.CSHARP,
+    ".scala": Language.SCALA,
+    ".sh": Language.BASH,
+    ".bash": Language.BASH,
+    ".ex": Language.ELIXIR,
+    ".exs": Language.ELIXIR,
+    ".r": Language.R,      # detect_language uses .lower() so .R maps here too
+    ".jl": Language.JULIA,
+    ".hs": Language.HASKELL,
+    ".ml": Language.OCAML,
+    ".mli": Language.OCAML,
 }
 
 ALWAYS_EXCLUDE: frozenset[str] = frozenset(

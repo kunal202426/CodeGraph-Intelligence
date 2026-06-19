@@ -79,7 +79,12 @@ _PROVISIONAL_WHERE = (
     "OR dst_id LIKE 'go:?%' OR dst_id LIKE 'rs:?%' "
     "OR dst_id LIKE 'java:?%' OR dst_id LIKE 'rb:?%' "
     "OR dst_id LIKE 'php:?%' "
-    "OR dst_id LIKE 'c:?%' OR dst_id LIKE 'cpp:?%'"
+    "OR dst_id LIKE 'c:?%' OR dst_id LIKE 'cpp:?%' "
+    "OR dst_id LIKE 'kt:?%' OR dst_id LIKE 'cs:?%' "
+    "OR dst_id LIKE 'scala:?%' OR dst_id LIKE 'sh:?%' "
+    "OR dst_id LIKE 'ex:?%' OR dst_id LIKE 'r:?%' "
+    "OR dst_id LIKE 'jl:?%' OR dst_id LIKE 'hs:?%' "
+    "OR dst_id LIKE 'ml:?%'"
 )
 
 # Rust standard / core library namespace prefixes → always external.

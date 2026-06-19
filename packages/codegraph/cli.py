@@ -30,13 +30,22 @@ from codegraph.graph.queries import (
 )
 from codegraph.graph.resolver import resolve_symbols
 from codegraph.graph.store import GraphStore
+from codegraph.parsers.bash import BashParser
 from codegraph.parsers.c_cpp import CParser, CppParser
+from codegraph.parsers.csharp import CSharpParser
+from codegraph.parsers.elixir import ElixirParser
 from codegraph.parsers.go import GoParser
+from codegraph.parsers.haskell import HaskellParser
 from codegraph.parsers.java import JavaParser
+from codegraph.parsers.julia import JuliaParser
+from codegraph.parsers.kotlin import KotlinParser
+from codegraph.parsers.ocaml import OCamlParser
 from codegraph.parsers.php import PHPParser
 from codegraph.parsers.python import PythonParser
+from codegraph.parsers.r import RParser
 from codegraph.parsers.ruby import RubyParser
 from codegraph.parsers.rust import RustParser
+from codegraph.parsers.scala import ScalaParser
 from codegraph.parsers.typescript import TypeScriptParser
 from codegraph.uir import Language, hash_source
 from codegraph.walker import walk
@@ -65,6 +74,15 @@ _LANGUAGE_PARSERS = {
     Language.PHP: PHPParser(),
     Language.C: CParser(),
     Language.CPP: CppParser(),
+    Language.KOTLIN: KotlinParser(),
+    Language.CSHARP: CSharpParser(),
+    Language.SCALA: ScalaParser(),
+    Language.BASH: BashParser(),
+    Language.ELIXIR: ElixirParser(),
+    Language.R: RParser(),
+    Language.JULIA: JuliaParser(),
+    Language.HASKELL: HaskellParser(),
+    Language.OCAML: OCamlParser(),
 }
 
 

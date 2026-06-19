@@ -43,6 +43,15 @@ class Language(StrEnum):
     PHP = "php"
     C = "c"
     CPP = "cpp"
+    KOTLIN = "kotlin"
+    CSHARP = "csharp"
+    SCALA = "scala"
+    BASH = "bash"
+    ELIXIR = "elixir"
+    R = "r"
+    JULIA = "julia"
+    HASKELL = "haskell"
+    OCAML = "ocaml"
 
 
 LANGUAGE_PREFIX: dict[Language, str] = {
@@ -56,6 +65,15 @@ LANGUAGE_PREFIX: dict[Language, str] = {
     Language.PHP: "php",
     Language.C: "c",
     Language.CPP: "cpp",
+    Language.KOTLIN: "kt",
+    Language.CSHARP: "cs",
+    Language.SCALA: "scala",
+    Language.BASH: "sh",
+    Language.ELIXIR: "ex",
+    Language.R: "r",
+    Language.JULIA: "jl",
+    Language.HASKELL: "hs",
+    Language.OCAML: "ml",
 }
 
 
