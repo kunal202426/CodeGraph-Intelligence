@@ -299,7 +299,9 @@ def test_julia_module_entity_id() -> None:
 
 
 def test_haskell_function_adt_class() -> None:
-    src = 'data Tree a = Leaf | Node a\nclass Container f where\n  empty :: f a\ngreet name = "Hello"'
+    src = (
+        'data Tree a = Leaf | Node a\nclass Container f where\n  empty :: f a\ngreet name = "Hello"'
+    )
     r = HaskellParser().parse(Path("Main.hs"), src)
     names = {e.name for e in r.entities}
     assert "Tree" in names

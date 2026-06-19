@@ -68,7 +68,9 @@ class ScalaParser:
 
         module_name = _stem(rel_path, ".scala")
         module_id = make_entity_id(Language.SCALA, rel_path, module_name)
-        entities.append(_module_entity(Language.SCALA, module_id, module_name, rel_path, root, source))
+        entities.append(
+            _module_entity(Language.SCALA, module_id, module_name, rel_path, root, source)
+        )
 
         if root.has_error:
             errors.append("tree-sitter reported parse errors (entities still emitted)")
@@ -100,9 +102,11 @@ class ScalaParser:
             return None
 
         entity_type = EntityType.INTERFACE if node.type == "trait_definition" else EntityType.CLASS
-        kw = {"class_definition": "class", "object_definition": "object", "trait_definition": "trait"}.get(
-            node.type, "class"
-        )
+        kw = {
+            "class_definition": "class",
+            "object_definition": "object",
+            "trait_definition": "trait",
+        }.get(node.type, "class")
         qname = name
         entity_id = make_entity_id(Language.SCALA, file, qname)
         raw = source[node.start_byte : node.end_byte].decode("utf-8", errors="replace")
@@ -193,7 +197,9 @@ class ScalaParser:
                 parts.append(_text(c, source) or "")
         if parts:
             edges.append(
-                Edge(src_id=module_id, dst_id=f"scala:?:{'.'.join(parts)}", type="imports", line=line)
+                Edge(
+                    src_id=module_id, dst_id=f"scala:?:{'.'.join(parts)}", type="imports", line=line
+                )
             )
 
 

@@ -61,7 +61,9 @@ class HaskellParser:
 
         module_name = _stem(rel_path, ".hs")
         module_id = make_entity_id(Language.HASKELL, rel_path, module_name)
-        entities.append(_module_entity(Language.HASKELL, module_id, module_name, rel_path, root, source))
+        entities.append(
+            _module_entity(Language.HASKELL, module_id, module_name, rel_path, root, source)
+        )
 
         if root.has_error:
             errors.append("tree-sitter reported parse errors (entities still emitted)")
@@ -70,7 +72,9 @@ class HaskellParser:
         for child in root.children:
             kind = child.type
             if kind == "function":
-                self._emit_function(child, source_bytes, rel_path, module_id, entities, seen_fn_names)
+                self._emit_function(
+                    child, source_bytes, rel_path, module_id, entities, seen_fn_names
+                )
             elif kind == "adt":
                 self._emit_adt(child, source_bytes, rel_path, module_id, entities)
             elif kind == "class":

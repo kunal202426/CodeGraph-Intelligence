@@ -53,7 +53,7 @@ LANGUAGE_BY_EXT: dict[str, Language] = {
     ".bash": Language.BASH,
     ".ex": Language.ELIXIR,
     ".exs": Language.ELIXIR,
-    ".r": Language.R,      # detect_language uses .lower() so .R maps here too
+    ".r": Language.R,  # detect_language uses .lower() so .R maps here too
     ".jl": Language.JULIA,
     ".hs": Language.HASKELL,
     ".ml": Language.OCAML,

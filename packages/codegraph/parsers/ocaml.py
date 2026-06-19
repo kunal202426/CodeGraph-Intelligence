@@ -61,7 +61,9 @@ class OCamlParser:
 
         module_name = _stem(rel_path, ".ml", ".mli")
         module_id = make_entity_id(Language.OCAML, rel_path, module_name)
-        entities.append(_module_entity(Language.OCAML, module_id, module_name, rel_path, root, source))
+        entities.append(
+            _module_entity(Language.OCAML, module_id, module_name, rel_path, root, source)
+        )
 
         if root.has_error:
             errors.append("tree-sitter reported parse errors (entities still emitted)")
