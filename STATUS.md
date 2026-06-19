@@ -8,6 +8,10 @@
 - **Last session:** 2026-06-15
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
+### Session 2026-06-15 (eve) — honest docs + MCP hang fix
+- `mcp: warm embedding model at startup to fix get_context hang` — first get_context loaded the model in an anyio worker thread; first-time import of torch/sklearn off the main thread deadlocked. Now preloaded in the main thread at server startup. Verified over real stdio: hang -> 0.1s. Auto-use + savings reporting confirmed live on a restarted agent.
+- README rewrite for honesty: added "In plain words" (ELI5 library analogy) + "How the token saving actually works" — the key point that CodeGraph cuts *reading/context* tokens, NOT the AI's *writing/output* tokens (which dominate the chat counter), so a single small query barely shows it; value compounds on big repos + long sessions. Added matching caveat to "What it cannot do".
+
 ### Session 2026-06-15 (pm) — usability & auto-use pass
 Goal from owner feedback: connect a repo once → agent auto-uses CodeGraph → user sees the token savings → one command confirms setup. Three pillars:
 - `guide: make CLAUDE.md a required workflow + savings reporting` — the managed agent guide is now a REQUIRED workflow (call get_context before reading files) and tells the agent to report `~N vs ~M tokens (Xx less)`. This is what makes auto-use real.

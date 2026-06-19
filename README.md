@@ -41,21 +41,62 @@ header — please keep it intact in copies and forks.
 
 ---
 
-## The problem it solves
+## In plain words (explain-like-I'm-5)
 
-Every time you ask Claude a question about your code, it re-reads your entire codebase.
-On a medium project that is **50,000–100,000 tokens per message** — expensive, slow, and
-Claude still misses how files connect to each other (who calls what, what breaks if you
-change this function).
+Your codebase is like a **huge library full of books** (each file is a book).
 
-CodeGraph indexes your code once into a graph, then answers *"what is relevant to this
-question?"* in **~500 tokens** instead of reading everything. In benchmarks on this repo,
-`get_context` returned answers using **9.6x fewer tokens** than reading the files it
-surfaced. Faster, cheaper, and it understands the actual call graph across files.
+- **Without CodeGraph:** every time you ask the AI a question, it grabs **armfuls of whole
+  books** and flips through all of them — every single time. Heavy, slow, and it still
+  struggles to see how one book references another.
+- **With CodeGraph:** a librarian has already read every book once and built a **card
+  catalog** — who mentions whom, who calls what. Now when you ask a question, the librarian
+  hands the AI just **the 2–3 exact pages that matter**, plus a sticky note saying "this
+  page connects to that one."
 
-> **Note:** the 9.6x figure comes from a benchmark script run against this repo's own
-> index. Real-world savings will vary by project size and query type. User testing
-> across diverse repos is in progress.
+So the AI reads a few index cards instead of hauling the whole library. That's the whole
+idea.
+
+---
+
+## How the token saving actually works
+
+*(Read this — it's the honest version.)*
+
+There are **two different kinds of tokens**, and CodeGraph only touches one of them:
+
+| Token type | What it is | Does CodeGraph reduce it? |
+|---|---|---|
+| **Reading tokens** (input/context) | How much code the AI has to *read* to understand your project | ✅ **Yes — a lot.** This is the whole point. |
+| **Writing tokens** (output) | How much the AI *writes back* as its answer | ❌ **No.** That depends on your question, not on CodeGraph. |
+
+**Why this matters for what you see:** the little token counter ticking in your chat is
+mostly the AI's *thinking + writing*. CodeGraph does **not** shrink that. The saving
+happens in the **reading pile** — the code that gets stuffed into the AI's context to
+answer you — which you don't directly see on that counter.
+
+A real example from this repo, one question (*"how does symbol resolution work?"*):
+
+```
+Reading the relevant files in full : ~17,000 tokens   <- without CodeGraph
+CodeGraph's targeted context        : ~1,350 tokens   <- with CodeGraph
+                                       ~12x less READING
+```
+
+The AI still *wrote* the same ~1–1.5k-token answer either way — that part is unchanged.
+
+**So is it worth it? Be honest with yourself:**
+
+- **Tiny repo, one quick question** → meh. The saving is small and the answer's writing
+  cost dominates. You won't feel it.
+- **Big codebase, a long back-and-forth (10–20 questions in a session)** → **this is where
+  it pays off.** Without CodeGraph the AI re-reads huge files again and again, the cost
+  piles up, and the context window fills until it forgets earlier parts. CodeGraph keeps
+  every question at ~1–2k of reading instead.
+
+> **Note on the numbers:** the "Nx less" figures are CodeGraph's own estimate of
+> *reading/context* tokens (4-chars/token heuristic, baseline = reading the full files the
+> answer came from). They measure the reading pile, **not** your total turn. Real savings
+> vary by project size and question. Broader user testing is in progress.
 
 ---
 
@@ -149,6 +190,10 @@ Being honest about the limits:
 
 - **Not a code reviewer** — it surfaces what is *relevant* to a question, not what is
   *correct*. It does not catch bugs or security issues.
+- **It does not reduce the AI's *writing* tokens** — only the *reading/context* tokens (see
+  [How the token saving actually works](#how-the-token-saving-actually-works)). On a single
+  small question the net difference can be marginal; the value compounds on large codebases
+  and long sessions.
 - **`codegraph ask` / `summarize` / `ask_codebase` are not free** — they call Anthropic's
   API and require a separate API key. The CLI warns you clearly if the key is missing.
 - **No runtime understanding** — CodeGraph reads static structure (what calls what, what
