@@ -41,9 +41,9 @@ header — please keep it intact in copies and forks.
 
 ---
 
-## In plain words (explain-like-I'm-5)
+## In plain words 
 
-Your codebase is like a **huge library full of books** (each file is a book).
+This codebase is like a **huge library full of books** (each file is a book).
 
 - **Without CodeGraph:** every time you ask the AI a question, it grabs **armfuls of whole
   books** and flips through all of them — every single time. Heavy, slow, and it still
