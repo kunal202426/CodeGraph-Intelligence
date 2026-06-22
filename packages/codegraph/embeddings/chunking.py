@@ -26,8 +26,16 @@ def build_embed_input_from_fields(
     signature: str | None,
     docstring: str | None,
     raw_source: str | None,
+    summary: str | None = None,
 ) -> str:
-    """Compose the embedding text from raw entity fields (DB-row friendly)."""
+    """Compose the embedding text from raw entity fields (DB-row friendly).
+
+    `summary` (an agent-written natural-language description, when present) is
+    appended so concept words that don't appear in the code itself still land
+    near it in vector space. It is optional and defaults to None: an entity
+    without a summary produces byte-identical text to before this field existed,
+    so the embed-input hash is unchanged and no re-embed is triggered.
+    """
     parts: list[str] = [f"{entity_type} {qualified_name}"]
     if signature:
         parts.append(signature)
@@ -35,6 +43,8 @@ def build_embed_input_from_fields(
         parts.append(docstring)
     if raw_source:
         parts.append(raw_source[:_MAX_BODY_CHARS])
+    if summary:
+        parts.append(summary)
     return "\n".join(parts)
 
 
@@ -46,6 +56,7 @@ def build_embed_input(entity: UIREntity) -> str:
         entity.signature,
         entity.docstring,
         entity.raw_source,
+        entity.summary,
     )
 
 

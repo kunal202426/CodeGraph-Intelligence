@@ -28,6 +28,8 @@ _EXPECTED = {
     "list_files",
     "index_status",
     "reindex",
+    "get_unsummarized_entities",
+    "store_summaries",
 }
 SAMPLE_REPO = Path("tests/fixtures/sample_repo_py")
 
@@ -46,7 +48,7 @@ def indexed_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return db
 
 
-def test_nine_tools_declared() -> None:
+def test_eleven_tools_declared() -> None:
     tools = tool_definitions()
     assert {t.name for t in tools} == _EXPECTED
 
@@ -59,6 +61,8 @@ def test_each_tool_has_object_schema_with_required() -> None:
     assert by_name["ask_codebase"].inputSchema["required"] == ["query"]
     assert by_name["get_context"].inputSchema["required"] == ["query"]
     assert by_name["trace_path"].inputSchema["required"] == ["from_id", "to_id"]
+    assert by_name["store_summaries"].inputSchema["required"] == ["items"]
+    assert by_name["get_unsummarized_entities"].inputSchema["required"] == []
     for tool in by_name.values():
         assert tool.inputSchema["type"] == "object"
         assert tool.description  # non-empty description
@@ -564,3 +568,82 @@ def test_get_context_no_match_returns_empty(indexed_db: Path) -> None:
 def test_get_context_limit_respected(indexed_db: Path) -> None:
     data = _call("get_context", {"query": "def", "limit": 2})
     assert len(data["entities"]) <= 2
+
+
+# ---------- agent-driven summaries ----------
+
+
+def test_get_unsummarized_entities_returns_batch(indexed_db: Path) -> None:
+    data = _call("get_unsummarized_entities", {"limit": 5})
+    assert data["count"] > 0
+    assert data["remaining"] >= data["count"]
+    ent = data["entities"][0]
+    for key in ("entity_id", "type", "qualified_name", "location", "source_preview"):
+        assert key in ent
+    # Only summarizable kinds are returned (no modules).
+    assert all(e["type"] in {"function", "method", "class", "interface"} for e in data["entities"])
+
+
+def test_store_summaries_persists_and_clears(indexed_db: Path) -> None:
+    batch = _call("get_unsummarized_entities", {"limit": 3})
+    targets = batch["entities"]
+    assert targets, "fixture should have unsummarized entities"
+
+    items = [
+        {"entity_id": e["entity_id"], "summary": f"Summary of {e['qualified_name']}."}
+        for e in targets
+    ]
+    result = _call("store_summaries", {"items": items})
+    assert result["stored"] == len(items)
+    assert isinstance(result["reembedded"], int)
+
+    # Stored entities no longer come back as unsummarized.
+    stored_ids = {e["entity_id"] for e in targets}
+    again = _call("get_unsummarized_entities", {"limit": 50})
+    assert stored_ids.isdisjoint({e["entity_id"] for e in again["entities"]})
+
+    # index_status reports the new coverage.
+    status = _call("index_status", {})
+    assert status["summarized"] >= len(items)
+
+
+def test_store_summaries_rejects_non_list(indexed_db: Path) -> None:
+    data = _call("store_summaries", {"items": "not a list"})
+    assert "error" in data
+
+
+def test_store_summaries_ignores_blank_items(indexed_db: Path) -> None:
+    data = _call("store_summaries", {"items": [{"entity_id": "", "summary": ""}]})
+    assert data["stored"] == 0
+
+
+def test_store_summaries_improves_semantic_match(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A concept word only in the summary should pull its entity up in semantic search."""
+    repo = tmp_path / "proj"
+    src = repo / "m.py"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_text("def qz9():\n    return 1\n", encoding="utf-8")
+    db = repo / ".codegraph" / "graph.duckdb"
+    # Index WITH embeddings so semantic search is active.
+    result = CliRunner().invoke(cli_app, ["index", str(repo), "--db", str(db)])
+    assert result.exit_code == 0, result.output
+    monkeypatch.setattr(mcp_server, "_db_path", db)
+
+    batch = _call("get_unsummarized_entities", {"limit": 5})
+    qz = next(e for e in batch["entities"] if e["qualified_name"].endswith("qz9"))
+    store_res = _call(
+        "store_summaries",
+        {
+            "items": [
+                {"entity_id": qz["entity_id"], "summary": "Computes a cryptographic checksum."}
+            ]
+        },
+    )
+    if store_res["reembedded"] == 0:
+        pytest.skip("embedding model unavailable in this environment")
+
+    # The concept word "cryptographic" appears only in the summary, not the source.
+    hits = _call("search_code", {"query": "cryptographic checksum"})
+    assert any(h["entity_id"] == qz["entity_id"] for h in hits)

@@ -236,14 +236,14 @@ def _embed_file(store: GraphStore, rel_path: str) -> None:
 
     rows = store.conn.execute(
         "SELECT entity_id, type, qualified_name, signature, docstring, raw_source, "
-        "embedding_hash, (embedding IS NOT NULL) "
+        "summary, embedding_hash, (embedding IS NOT NULL) "
         "FROM entities WHERE file = ?",
         [rel_path],
     ).fetchall()
 
     pending: list[tuple[str, str, str]] = []
-    for eid, etype, qname, sig, doc, raw, stored_hash, has_emb in rows:
-        text = build_embed_input_from_fields(etype, qname, sig, doc, raw)
+    for eid, etype, qname, sig, doc, raw, summary, stored_hash, has_emb in rows:
+        text = build_embed_input_from_fields(etype, qname, sig, doc, raw, summary)
         ihash = embed_input_hash(text)
         if not has_emb or stored_hash != ihash:
             pending.append((eid, text, ihash))

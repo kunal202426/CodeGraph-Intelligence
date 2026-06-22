@@ -108,14 +108,14 @@ def _embed_changed(store: GraphStore, batch_size: int = 256) -> tuple[int, str |
 
     rows = store.conn.execute(
         "SELECT entity_id, type, qualified_name, signature, docstring, raw_source, "
-        "embedding_hash, embedding IS NOT NULL "
+        "summary, embedding_hash, embedding IS NOT NULL "
         "FROM entities"
     ).fetchall()
 
     # (entity_id, embed_input_text, input_hash) for entities that need (re-)embedding.
     pending: list[tuple[str, str, str]] = []
-    for eid, etype, qname, sig, doc, raw, stored_hash, has_embedding in rows:
-        text = build_embed_input_from_fields(etype, qname, sig, doc, raw)
+    for eid, etype, qname, sig, doc, raw, summary, stored_hash, has_embedding in rows:
+        text = build_embed_input_from_fields(etype, qname, sig, doc, raw, summary)
         input_hash = embed_input_hash(text)
         if not has_embedding or stored_hash != input_hash:
             pending.append((eid, text, input_hash))

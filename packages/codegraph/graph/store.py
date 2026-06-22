@@ -227,6 +227,45 @@ class GraphStore:
         return int(row[0]) if row else 0
 
     # ------------------------------------------------------------------
+    # Summaries (agent-driven, written back via MCP)
+
+    def update_summaries(self, rows: list[tuple[str, str]]) -> None:
+        """Bulk-set the `summary` text for entities.
+
+        `rows` is a list of (entity_id, summary). Entities not present in `rows`
+        keep their existing summary. Uses a registered DataFrame + ``UPDATE …
+        FROM`` join, the same fast path as `update_embeddings`.
+        """
+        if not rows:
+            return
+        df = pd.DataFrame(
+            {
+                "entity_id": [r[0] for r in rows],
+                "summary": [r[1] for r in rows],
+            }
+        )  # noqa: F841 — referenced by name in SQL
+        staging = f"_staging_summary_{next(_stage_counter)}"
+        self.conn.register(staging, df)
+        try:
+            self.conn.execute(
+                f"""
+                UPDATE entities
+                   SET summary = {staging}.summary
+                  FROM {staging}
+                 WHERE entities.entity_id = {staging}.entity_id
+                """
+            )
+        finally:
+            self.conn.unregister(staging)
+
+    def count_summarized(self) -> int:
+        """Number of entities that currently have a non-empty summary."""
+        row = self.conn.execute(
+            "SELECT COUNT(*) FROM entities WHERE summary IS NOT NULL AND summary <> ''"
+        ).fetchone()
+        return int(row[0]) if row else 0
+
+    # ------------------------------------------------------------------
     # Per-file lookups + cleanup (T2.3 incremental)
 
     def get_file_hash(self, path: str) -> str | None:

@@ -143,7 +143,7 @@ most people install CodeGraph:
 | Search by meaning + text | `codegraph search`, `search_code` MCP tool |
 | Understand dependencies | `codegraph deps`, `codegraph impact` |
 | Find cycles, smells, dead code | `codegraph cycles`, `codegraph smells`, `codegraph deadcode` |
-| All 8 MCP tools (Claude Code queries your graph) | `get_context`, `trace_path`, `impact_analysis`, `list_files`, `index_status`, `reindex`, `search_code`, `get_entity_context` |
+| All 11 MCP tools (Claude Code queries your graph) | `get_context`, `trace_path`, `impact_analysis`, `list_files`, `index_status`, `reindex`, `search_code`, `get_entity_context`, `ask_codebase`, `get_unsummarized_entities`, `store_summaries` |
 | Auto-refresh as you code | `codegraph watch` |
 | Browser UI with D3 graph | `codegraph serve` |
 | One-shot setup | `codegraph init` |
@@ -180,8 +180,9 @@ credits to start.
   architectural layer analysis.
 - **Stays fresh automatically** — `codegraph watch` debounces filesystem events and
   re-indexes only the changed files in ~300 ms, keeping the graph current as you code.
-- **Plugs into any MCP agent** — 9 MCP tools (search, context, trace, impact, status,
-  reindex, ...) plus a one-command installer for Claude Code, Cursor, Codex, and Gemini.
+- **Plugs into any MCP agent** — 11 MCP tools (search, context, trace, impact, status,
+  reindex, agent-driven summaries, ...) plus a one-command installer for Claude Code,
+  Cursor, Codex, and Gemini.
 
 ---
 
@@ -403,7 +404,7 @@ this, an agent ignores the tools and keeps re-reading your source — so it's on
 
 ## MCP tools
 
-CodeGraph exposes 9 tools over the [MCP](https://modelcontextprotocol.io) stdio protocol.
+CodeGraph exposes 11 tools over the [MCP](https://modelcontextprotocol.io) stdio protocol.
 Every description is written to tell the agent *when to prefer it over reading files*.
 
 | Tool | What it does |
@@ -414,12 +415,25 @@ Every description is written to tell the agent *when to prefer it over reading f
 | `impact_analysis` | Reverse-call blast radius -- what breaks if an entity changes |
 | `trace_path` | Shortest call chain between two `entity_id`s (BFS), with readable labels |
 | `list_files` | All indexed files with language, LOC, and entity count; filterable by language |
-| `index_status` | File / entity / edge / embedding counts + staleness indicator |
+| `index_status` | File / entity / edge / embedding / summary counts + staleness indicator |
 | `reindex` | Refresh only the files changed since the last index — no terminal needed |
 | `ask_codebase` | Natural-language question answered via GraphRAG with citations |
+| `get_unsummarized_entities` | Hand the agent a batch of entities that still lack a summary |
+| `store_summaries` | Write agent-authored summaries back + re-embed those entities (no API key) |
 
 `ask_codebase` requires embeddings and `ANTHROPIC_API_KEY`; all others work on any index.
 `CODEGRAPH_DB` overrides the discovered/default DB path.
+
+### Free, agent-driven summaries (no API key)
+
+`get_unsummarized_entities` + `store_summaries` let **Claude Code itself** write the
+per-entity "meaning" that powers semantic search — using your existing subscription
+instead of paid API tokens. Run the bundled `/codegraph-summarize` command and the agent
+loops through unsummarized entities, writes a one-line summary for each, stores them, and
+re-embeds just those entities so search improves immediately. The summary lives in the
+embed input, so a concept word that never appears in the code (e.g. "rate limiting") still
+finds the right entity. Entities without a summary are byte-identical to before — the
+feature adds **zero** overhead until you use it.
 
 To run the MCP server manually (e.g. for a custom agent config):
 

@@ -3,13 +3,15 @@
 # https://github.com/kunal202426/CodeGraph-Intelligence
 """MCP server exposing CodeGraph to MCP-compatible agents (T7.1 skeleton).
 
-Declares four tools over the indexed graph so an agent (e.g. Claude Code) can
-call CodeGraph directly:
+Declares a suite of tools over the indexed graph so an agent (e.g. Claude Code)
+can call CodeGraph directly. A representative few:
 
   - search_code        — hybrid literal + semantic search
   - get_entity_context — full source + immediate neighbours for an entity_id
   - impact_analysis    — reverse-call blast radius for an entity_id
   - ask_codebase       — natural-language question answered via GraphRAG
+  - get_unsummarized_entities / store_summaries — agent writes per-entity
+        summaries back into the index (no API key), enriching semantic search
 
 Run as a stdio server:  python -m codegraph.server.mcp_server --db <graph.duckdb>
 
@@ -245,6 +247,57 @@ def tool_definitions() -> list[Tool]:
                     },
                 },
                 "required": [],
+            },
+        ),
+        Tool(
+            name="get_unsummarized_entities",
+            description=(
+                "Fetch a batch of code entities that still lack a natural-language "
+                "summary, so you can write one for each. Returns entity_id, type, "
+                "qualified_name, location, signature, and a short source preview -- "
+                "enough to summarize without opening files. Pair with store_summaries: "
+                "call this, write a one-line summary per entity, store them, and repeat "
+                "until 'remaining' reaches 0. This enriches the index using your own "
+                "reasoning (no API key needed) and improves later semantic search."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "limit": {
+                        "type": "integer",
+                        "default": 20,
+                        "description": "Max entities to return this batch (1-200, default 20).",
+                    },
+                },
+                "required": [],
+            },
+        ),
+        Tool(
+            name="store_summaries",
+            description=(
+                "Call this after get_unsummarized_entities to write the summaries you "
+                "wrote back into the index; it persists them and re-embeds just those "
+                "entities so semantic search improves immediately. Input is a list of "
+                "{entity_id, summary}. Use one short, information-dense sentence per "
+                "entity describing what it does and why."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "items": {
+                        "type": "array",
+                        "description": "List of {entity_id, summary} objects to persist.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "entity_id": {"type": "string"},
+                                "summary": {"type": "string"},
+                            },
+                            "required": ["entity_id", "summary"],
+                        },
+                    },
+                },
+                "required": ["items"],
             },
         ),
     ]
@@ -662,6 +715,7 @@ def _index_status(_args: dict[str, Any]) -> str:
         n_entities = store.count_entities()
         n_edges = store.count_edges()
         n_embedded = store.count_embedded()
+        n_summarized = store.count_summarized()
     finally:
         store.close()
 
@@ -680,6 +734,7 @@ def _index_status(_args: dict[str, Any]) -> str:
             "entities": n_entities,
             "edges": n_edges,
             "embedded": n_embedded,
+            "summarized": n_summarized,
             "stale_files": stale_files,
             "stale": stale_files > 0,
         }
@@ -745,6 +800,124 @@ def _reindex(args: dict[str, Any]) -> str:
     )
 
 
+# Entity kinds worth summarizing (modules are too coarse; variables too granular).
+_SUMMARIZABLE_TYPES = ("function", "method", "class", "interface")
+
+# Cap on entities handled per get_unsummarized_entities / store_summaries call, so
+# an agent batch stays small and the inline re-embed never blocks for long.
+_SUMMARIZE_BATCH_CAP = 200
+
+
+def _get_unsummarized_entities(args: dict[str, Any]) -> str:
+    """Return a batch of entities with no summary yet, for the agent to describe."""
+    limit = max(1, min(int(args.get("limit", 20)), _SUMMARIZE_BATCH_CAP))
+    placeholders = ", ".join(["?"] * len(_SUMMARIZABLE_TYPES))
+    where = f"(summary IS NULL OR summary = '') AND type IN ({placeholders})"
+    store = _open_store()
+    try:
+        rows = store.conn.execute(
+            f"SELECT entity_id, type, qualified_name, file, start_line, signature, raw_source "
+            f"FROM entities WHERE {where} ORDER BY entity_id LIMIT ?",
+            [*_SUMMARIZABLE_TYPES, limit],
+        ).fetchall()
+        remaining_row = store.conn.execute(
+            f"SELECT COUNT(*) FROM entities WHERE {where}",
+            list(_SUMMARIZABLE_TYPES),
+        ).fetchone()
+    finally:
+        store.close()
+    items = [
+        {
+            "entity_id": r[0],
+            "type": r[1],
+            "qualified_name": r[2],
+            "location": f"{r[3]}:{r[4]}",
+            "signature": r[5],
+            "source_preview": _source_preview(r[6]),
+        }
+        for r in rows
+    ]
+    remaining = int(remaining_row[0]) if remaining_row else 0
+    return json.dumps({"count": len(items), "remaining": remaining, "entities": items})
+
+
+def _reembed_entities(store: GraphStore, entity_ids: list[str]) -> int:
+    """Rebuild + store embeddings for specific entities (their summary just changed).
+
+    Non-fatal: if the embedding stack is unavailable, summaries are still saved and
+    the next ``codegraph index`` picks up the embed-hash drift.
+    """
+    if not entity_ids:
+        return 0
+    try:
+        from codegraph.embeddings.chunking import build_embed_input_from_fields, embed_input_hash
+        from codegraph.embeddings.pipeline import embed_batch
+    except Exception:  # noqa: BLE001 — torch/model unavailable
+        return 0
+
+    placeholders = ", ".join(["?"] * len(entity_ids))
+    rows = store.conn.execute(
+        f"SELECT entity_id, type, qualified_name, signature, docstring, raw_source, summary "
+        f"FROM entities WHERE entity_id IN ({placeholders})",
+        entity_ids,
+    ).fetchall()
+    pending: list[tuple[str, str, str]] = []
+    for eid, etype, qname, sig, doc, raw, summary in rows:
+        text = build_embed_input_from_fields(etype, qname, sig, doc, raw, summary)
+        pending.append((eid, text, embed_input_hash(text)))
+    if not pending:
+        return 0
+    try:
+        vectors = embed_batch([p[1] for p in pending])
+        store.update_embeddings(
+            [(pending[i][0], vectors[i].tolist(), pending[i][2]) for i in range(len(pending))]
+        )
+    except Exception:  # noqa: BLE001 — embedding failure is non-fatal; summaries persist
+        return 0
+    return len(pending)
+
+
+def _store_summaries(args: dict[str, Any]) -> str:
+    """Persist agent-written summaries and re-embed those entities (write tool)."""
+    raw_items = args.get("items")
+    if not isinstance(raw_items, list):
+        return json.dumps({"error": "items must be a list of {entity_id, summary} objects."})
+    if len(raw_items) > _SUMMARIZE_BATCH_CAP:
+        return json.dumps(
+            {
+                "error": (
+                    f"{len(raw_items)} items (> {_SUMMARIZE_BATCH_CAP}); split into smaller "
+                    "batches."
+                )
+            }
+        )
+
+    pairs: list[tuple[str, str]] = []
+    for it in raw_items:
+        if not isinstance(it, dict):
+            continue
+        eid = str(it.get("entity_id", "")).strip()
+        summary = str(it.get("summary", "")).strip()
+        if eid and summary:
+            pairs.append((eid, summary))
+    if not pairs:
+        return json.dumps(
+            {"stored": 0, "reembedded": 0, "message": "No valid {entity_id, summary} items."}
+        )
+
+    db = get_db_path()
+    if not db.exists():
+        return json.dumps({"error": f"No graph database at {db}. Run `codegraph index <repo>`."})
+
+    store = GraphStore(db, read_only=False)
+    try:
+        store.update_summaries(pairs)
+        reembedded = _reembed_entities(store, [p[0] for p in pairs])
+    finally:
+        store.close()
+    return json.dumps({"stored": len(pairs), "reembedded": reembedded})
+
+
 _HANDLERS = {
     "search_code": _search_code,
     "get_entity_context": _get_entity_context,
@@ -755,6 +928,8 @@ _HANDLERS = {
     "list_files": _list_files,
     "index_status": _index_status,
     "reindex": _reindex,
+    "get_unsummarized_entities": _get_unsummarized_entities,
+    "store_summaries": _store_summaries,
 }
 
 

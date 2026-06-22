@@ -45,6 +45,34 @@ def test_includes_signature_and_docstring_and_body() -> None:
     assert "return x * 2" in text
 
 
+def test_summary_is_appended_when_present() -> None:
+    text = build_embed_input_from_fields(
+        "function", "f", "def f()", "Doubles x.", "return x*2", "Doubles its integer argument."
+    )
+    assert "Doubles its integer argument." in text
+
+
+def test_omitting_summary_is_byte_identical_to_no_summary() -> None:
+    """The no-re-embed guarantee: a NULL summary must not change the embed input.
+
+    Existing entities all have summary=NULL; if this drifted, deploying the
+    summary field would force a full-repo re-embed. It must not.
+    """
+    without = build_embed_input_from_fields("function", "f", "def f()", "Doc.", "return 1")
+    with_none = build_embed_input_from_fields("function", "f", "def f()", "Doc.", "return 1", None)
+    assert without == with_none
+    assert embed_input_hash(without) == embed_input_hash(with_none)
+
+
+def test_adding_a_summary_changes_the_hash() -> None:
+    """An entity that gains a summary must drift so it re-embeds exactly once."""
+    before = build_embed_input_from_fields("function", "f", "def f()", "Doc.", "return 1")
+    after = build_embed_input_from_fields(
+        "function", "f", "def f()", "Doc.", "return 1", "Adds two numbers."
+    )
+    assert embed_input_hash(before) != embed_input_hash(after)
+
+
 def test_body_is_truncated_to_1500_chars() -> None:
     big = "x = 1\n" * 1000  # ~6000 chars
     text = build_embed_input_from_fields("module", "m", None, None, big)
