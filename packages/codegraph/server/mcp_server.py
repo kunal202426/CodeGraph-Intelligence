@@ -808,11 +808,17 @@ _SUMMARIZABLE_TYPES = ("function", "method", "class", "interface")
 _SUMMARIZE_BATCH_CAP = 200
 
 
+def _placeholders(n: int) -> str:
+    """Build a ``?, ?, ...`` parameter list of length *n* for a SQL IN clause."""
+    return ", ".join(["?"] * n)
+
+
 def _get_unsummarized_entities(args: dict[str, Any]) -> str:
     """Return a batch of entities with no summary yet, for the agent to describe."""
     limit = max(1, min(int(args.get("limit", 20)), _SUMMARIZE_BATCH_CAP))
-    placeholders = ", ".join(["?"] * len(_SUMMARIZABLE_TYPES))
-    where = f"(summary IS NULL OR summary = '') AND type IN ({placeholders})"
+    where = (
+        f"(summary IS NULL OR summary = '') AND type IN ({_placeholders(len(_SUMMARIZABLE_TYPES))})"
+    )
     store = _open_store()
     try:
         rows = store.conn.execute(
@@ -855,10 +861,9 @@ def _reembed_entities(store: GraphStore, entity_ids: list[str]) -> int:
     except Exception:  # noqa: BLE001 — torch/model unavailable
         return 0
 
-    placeholders = ", ".join(["?"] * len(entity_ids))
     rows = store.conn.execute(
         f"SELECT entity_id, type, qualified_name, signature, docstring, raw_source, summary "
-        f"FROM entities WHERE entity_id IN ({placeholders})",
+        f"FROM entities WHERE entity_id IN ({_placeholders(len(entity_ids))})",
         entity_ids,
     ).fetchall()
     pending: list[tuple[str, str, str]] = []
