@@ -20,7 +20,7 @@ with warnings.catch_warnings():
     from tree_sitter import Node, Parser
     from tree_sitter_languages import get_language
 
-from codegraph.parsers._nodes import first_child
+from codegraph.parsers._nodes import first_child, node_text
 from codegraph.parsers.base import ParseResult
 from codegraph.uir import (
     Edge,
@@ -102,7 +102,7 @@ class CSSParser:
         sel_node = first_child(node, "selectors")
         if sel_node is None:
             return
-        raw_sel = _text(sel_node, source) or ""
+        raw_sel = node_text(sel_node, source) or ""
         name = raw_sel.strip()[:_MAX_SELECTOR_LEN]
         if not name:
             return
@@ -141,7 +141,7 @@ class CSSParser:
         entities: list[UIREntity],
     ) -> None:
         name_node = first_child(node, "keyframes_name")
-        name = _text(name_node, source)
+        name = node_text(name_node, source)
         if not name:
             return
 
@@ -198,9 +198,3 @@ def _stem(rel_path: str, *suffixes: str) -> str:
     for s in suffixes:
         stem = stem.removesuffix(s)
     return stem.replace("/", ".")
-
-
-def _text(node: Node | None, source: bytes) -> str | None:
-    if node is None:
-        return None
-    return source[node.start_byte : node.end_byte].decode("utf-8", errors="replace")

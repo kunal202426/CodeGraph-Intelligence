@@ -20,7 +20,7 @@ with warnings.catch_warnings():
     from tree_sitter import Node, Parser
     from tree_sitter_languages import get_language
 
-from codegraph.parsers._nodes import first_child
+from codegraph.parsers._nodes import first_child, node_text
 from codegraph.parsers.base import ParseResult
 from codegraph.uir import (
     Edge,
@@ -99,7 +99,7 @@ class HTMLParser:
         if start_tag is None:
             return
 
-        tag_name = _text(first_child(start_tag, "tag_name"), source)
+        tag_name = node_text(first_child(start_tag, "tag_name"), source)
 
         if tag_name == "link":
             href = _attr_value(start_tag, "href", source)
@@ -172,12 +172,12 @@ def _attr_value(start_tag: Node, attr_name: str, source: bytes) -> str | None:
     for child in start_tag.children:
         if child.type != "attribute":
             continue
-        if _text(first_child(child, "attribute_name"), source) != attr_name:
+        if node_text(first_child(child, "attribute_name"), source) != attr_name:
             continue
         qv = first_child(child, "quoted_attribute_value")
         if qv is None:
             continue
-        return _text(first_child(qv, "attribute_value"), source)
+        return node_text(first_child(qv, "attribute_value"), source)
     return None
 
 
@@ -208,9 +208,3 @@ def _stem(rel_path: str, *suffixes: str) -> str:
     for s in suffixes:
         stem = stem.removesuffix(s)
     return stem.replace("/", ".")
-
-
-def _text(node: Node | None, source: bytes) -> str | None:
-    if node is None:
-        return None
-    return source[node.start_byte : node.end_byte].decode("utf-8", errors="replace")

@@ -20,7 +20,7 @@ with warnings.catch_warnings():
     from tree_sitter import Node, Parser
     from tree_sitter_languages import get_language
 
-from codegraph.parsers._nodes import first_child
+from codegraph.parsers._nodes import first_child, node_text
 from codegraph.parsers.base import ParseResult
 from codegraph.uir import (
     Edge,
@@ -87,7 +87,7 @@ class SQLParser:
         entities: list[UIREntity],
     ) -> None:
         # Name is the first `identifier` direct child (after CREATE TABLE/VIEW/FUNCTION keywords).
-        name = _text(first_child(node, "identifier"), source)
+        name = node_text(first_child(node, "identifier"), source)
         if not name:
             return
 
@@ -144,9 +144,3 @@ def _stem(rel_path: str, *suffixes: str) -> str:
     for s in suffixes:
         stem = stem.removesuffix(s)
     return stem.replace("/", ".")
-
-
-def _text(node: Node | None, source: bytes) -> str | None:
-    if node is None:
-        return None
-    return source[node.start_byte : node.end_byte].decode("utf-8", errors="replace")
