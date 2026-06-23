@@ -20,6 +20,7 @@ with warnings.catch_warnings():
     from tree_sitter import Node, Parser
     from tree_sitter_languages import get_language
 
+from codegraph.parsers._nodes import first_child
 from codegraph.parsers.base import ParseResult
 from codegraph.uir import (
     Edge,
@@ -94,15 +95,12 @@ class HTMLParser:
         entities: list[UIREntity],
         edges: list[Edge],
     ) -> None:
-        start_tag = next((c for c in node.children if c.type == "start_tag"), None)
+        start_tag = first_child(node, "start_tag")
         if start_tag is None:
             return
 
-        tag_name = _text(
-            next((c for c in start_tag.children if c.type == "tag_name"), None), source
-        )
+        tag_name = _text(first_child(start_tag, "tag_name"), source)
 
-        # <link href="..."> import edge
         if tag_name == "link":
             href = _attr_value(start_tag, "href", source)
             rel = _attr_value(start_tag, "rel", source)
@@ -117,7 +115,6 @@ class HTMLParser:
                     )
                 )
 
-        # Element with id attribute → named entity
         elem_id = _attr_value(start_tag, "id", source)
         if elem_id:
             entity_id = make_entity_id(Language.HTML, file, elem_id)
@@ -143,7 +140,6 @@ class HTMLParser:
                     hash=hash_source(raw),
                 )
             )
-            # Recurse with this element as parent
             self._walk(node.children, source, file, entity_id, entities, edges)
         else:
             self._walk(node.children, source, file, parent_id, entities, edges)
@@ -156,7 +152,7 @@ class HTMLParser:
         module_id: str,
         edges: list[Edge],
     ) -> None:
-        start_tag = next((c for c in node.children if c.type == "start_tag"), None)
+        start_tag = first_child(node, "start_tag")
         if start_tag is None:
             return
         src = _attr_value(start_tag, "src", source)
@@ -176,14 +172,12 @@ def _attr_value(start_tag: Node, attr_name: str, source: bytes) -> str | None:
     for child in start_tag.children:
         if child.type != "attribute":
             continue
-        name_node = next((c for c in child.children if c.type == "attribute_name"), None)
-        if _text(name_node, source) != attr_name:
+        if _text(first_child(child, "attribute_name"), source) != attr_name:
             continue
-        qv = next((c for c in child.children if c.type == "quoted_attribute_value"), None)
+        qv = first_child(child, "quoted_attribute_value")
         if qv is None:
             continue
-        val = next((c for c in qv.children if c.type == "attribute_value"), None)
-        return _text(val, source)
+        return _text(first_child(qv, "attribute_value"), source)
     return None
 
 
