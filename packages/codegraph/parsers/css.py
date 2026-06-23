@@ -20,6 +20,7 @@ with warnings.catch_warnings():
     from tree_sitter import Node, Parser
     from tree_sitter_languages import get_language
 
+from codegraph.parsers._nodes import first_child
 from codegraph.parsers.base import ParseResult
 from codegraph.uir import (
     Edge,
@@ -86,8 +87,7 @@ class CSSParser:
             elif kind == "keyframes_statement":
                 self._emit_keyframes(node, source, file, parent_id, entities)
             elif kind == "media_statement":
-                # Walk nested rules inside @media blocks
-                block = next((c for c in node.children if c.type == "block"), None)
+                block = first_child(node, "block")
                 if block is not None:
                     self._walk(block.children, source, file, parent_id, entities)
 
@@ -99,7 +99,7 @@ class CSSParser:
         parent_id: str,
         entities: list[UIREntity],
     ) -> None:
-        sel_node = next((c for c in node.children if c.type == "selectors"), None)
+        sel_node = first_child(node, "selectors")
         if sel_node is None:
             return
         raw_sel = _text(sel_node, source) or ""
@@ -140,7 +140,7 @@ class CSSParser:
         parent_id: str,
         entities: list[UIREntity],
     ) -> None:
-        name_node = next((c for c in node.children if c.type == "keyframes_name"), None)
+        name_node = first_child(node, "keyframes_name")
         name = _text(name_node, source)
         if not name:
             return
