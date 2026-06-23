@@ -20,6 +20,7 @@ with warnings.catch_warnings():
     from tree_sitter import Node, Parser
     from tree_sitter_languages import get_language
 
+from codegraph.parsers._nodes import first_child
 from codegraph.parsers.base import ParseResult
 from codegraph.uir import (
     Edge,
@@ -86,8 +87,7 @@ class SQLParser:
         entities: list[UIREntity],
     ) -> None:
         # Name is the first `identifier` direct child (after CREATE TABLE/VIEW/FUNCTION keywords).
-        name_node = next((c for c in node.children if c.type == "identifier"), None)
-        name = _text(name_node, source)
+        name = _text(first_child(node, "identifier"), source)
         if not name:
             return
 
