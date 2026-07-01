@@ -1,7 +1,7 @@
 # CodeGraph -- Copyright (c) 2026 Kunal Mathur.
 # Source-available under PolyForm Noncommercial 1.0.0. See LICENSE.
 # https://github.com/kunal202426/CodeGraph-Intelligence
-"""Heuristic code-smell detection (T4.5).
+"""Heuristic code-smell detection.
 
 Four cheap, graph/AST-derived heuristics — no LLM, no full type analysis.
 All four run on whatever data is already in the DuckDB graph; no extra passes.
