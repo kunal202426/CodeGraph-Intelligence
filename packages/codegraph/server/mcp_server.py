@@ -112,6 +112,69 @@ def _get_stale_count() -> int:
     return count
 
 
+class _StalePathsCache:
+    """Thread-safe TTL cache for the *set* of stale/deleted file paths.
+
+    Separate from ``_StalenessCache`` (which only tracks a count) so
+    ``get_context`` can name exactly which files, among the ones it's about
+    to return, have changed since indexing -- a per-response banner is more
+    actionable than a repo-wide count. Same TTL + git-HEAD keying as
+    ``_StalenessCache``; kept as its own cache to avoid touching the
+    count-only cache's existing contract.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._paths: frozenset[str] = frozenset()
+        self._expires: float = 0.0
+        self._git_head: str | None = None
+
+    def get(self, git_head: str | None = None) -> frozenset[str] | None:
+        with self._lock:
+            if time.monotonic() < self._expires and git_head == self._git_head:
+                return self._paths
+            return None
+
+    def set(self, paths: frozenset[str], git_head: str | None = None) -> None:
+        with self._lock:
+            self._paths = paths
+            self._expires = time.monotonic() + _STALE_TTL_SEC
+            self._git_head = git_head
+
+    def reset(self) -> None:
+        with self._lock:
+            self._expires = 0.0
+
+
+_stale_paths_cache = _StalePathsCache()
+
+
+def _get_stale_paths() -> frozenset[str]:
+    """Return repo-relative paths of files changed or deleted since the last index.
+
+    Powers the per-file staleness banner in ``get_context``: a file referenced
+    in a response gets an explicit "this may be outdated" note naming it,
+    rather than a generic repo-wide count. Returns an empty set on any error
+    so a broken staleness check never blocks search.
+    """
+    from codegraph.sync.watcher import find_deleted_files, find_stale_files, git_head
+
+    root = _repo_root_for_db()
+    head = git_head(root)
+    cached = _stale_paths_cache.get(head)
+    if cached is not None:
+        return cached
+    try:
+        db = get_db_path()
+        changed = {p.relative_to(root).as_posix() for p in find_stale_files(root, db)}
+        deleted = set(find_deleted_files(root, db))
+        paths = frozenset(changed | deleted)
+    except Exception:  # noqa: BLE001 — staleness check is best-effort
+        paths = frozenset()
+    _stale_paths_cache.set(paths, head)
+    return paths
+
+
 server: Server = Server("codegraph")
 
 
@@ -713,6 +776,20 @@ def _get_context(args: dict[str, Any]) -> str:
             used_tokens += entity_tokens
             entities.append(entity)
 
+        # Per-file staleness banner: name the exact file(s) among *this response's*
+        # entities that changed since indexing, rather than only the repo-wide
+        # count above. More actionable -- the agent knows precisely what to
+        # re-Read instead of distrusting the whole response.
+        referenced_files = {e["file"] for e in entities if e.get("file")}
+        stale_in_response = sorted(referenced_files & _get_stale_paths())
+        if stale_in_response:
+            shown = ", ".join(stale_in_response[:5])
+            more = "" if len(stale_in_response) <= 5 else f" (+{len(stale_in_response) - 5} more)"
+            warnings.append(
+                f"Changed since indexing: {shown}{more}. The source shown for these files "
+                "may be outdated -- Read them directly if you need the live content."
+            )
+
         # Savings: how many tokens reading the surfaced entities' files in full
         # would cost, versus the (lean) context we actually returned.
         tokens_if_read = read_baseline_tokens(
@@ -858,6 +935,7 @@ def _reindex(args: dict[str, Any]) -> str:
 
     if not stale and not gone:
         _stale_cache.set(0, head)
+        _stale_paths_cache.set(frozenset(), head)
         return json.dumps(
             {
                 "reindexed": 0,
@@ -906,8 +984,10 @@ def _reindex(args: dict[str, Any]) -> str:
 
     if failed == 0 and delete_failed == 0:
         _stale_cache.set(0, head)
+        _stale_paths_cache.set(frozenset(), head)
     else:
         _stale_cache.reset()
+        _stale_paths_cache.reset()
     return json.dumps(
         {
             "reindexed": reindexed,

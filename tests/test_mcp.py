@@ -783,6 +783,91 @@ def test_reindex_resets_stale_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert mcp_server._stale_cache.get() == 0
 
 
+# ---------- per-file staleness banner in get_context ----------
+
+
+def test_get_context_names_the_exact_stale_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When a query's matched entity lives in a modified file, the warning
+    names that file specifically -- not just a repo-wide count."""
+    import time as _time
+
+    repo = tmp_path / "proj"
+    fresh = repo / "fresh.py"
+    stale = repo / "stale.py"
+    fresh.parent.mkdir(parents=True, exist_ok=True)
+    fresh.write_text("def fresh_fn():\n    return 1\n", encoding="utf-8")
+    stale.write_text("def stale_fn():\n    return 1\n", encoding="utf-8")
+    db = repo / ".codegraph" / "graph.duckdb"
+    result = CliRunner().invoke(cli_app, ["index", str(repo), "--db", str(db), "--no-embed"])
+    assert result.exit_code == 0, result.output
+    monkeypatch.setattr(mcp_server, "_db_path", db)
+    monkeypatch.setattr(mcp_server, "_stale_paths_cache", mcp_server._StalePathsCache())
+    monkeypatch.chdir(repo)
+
+    _time.sleep(0.05)
+    stale.write_text("def stale_fn():\n    return 2\n", encoding="utf-8")
+
+    data = _call("get_context", {"query": "stale_fn"})
+    named = [w for w in data["warnings"] if "stale.py" in w]
+    assert named, f"expected stale.py to be named, got: {data['warnings']}"
+    assert "Read" in named[0]
+
+
+def test_get_context_does_not_name_untouched_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A query matching only the untouched file gets no per-file banner for it,
+    even though the repo overall has a stale file elsewhere."""
+    import time as _time
+
+    repo = tmp_path / "proj"
+    fresh = repo / "fresh.py"
+    stale = repo / "stale.py"
+    fresh.parent.mkdir(parents=True, exist_ok=True)
+    fresh.write_text("def fresh_fn():\n    return 1\n", encoding="utf-8")
+    stale.write_text("def stale_fn():\n    return 1\n", encoding="utf-8")
+    db = repo / ".codegraph" / "graph.duckdb"
+    result = CliRunner().invoke(cli_app, ["index", str(repo), "--db", str(db), "--no-embed"])
+    assert result.exit_code == 0, result.output
+    monkeypatch.setattr(mcp_server, "_db_path", db)
+    monkeypatch.setattr(mcp_server, "_stale_paths_cache", mcp_server._StalePathsCache())
+    monkeypatch.chdir(repo)
+
+    _time.sleep(0.05)
+    stale.write_text("def stale_fn():\n    return 2\n", encoding="utf-8")
+
+    data = _call("get_context", {"query": "fresh_fn"})
+    named = [w for w in data["warnings"] if "fresh.py" in w]
+    assert not named
+
+
+def test_get_stale_paths_cleared_after_reindex(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The path-set cache resets alongside the count cache after a clean reindex."""
+    import time as _time
+
+    repo = tmp_path / "proj"
+    src = repo / "pkg" / "mod.py"
+    db = _index_temp_repo(repo, src, "def alpha():\n    return 1\n")
+    monkeypatch.setattr(mcp_server, "_db_path", db)
+    monkeypatch.chdir(repo)
+
+    mcp_server._stale_paths_cache.set(frozenset({"pkg/mod.py"}))
+    assert mcp_server._stale_paths_cache.get() == frozenset({"pkg/mod.py"})
+
+    _time.sleep(0.05)
+    src.write_text("def alpha():\n    return 2\n", encoding="utf-8")
+
+    result = _call("reindex", {"no_embed": True})
+    assert result["reindexed"] >= 1
+    assert result["failed"] == 0
+
+    assert mcp_server._stale_paths_cache.get() == frozenset()
+
+
 def test_store_summaries_improves_semantic_match(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

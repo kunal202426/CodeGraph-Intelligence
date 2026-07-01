@@ -519,14 +519,22 @@ def find_stale_files(repo: Path, db: Path) -> list[Path]:
     (the common usage from ``serve`` / MCP startup). This is the list form
     behind ``count_stale_files``; the ``reindex`` path re-parses exactly
     these files.
+
+    Opens its connection ``read_only=True`` and skips ``init_schema()`` (a
+    DDL write) -- this is a pure read on a DB that ``db.exists()`` already
+    confirmed is present, and callers (notably ``get_context``) may already
+    hold their own read-only connection open on the same file. DuckDB allows
+    multiple concurrent read-only connections but rejects a read-write one
+    opened alongside them, so a read-write open here would silently raise
+    and get swallowed by the except below, making staleness checks go dark
+    exactly when something else has the file open.
     """
     if not db.exists():
         return []
 
     try:
-        store = GraphStore(db)
+        store = GraphStore(db, read_only=True)
         try:
-            store.init_schema()
             rows = store.conn.execute("SELECT path, indexed_at FROM files").fetchall()
         finally:
             store.close()
@@ -585,14 +593,18 @@ def find_deleted_files(repo: Path, db: Path) -> list[str]:
     whatever is missing, so ``reindex`` can clean it up. Returns an empty
     list on any error so a broken check never blocks reindexing files that
     do still exist.
+
+    Opens ``read_only=True`` and skips ``init_schema()`` for the same reason
+    as ``find_stale_files``: a read-write open here can collide with a
+    caller's already-open read-only connection to the same file and get
+    silently swallowed below.
     """
     if not db.exists():
         return []
 
     try:
-        store = GraphStore(db)
+        store = GraphStore(db, read_only=True)
         try:
-            store.init_schema()
             rows = store.conn.execute("SELECT path FROM files").fetchall()
         finally:
             store.close()
