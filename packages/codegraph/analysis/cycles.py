@@ -1,7 +1,7 @@
 # CodeGraph -- Copyright (c) 2026 Kunal Mathur.
 # Source-available under PolyForm Noncommercial 1.0.0. See LICENSE.
 # https://github.com/kunal202426/CodeGraph-Intelligence
-"""Import-cycle detection via Tarjan's strongly-connected-components (T4.4).
+"""Import-cycle detection via Tarjan's strongly-connected-components.
 
 A *strongly connected component* (SCC) of size >= 2 in the file-level import
 graph is, by definition, a circular import: every file in the component can
