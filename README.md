@@ -3,7 +3,8 @@
 **A local-first AI memory layer for your codebase.** Index a repo (22 languages) into a
 queryable graph, search it by meaning, ask grounded questions over a local + Anthropic
 GraphRAG pipeline, explore it in a browser, and expose it all to your coding agent over
-MCP — so the agent queries the graph instead of re-reading your files every message.
+MCP so the agent queries the graph instead of re-reading your files every message.
+Solving high token consumption and context break during window overload.
 
 > **Status: active development.** Core indexing, search, and MCP tools are stable.
 > 778 tests passing. Every user-facing surface manually tested — 21/21 passed, 6 issues
