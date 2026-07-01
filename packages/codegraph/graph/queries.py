@@ -119,7 +119,7 @@ def search_literal(
 
 
 # ----------------------------------------------------------------------
-# Vector search (T3.2)
+# Vector search
 
 _EMBEDDING_DIM = 384
 
@@ -178,7 +178,7 @@ def vector_search(
 
 
 # ----------------------------------------------------------------------
-# Hybrid search — Reciprocal Rank Fusion of literal + vector (T3.4)
+# Hybrid search: Reciprocal Rank Fusion of literal + vector
 
 
 @dataclass(frozen=True)
@@ -401,7 +401,7 @@ def _classify_unresolved(dst_id: str) -> str:
 
 
 # ----------------------------------------------------------------------
-# Reverse-call impact analysis (T4.3)
+# Reverse-call impact analysis
 
 
 @dataclass(frozen=True)
