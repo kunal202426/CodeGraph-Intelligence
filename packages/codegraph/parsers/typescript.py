@@ -436,7 +436,7 @@ class TypeScriptParser:
             )
         )
 
-        # Call edges (T4.2): scan a function/method/arrow body for call expressions.
+        # Call edges: scan a function/method/arrow body for call expressions.
         if entity_type in (EntityType.FUNCTION, EntityType.METHOD):
             body = self._call_body_node(decl)
             if body is not None:
@@ -445,7 +445,7 @@ class TypeScriptParser:
         return entity_id
 
     # ------------------------------------------------------------------
-    # Call extraction (T4.2) — emit a provisional `calls` edge per call
+    # Call extraction: emit a provisional `calls` edge per call
     # expression in a body. dst is `ts:?call:<name>`; the resolver closes it
     # against same-file entities and the file's imports.
     #
@@ -504,7 +504,7 @@ class TypeScriptParser:
         return None
 
     # ------------------------------------------------------------------
-    # Import extraction (T2.5) — emits provisional dst_ids the resolver closes.
+    # Import extraction: emits provisional dst_ids the resolver closes.
     #
     # Encoding:
     #   import { x }    from "./mod"    → "ts:?:./mod::x"
