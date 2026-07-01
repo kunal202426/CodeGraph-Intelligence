@@ -10,7 +10,7 @@ MCP — so the agent queries the graph instead of re-reading your files every me
 > fixed. [Manual test →](docs/MANUAL_TEST_REPORT.md) | [Bench notes →](docs/QUALITY_REPORT_2026-07-01.md).
 > MCP server works but still preview, not production-ready.
 
-![CodeGraph demo](docs/demo.gif)
+![Kortex demo](docs/demo.gif)
 
 > Everything runs on your machine. The only network call is the Anthropic API for
 > `ask` / `summarize` (optional — all graph and search features work offline).
@@ -93,8 +93,8 @@ answer you — which you don't directly see on that counter.
 A real example from this repo, one question (*"how does symbol resolution work?"*):
 
 ```
-Reading the relevant files in full : ~17,000 tokens   <- without CodeGraph
-CodeGraph's targeted context        : ~1,350 tokens   <- with CodeGraph
+Reading the relevant files in full : ~17,000 tokens   <- without Kortex
+Kortex's targeted context          : ~1,350 tokens   <- with Kortex
                                        ~12x less READING
 ```
 
@@ -105,11 +105,11 @@ The AI still *wrote* the same ~1–1.5k-token answer either way — that part is
 - **Tiny repo, one quick question** → meh. The saving is small and the answer's writing
   cost dominates. You won't feel it.
 - **Big codebase, a long back-and-forth (10–20 questions in a session)** → **this is where
-  it pays off.** Without CodeGraph the AI re-reads huge files again and again, the cost
-  piles up, and the context window fills until it forgets earlier parts. CodeGraph keeps
+  it pays off.** Without Kortex the AI re-reads huge files again and again, the cost
+  piles up, and the context window fills until it forgets earlier parts. Kortex keeps
   every question at ~1–2k of reading instead.
 
-> **Note on the numbers:** the "Nx less" figures are CodeGraph's own estimate of
+> **Note on the numbers:** the "Nx less" figures are Kortex's own estimate of
 > *reading/context* tokens (4-chars/token heuristic, baseline = reading the full files the
 > answer came from). They measure the reading pile, **not** your total turn. Real savings
 > vary by project size and question. Broader user testing is in progress.
@@ -146,12 +146,12 @@ There is an important distinction:
 | **Anthropic API key** | Direct API access, billed per-token, from [console.anthropic.com](https://console.anthropic.com) | Separate — first ~$5 free |
 
 These are **two different products**. Having a Claude subscription does not give you an API
-key, and you do not need one to use CodeGraph's core features.
+key, and you do not need one to use Kortex's core features.
 
 ### What works free (no API key)
 
 Everything in the table below works with zero API key — this includes the entire reason
-most people install CodeGraph:
+most people install Kortex:
 
 | Feature | Command / Tool |
 |---|---|
@@ -214,7 +214,7 @@ Being honest about the limits:
   and long sessions.
 - **`codegraph ask` / `summarize` / `ask_codebase` are not free** — they call Anthropic's
   API and require a separate API key. The CLI warns you clearly if the key is missing.
-- **No runtime understanding** — CodeGraph reads static structure (what calls what, what
+- **No runtime understanding** — Kortex reads static structure (what calls what, what
   imports what). It does not know what happens when the code actually runs.
 - **Framework magic is partial** — Express route handlers, Django views, Rails
   `has_many` associations, and similar framework-level relationships are not yet resolved.
@@ -235,7 +235,7 @@ Being honest about the limits:
 
 ### Step-by-step (first time)
 
-**Step 1 — Clone CodeGraph** (one time, anywhere on your machine)
+**Step 1 — Clone Kortex** (one time, anywhere on your machine)
 
 ```bash
 git clone https://github.com/kunal202426/CodeGraph-Intelligence.git
@@ -249,7 +249,7 @@ uv sync --extra dev
 ```
 
 > The first time you index a project, Python will also download the `all-MiniLM-L6-v2`
-> embedding model (~80 MB). This is a one-time download — CodeGraph will tell you when
+> embedding model (~80 MB). This is a one-time download — Kortex will tell you when
 > it starts.
 
 **Step 3 — Set up a project** (once per project)
@@ -261,8 +261,8 @@ uv run codegraph init
 
 `init` does three things automatically:
 - Indexes your code into `.codegraph/graph.duckdb` (~30 s for a medium project)
-- Registers CodeGraph as an MCP tool in your agent (Claude Code / Cursor / etc.)
-- Writes a `CLAUDE.md` guide that **requires** your agent to call CodeGraph before reading
+- Registers Kortex as an MCP tool in your agent (Claude Code / Cursor / etc.)
+- Writes a `CLAUDE.md` guide that **requires** your agent to call Kortex before reading
   files — and to report the token savings back to you
 
 It finishes by self-verifying the index (`Verified: N entities`).
@@ -287,7 +287,7 @@ Just ask Claude normally: *"explain how authentication works in this project"*
 
 Because of the guide, Claude calls `get_context` first (~500 tokens instead of reading your
 whole codebase) and tells you the savings, e.g. *"CodeGraph: ~480 vs ~6,200 tokens (13x
-less)"*. You don't need to remember any commands — it uses CodeGraph automatically.
+less)"*. You don't need to remember any commands — it uses Kortex automatically.
 
 ---
 
@@ -420,7 +420,7 @@ this, an agent ignores the tools and keeps re-reading your source — so it's on
 
 ## MCP tools
 
-CodeGraph exposes 11 tools over the [MCP](https://modelcontextprotocol.io) stdio protocol.
+Kortex exposes 11 tools over the [MCP](https://modelcontextprotocol.io) stdio protocol.
 Every description is written to tell the agent *when to prefer it over reading files*.
 
 | Tool | What it does |
@@ -489,7 +489,7 @@ laptop — **6,065 entities, 14,601 edges**:
 faster than cold thanks to per-file SHA-256 hash-skipping; embeddings re-compute only
 for entities whose input changed. `ask` latency depends on the Anthropic API.
 
-**Dogfood (CodeGraph indexing itself):** `get_context` returns **9.6x fewer tokens**
+**Dogfood (Kortex indexing itself):** `get_context` returns **9.6x fewer tokens**
 than reading the matched files in full (1,108 vs 10,637 on one query). Tested across
 more queries: **101x average** (12x on small files at worst, 190x best).
 [Bench notes →](docs/QUALITY_REPORT_2026-07-01.md) | [Details →](docs/VERIFICATION.md)
@@ -529,7 +529,7 @@ socket), and cross-language HTTP edge extraction. See [STATUS.md](STATUS.md).
 
 **I have Claude Pro / Team. Do I need to pay extra?**
 
-No. Your Claude subscription covers the claude.ai interface. CodeGraph's MCP integration
+No. Your Claude subscription covers the claude.ai interface. Kortex's MCP integration
 with Claude Code is completely separate and has no subscription cost. The only feature
 that charges you separately is `codegraph ask` / `ask_codebase`, which hits the Anthropic
 API directly — a different billing account at [console.anthropic.com](https://console.anthropic.com).
@@ -584,7 +584,7 @@ The most common issues:
   it a minute. On slow/corporate networks this can take a while or fail; run
   `codegraph index . --no-embed` to skip it (you lose semantic search, keep literal).
 - *"No graph database at..."* — run `codegraph index .` (or `codegraph init`) first.
-- *Agent not using CodeGraph* — make sure you restarted the agent after `init`. Check
+- *Agent not using Kortex* — make sure you restarted the agent after `init`. Check
   that `CLAUDE.md` exists in your repo root with the `<!-- BEGIN CODEGRAPH -->` block.
 
 ---
