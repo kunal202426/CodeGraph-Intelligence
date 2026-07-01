@@ -8,7 +8,7 @@ name), its signature, its docstring, and a slice of its body. This gives the
 sentence-transformer enough signal to place semantically-similar code near each
 other in vector space without blowing past the model's context window.
 
-`embed_input_hash` lets the incremental re-embed pass (T3.5) skip entities whose
+`embed_input_hash` lets the incremental re-embed pass skip entities whose
 embedding input is unchanged.
 """
 
