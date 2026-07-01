@@ -1,4 +1,4 @@
-# CodeGraph
+# CodeGraph (Kortex)
 
 **A local-first AI memory layer for your codebase.** Index a repo (22 languages) into a
 queryable graph, search it by meaning, ask grounded questions over a local + Anthropic
