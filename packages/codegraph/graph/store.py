@@ -122,7 +122,7 @@ class GraphStore:
         Uses a registered pandas DataFrame + ``INSERT … SELECT`` rather than
         ``executemany``: DuckDB's parameterised executemany has high per-call
         overhead (~30 ms/row in 1.5.x), which made real-repo indexing take
-        minutes. The DataFrame path is ~1000x faster (T2.7).
+        minutes. The DataFrame path is ~1000x faster.
         """
         if not entities:
             return
@@ -185,7 +185,7 @@ class GraphStore:
             self.conn.unregister(staging)
 
     # ------------------------------------------------------------------
-    # Embeddings (T3.2)
+    # Embeddings
 
     def update_embeddings(self, rows: list[tuple[str, list[float], str]]) -> None:
         """Bulk-set `embedding` (FLOAT[384]) + `embedding_hash` for entities.
