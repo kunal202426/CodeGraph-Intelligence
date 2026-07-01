@@ -93,7 +93,7 @@ _LANGUAGE_PARSERS = {
 
 
 def _embed_changed(store: GraphStore, batch_size: int = 256) -> tuple[int, str | None]:
-    """(Re-)embed entities whose embedding input changed (T3.5).
+    """(Re-)embed entities whose embedding input changed.
 
     An entity needs embedding when it has no vector yet OR its stored
     `embedding_hash` differs from the hash of its freshly-built embedding input.
@@ -264,7 +264,7 @@ def index(
             parsed_files += 1
             progress.advance(task)
 
-    # Cross-file symbol resolution (T2.2): rewrites `py:?:...` edges in place.
+    # Cross-file symbol resolution: rewrites `py:?:...` edges in place.
     stats = resolve_symbols(store)
 
     # Semantic embeddings (T3.3/T3.5): (re-)embed entities whose input changed.
@@ -901,7 +901,7 @@ def serve(
         )
         raise typer.Exit(code=1)
 
-    # Staleness check (T11.3): warn if any source files changed since last index.
+    # Staleness check: warn if any source files changed since last index.
     try:
         from codegraph.sync.watcher import count_stale_files
 
