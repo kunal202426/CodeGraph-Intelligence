@@ -6,11 +6,9 @@ GraphRAG pipeline, explore it in a browser, and expose it all to your coding age
 MCP — so the agent queries the graph instead of re-reading your files every message.
 
 > **Status: active development.** Core indexing, search, and MCP tools are stable.
-> **778 automated tests pass** with zero failures. Every user-facing surface has been
-> manually tested end-to-end — 21/21 passed; the 6 issues found were fixed or
-> root-caused. Full run-through: **[Manual Test Report →](docs/MANUAL_TEST_REPORT.md)**.
-> Parametric findings: **[Quality Report →](docs/QUALITY_REPORT_2026-07-01.md)**.
-> The MCP server is functional but still a preview — not yet recommended for production use.
+> 778 tests passing. Every user-facing surface manually tested — 21/21 passed, 6 issues
+> fixed. [Manual test →](docs/MANUAL_TEST_REPORT.md) | [Bench notes →](docs/QUALITY_REPORT_2026-07-01.md).
+> MCP server works but still preview, not production-ready.
 
 ![CodeGraph demo](docs/demo.gif)
 
@@ -19,29 +17,20 @@ MCP — so the agent queries the graph instead of re-reading your files every me
 
 ---
 
-## What's new (2026-07-01)
+## Changelog
 
-Key highlights from the latest session — good to share:
+**Jul 2026**
 
-- **Stale-index nudge shipped.** `get_context` now automatically warns when source files
-  have changed since the last index, naming the count and telling the agent to call
-  `reindex`. Agents no longer have to proactively call `index_status` to discover
-  staleness — the warning surfaces in the tool they already use.
-
-- **778 tests, zero failures.** Four new tests cover the stale-index warning behaviour
-  (warn on stale, silent on fresh, warn on zero-result queries, cache reset after reindex).
-  No regressions against the 774-test baseline.
-
-- **101x average reading-token savings** measured parametrically on this repo (12x worst
-  case, 190x best case). Representative single query: 1,108 vs 10,637 tokens — 9.6x.
-  [Full parametric report →](docs/QUALITY_REPORT_2026-07-01.md)
-
-- **100% search accuracy (Hit@1: 7/7)** on known symbol lookups found purely by semantic
-  similarity (query words do not appear in the function names).
-
-- **~15 ms warm query latency.** The staleness check adds < 1 ms on a cache hit (300 s
-  TTL); the cache resets to zero immediately after a clean `reindex`, so the warning clears
-  at the earliest possible moment.
+- `get_context` now warns when your index is stale — tells you how many files changed and
+  to run `reindex` before trusting results. Previously you had to call `index_status`
+  yourself to find this out, which most agents skip.
+- 778 tests, 0 failures. Added 4 tests for the stale warning.
+- Ran proper token savings numbers across queries on this repo: **101x average**
+  (12x on a tiny single-function file at worst, 190x best case). One example:
+  1,108 vs 10,637 tokens. [Bench notes →](docs/QUALITY_REPORT_2026-07-01.md)
+- Hit@1 was 7/7 on symbol lookups where the function name doesn't appear in the
+  query at all (pure semantic match).
+- Warm query latency ~15ms; stale check is <1ms once the TTL cache is warm.
 
 ---
 
@@ -500,18 +489,16 @@ laptop — **6,065 entities, 14,601 edges**:
 faster than cold thanks to per-file SHA-256 hash-skipping; embeddings re-compute only
 for entities whose input changed. `ask` latency depends on the Anthropic API.
 
-**Dogfood (CodeGraph indexing itself):** `get_context` summary returns **9.6x fewer
-tokens** than reading the files it surfaces (1,108 vs 10,637 tokens on a representative
-query). Parametric sweep across all queries: **101x average** (12x worst, 190x best).
-Full report: [docs/QUALITY_REPORT_2026-07-01.md](docs/QUALITY_REPORT_2026-07-01.md).
-Verification details: [docs/VERIFICATION.md](docs/VERIFICATION.md).
+**Dogfood (CodeGraph indexing itself):** `get_context` returns **9.6x fewer tokens**
+than reading the matched files in full (1,108 vs 10,637 on one query). Tested across
+more queries: **101x average** (12x on small files at worst, 190x best).
+[Bench notes →](docs/QUALITY_REPORT_2026-07-01.md) | [Details →](docs/VERIFICATION.md)
 
-**Search accuracy:** Hit@1 = 7/7 (100%) on known symbols found via semantic similarity
-alone (query words do not appear in the matched function names). Warm query latency ~15 ms.
+**Search:** Hit@1 = 7/7 on symbol queries where the function name doesn't appear in
+the query string at all. Warm query ~15ms.
 
-**Automated test suite (2026-07-01):** 778 tests, 0 failures, 1 live-skip. Covers every
-MCP tool, all 22 language parsers, the stale-index warning, graph queries, CLI commands,
-and the agent installer. Runtime ~30 s on a mid-range laptop, no network required.
+**Tests:** 778 passing, 0 failures, 1 live-skip (needs an API key). Covers MCP tools,
+all 22 parsers, graph queries, CLI, and the installer. Runs in ~30s, no network needed.
 
 **Manual test pass (2026-06-15):** every user-facing surface — CLI, web UI, watch
 daemon, and the MCP server (install → live query → uninstall) — run by hand on this repo.
