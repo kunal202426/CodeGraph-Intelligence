@@ -588,7 +588,7 @@ def _resolve_typescript(
 
 
 # ----------------------------------------------------------------------
-# New language resolvers (T10.7)
+# New language resolvers
 
 
 def _module_entity_for_file(
