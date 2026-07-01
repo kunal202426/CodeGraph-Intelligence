@@ -1,7 +1,7 @@
 # CodeGraph -- Copyright (c) 2026 Kunal Mathur.
 # Source-available under PolyForm Noncommercial 1.0.0. See LICENSE.
 # https://github.com/kunal202426/CodeGraph-Intelligence
-"""FastAPI app exposing the graph for the web UI (T6.1).
+"""FastAPI app exposing the graph for the web UI.
 
 `create_app(db_path)` builds an app bound to one indexed DuckDB file. Each
 request opens its own read-only connection (DuckDB allows many concurrent
@@ -16,7 +16,7 @@ Endpoints (all under /api):
   GET  /impact/{entity_id}?depth=    → reverse-call blast radius
   POST /ask    {query}               → SSE stream of a grounded GraphRAG answer
 
-The built frontend (if present) is mounted at / by `codegraph serve` (T6.6).
+The built frontend (if present) is mounted at / by `codegraph serve`.
 """
 
 from __future__ import annotations
