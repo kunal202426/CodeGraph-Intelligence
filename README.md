@@ -36,7 +36,7 @@ MCP — so the agent queries the graph instead of re-reading your files every me
 
 ## License & attribution
 
-**CodeGraph is source-available, not open-source.** It is licensed under the
+**Kortex is source-available, not open-source.** It is licensed under the
 [PolyForm Noncommercial License 1.0.0](LICENSE).
 
 **You may:**
@@ -61,10 +61,10 @@ header — please keep it intact in copies and forks.
 
 This codebase is like a **huge library full of books** (each file is a book).
 
-- **Without CodeGraph:** every time you ask the AI a question, it grabs **armfuls of whole
+- **Without Kortex:** every time you ask the AI a question, it grabs **armfuls of whole
   books** and flips through all of them — every single time. Heavy, slow, and it still
   struggles to see how one book references another.
-- **With CodeGraph:** a librarian has already read every book once and built a **card
+- **With Kortex:** a librarian has already read every book once and built a **card
   catalog** — who mentions whom, who calls what. Now when you ask a question, the librarian
   hands the AI just **the 2–3 exact pages that matter**, plus a sticky note saying "this
   page connects to that one."
@@ -78,15 +78,15 @@ idea.
 
 *(Read this — it's the honest version.)*
 
-There are **two different kinds of tokens**, and CodeGraph only touches one of them:
+There are **two different kinds of tokens**, and Kortex only touches one of them:
 
-| Token type | What it is | Does CodeGraph reduce it? |
+| Token type | What it is | Does Kortex reduce it? |
 |---|---|---|
 | **Reading tokens** (input/context) | How much code the AI has to *read* to understand your project | ✅ **Yes — a lot.** This is the whole point. |
-| **Writing tokens** (output) | How much the AI *writes back* as its answer | ❌ **No.** That depends on your question, not on CodeGraph. |
+| **Writing tokens** (output) | How much the AI *writes back* as its answer | ❌ **No.** That depends on your question, not on Kortex. |
 
 **Why this matters for what you see:** the little token counter ticking in your chat is
-mostly the AI's *thinking + writing*. CodeGraph does **not** shrink that. The saving
+mostly the AI's *thinking + writing*. Kortex does **not** shrink that. The saving
 happens in the **reading pile** — the code that gets stuffed into the AI's context to
 answer you — which you don't directly see on that counter.
 
