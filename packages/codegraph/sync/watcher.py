@@ -487,15 +487,38 @@ class RepoWatcher:
 # --------------------------------------------------------------------------- #
 
 
-def find_stale_files(repo: Path, db: Path) -> list[Path]:
-    """Return source files in repo modified more recently than the last index.
+def _row_timestamp(value: object) -> float | None:
+    """Convert a DuckDB TIMESTAMP column value to a Unix epoch float, or None."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        from datetime import datetime as _dt
 
-    Compares each file's mtime against ``max(indexed_at)`` in the files table.
-    Returns an empty list when the DB is missing, has no indexed files, or
-    cannot be opened. The repo path is used as-is so callers can pass
-    ``Path(".")`` to check relative to CWD (the common usage from ``serve`` /
-    MCP startup). This is the list form behind ``count_stale_files``; the
-    ``reindex`` path re-parses exactly these files.
+        try:
+            value = _dt.fromisoformat(value)
+        except ValueError:
+            return None
+    try:
+        return value.timestamp()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def find_stale_files(repo: Path, db: Path) -> list[Path]:
+    """Return source files in repo modified more recently than they were indexed.
+
+    Compares each file's mtime against *its own* ``indexed_at`` row, not a
+    single repo-wide ``max(indexed_at)``. The watcher and ``reindex`` both
+    re-index one file at a time, which advances that file's ``indexed_at``
+    without touching any other file's — a single-column max would then hide
+    an older file that was edited before the most recent per-file re-index
+    but never itself re-indexed. A file with no row at all (new, never
+    indexed) is always considered stale. Returns an empty list when the DB
+    is missing, has no indexed files, or cannot be opened. The repo path is
+    used as-is so callers can pass ``Path(".")`` to check relative to CWD
+    (the common usage from ``serve`` / MCP startup). This is the list form
+    behind ``count_stale_files``; the ``reindex`` path re-parses exactly
+    these files.
     """
     if not db.exists():
         return []
@@ -504,36 +527,36 @@ def find_stale_files(repo: Path, db: Path) -> list[Path]:
         store = GraphStore(db)
         try:
             store.init_schema()
-            row = store.conn.execute("SELECT max(indexed_at) FROM files").fetchone()
+            rows = store.conn.execute("SELECT path, indexed_at FROM files").fetchall()
         finally:
             store.close()
     except Exception:  # noqa: BLE001 — DB locked, corrupt, etc.
         return []
 
-    if row is None or row[0] is None:
+    if not rows:
         return []
 
-    last_indexed = row[0]
-    # DuckDB returns TIMESTAMP as datetime.datetime; guard against string fallback.
-    if isinstance(last_indexed, str):
-        from datetime import datetime as _dt
-
-        try:
-            last_indexed = _dt.fromisoformat(last_indexed)
-        except ValueError:
-            return []
-
-    try:
-        last_indexed_ts = last_indexed.timestamp()
-    except Exception:  # noqa: BLE001
-        return []
+    indexed_at: dict[str, float] = {}
+    for path, ts in rows:
+        ts_epoch = _row_timestamp(ts)
+        if ts_epoch is not None:
+            indexed_at[path] = ts_epoch
 
     stale: list[Path] = []
     try:
-        for path, _lang in walk(repo):
+        root = Path(repo).resolve()
+        for abs_path, _lang in walk(repo):
             try:
-                if path.stat().st_mtime > last_indexed_ts:
-                    stale.append(path)
+                rel = abs_path.relative_to(root).as_posix()
+            except ValueError:
+                continue
+            last_indexed_ts = indexed_at.get(rel)
+            if last_indexed_ts is None:
+                stale.append(abs_path)  # never indexed
+                continue
+            try:
+                if abs_path.stat().st_mtime > last_indexed_ts:
+                    stale.append(abs_path)
             except OSError:
                 continue
     except Exception:  # noqa: BLE001 — repo missing, permission error, etc.
@@ -548,3 +571,81 @@ def count_stale_files(repo: Path, db: Path) -> int:
     Thin wrapper over :func:`find_stale_files`; returns 0 on any error.
     """
     return len(find_stale_files(repo, db))
+
+
+def find_deleted_files(repo: Path, db: Path) -> list[str]:
+    """Return repo-relative paths recorded in the DB that no longer exist on disk.
+
+    Neither the watcher's per-file update nor ``reindex`` ever asks "does this
+    already-indexed file still exist?" — they only look at files that are
+    still there. A file removed outside of ``codegraph watch`` (``git
+    checkout``, a branch switch, a plain ``rm``) leaves its entities and
+    edges in the graph indefinitely, since nothing else purges them. This
+    compares the ``files`` table against a fresh directory walk and returns
+    whatever is missing, so ``reindex`` can clean it up. Returns an empty
+    list on any error so a broken check never blocks reindexing files that
+    do still exist.
+    """
+    if not db.exists():
+        return []
+
+    try:
+        store = GraphStore(db)
+        try:
+            store.init_schema()
+            rows = store.conn.execute("SELECT path FROM files").fetchall()
+        finally:
+            store.close()
+    except Exception:  # noqa: BLE001 — DB locked, corrupt, etc.
+        return []
+
+    db_paths = {r[0] for r in rows}
+    if not db_paths:
+        return []
+
+    try:
+        root = Path(repo).resolve()
+        existing = {abs_path.relative_to(root).as_posix() for abs_path, _lang in walk(repo)}
+    except Exception:  # noqa: BLE001 — repo missing, permission error, etc.
+        return []
+
+    return sorted(db_paths - existing)
+
+
+def git_head(repo: Path) -> str | None:
+    """Cheap fingerprint of the repo's current git commit -- no subprocess, no walk.
+
+    Reads ``.git/HEAD`` (and, for a symbolic ref, the ref file it points at)
+    instead of shelling out to git. Used to invalidate a TTL cache on a
+    branch switch or checkout: those change which files are "current"
+    without necessarily touching any file's mtime in a way a plain
+    modified-since-indexed check would catch reliably within a still-warm
+    cache window. Returns None for a non-git directory, a corrupt ``.git``,
+    or any read error -- callers treat that as "can't tell, TTL alone".
+    """
+    git_path = Path(repo) / ".git"
+    try:
+        if git_path.is_file():
+            # Worktree / submodule: ".git" is a file pointing at the real gitdir.
+            content = git_path.read_text(encoding="utf-8", errors="replace").strip()
+            if not content.startswith("gitdir:"):
+                return None
+            git_dir = Path(content.split(":", 1)[1].strip())
+            if not git_dir.is_absolute():
+                git_dir = (Path(repo) / git_dir).resolve()
+        elif git_path.is_dir():
+            git_dir = git_path
+        else:
+            return None
+
+        head = (git_dir / "HEAD").read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return None
+
+    if head.startswith("ref:"):
+        ref_rel = head.split(" ", 1)[1].strip()
+        try:
+            return (git_dir / ref_rel).read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            return head  # packed-refs: no standalone ref file, but the ref name still differs per branch
+    return head  # detached HEAD: raw commit hash

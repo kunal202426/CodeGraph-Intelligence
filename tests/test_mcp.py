@@ -393,6 +393,113 @@ def test_reindex_works_with_relative_db_path(
     assert _call("index_status", {})["stale"] is False
 
 
+def test_reindex_purges_entities_for_deleted_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A file removed on disk outside of `codegraph watch` (a plain delete,
+    a branch switch, `git checkout`) must have its entities purged by
+    reindex -- otherwise dead code stays visible to the agent forever."""
+    repo = tmp_path / "proj"
+    keep = repo / "keep.py"
+    gone = repo / "gone.py"
+    keep.parent.mkdir(parents=True, exist_ok=True)
+    keep.write_text("def alpha():\n    return 1\n", encoding="utf-8")
+    gone.write_text("def doomed():\n    return 2\n", encoding="utf-8")
+    db = repo / ".codegraph" / "graph.duckdb"
+    assert (
+        CliRunner().invoke(cli_app, ["index", str(repo), "--db", str(db), "--no-embed"]).exit_code
+        == 0
+    )
+    monkeypatch.setattr(mcp_server, "_db_path", db)
+
+    assert any(r["name"] == "doomed" for r in _call("search_code", {"query": "doomed"}))
+
+    gone.unlink()
+
+    result = _call("reindex", {"no_embed": True})
+    assert result["deleted"] == 1, result
+
+    hits = _call("search_code", {"query": "doomed"})
+    assert not any(r["name"] == "doomed" for r in hits)
+    # The untouched file's entities must survive.
+    assert any(r["name"] == "alpha" for r in _call("search_code", {"query": "alpha"}))
+
+
+def test_reindex_noop_reports_zero_deleted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = tmp_path / "proj"
+    db = _index_temp_repo(repo, repo / "a.py", "def f():\n    return 0\n")
+    monkeypatch.setattr(mcp_server, "_db_path", db)
+
+    result = _call("reindex", {})
+    assert result["reindexed"] == 0
+    assert result["deleted"] == 0
+
+
+def test_index_status_reports_deleted_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "proj"
+    gone = repo / "gone.py"
+    db = _index_temp_repo(repo, gone, "def doomed():\n    return 1\n")
+    monkeypatch.setattr(mcp_server, "_db_path", db)
+    monkeypatch.chdir(repo)
+
+    assert _call("index_status", {})["deleted_files"] == 0
+
+    gone.unlink()
+
+    status = _call("index_status", {})
+    assert status["deleted_files"] == 1
+    assert status["stale"] is True
+
+
+# ---------- staleness cache keyed by git HEAD (branch-switch invalidation) ----------
+
+
+def test_stale_cache_get_set_default_head_backward_compatible() -> None:
+    """Calling get()/set() with no git_head arg still works (existing callers)."""
+    cache = mcp_server._StalenessCache()
+    cache.set(7)
+    assert cache.get() == 7
+
+
+def test_stale_cache_miss_on_different_head() -> None:
+    """A cache entry primed for one HEAD is not returned for a different HEAD,
+    even though the TTL has not expired -- this is what makes a branch switch
+    force a fresh check instead of reusing the previous branch's answer."""
+    cache = mcp_server._StalenessCache()
+    cache.set(0, "commit-on-main")
+
+    assert cache.get("commit-on-main") == 0
+    assert cache.get("commit-on-feature-branch") is None
+
+
+def test_get_stale_count_rechecks_after_branch_switch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Simulates: index on main (cache primed with 0), switch branches inside
+    the TTL window, ask a question -- must not silently report 0 forever."""
+    import codegraph.sync.watcher as watcher_mod
+
+    repo = tmp_path / "proj"
+    db = _index_temp_repo(repo, repo / "a.py", "def f():\n    return 1\n")
+    monkeypatch.setattr(mcp_server, "_db_path", db)
+    monkeypatch.setattr(mcp_server, "_stale_cache", mcp_server._StalenessCache())
+
+    heads = iter(["head-main", "head-main", "head-feature"])
+    monkeypatch.setattr(watcher_mod, "git_head", lambda _repo: next(heads))
+    monkeypatch.setattr(watcher_mod, "find_deleted_files", lambda _repo, _db: [])
+    monkeypatch.setattr(watcher_mod, "count_stale_files", lambda _repo, _db: 0)
+
+    assert mcp_server._get_stale_count() == 0  # primes cache for head-main
+    assert mcp_server._get_stale_count() == 0  # still head-main -> cache hit
+
+    # HEAD moves to a different branch; even though TTL hasn't expired, the
+    # cache must be treated as invalid and the count re-derived.
+    monkeypatch.setattr(watcher_mod, "count_stale_files", lambda _repo, _db: 4)
+    assert mcp_server._get_stale_count() == 4
+
+
 def test_get_context_tool_definition() -> None:
     by_name = {t.name: t for t in tool_definitions()}
     tool = by_name["get_context"]

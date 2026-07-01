@@ -52,24 +52,32 @@ class _StalenessCache:
     10-50 ms per call. This cache reuses the result for 5 minutes and is
     reset to 0 immediately after a successful reindex so the next get_context
     call doesn't spuriously warn about staleness that was just fixed.
+
+    Also keyed by the repo's git HEAD: a branch switch changes which files
+    are "current" for a project, so a cache entry from before the switch is
+    discarded even if the 5-minute TTL hasn't expired yet -- otherwise an
+    agent could keep getting a stale "index is fresh" answer for up to 5
+    minutes right after checking out a different branch.
     """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._count: int = 0
         self._expires: float = 0.0  # monotonic epoch; 0 means "expired"
+        self._git_head: str | None = None
 
-    def get(self) -> int | None:
-        """Return the cached count if still fresh, else None."""
+    def get(self, git_head: str | None = None) -> int | None:
+        """Return the cached count if still fresh and HEAD hasn't moved, else None."""
         with self._lock:
-            if time.monotonic() < self._expires:
+            if time.monotonic() < self._expires and git_head == self._git_head:
                 return self._count
             return None
 
-    def set(self, count: int) -> None:
+    def set(self, count: int, git_head: str | None = None) -> None:
         with self._lock:
             self._count = count
             self._expires = time.monotonic() + _STALE_TTL_SEC
+            self._git_head = git_head
 
     def reset(self) -> None:
         """Expire the cache immediately so the next call re-walks the repo."""
@@ -81,21 +89,26 @@ _stale_cache = _StalenessCache()
 
 
 def _get_stale_count() -> int:
-    """Return the number of source files changed since the last index.
+    """Return the number of source files changed or deleted since the last index.
 
-    Uses _stale_cache to avoid re-walking the repo on every tool call.
-    Returns 0 on any error so a broken staleness check never blocks search.
+    Uses _stale_cache to avoid re-walking the repo on every tool call, keyed
+    by the repo's current git HEAD so a branch switch forces a fresh check
+    instead of reusing the previous branch's cached answer. Returns 0 on any
+    error so a broken staleness check never blocks search.
     """
-    cached = _stale_cache.get()
+    from codegraph.sync.watcher import count_stale_files, find_deleted_files, git_head
+
+    root = _repo_root_for_db()
+    head = git_head(root)
+    cached = _stale_cache.get(head)
     if cached is not None:
         return cached
     try:
-        from codegraph.sync.watcher import count_stale_files
-
-        count = count_stale_files(_repo_root_for_db(), get_db_path())
+        db = get_db_path()
+        count = count_stale_files(root, db) + len(find_deleted_files(root, db))
     except Exception:  # noqa: BLE001 — staleness check is best-effort
         count = 0
-    _stale_cache.set(count)
+    _stale_cache.set(count, head)
     return count
 
 
@@ -610,7 +623,7 @@ def _get_context(args: dict[str, Any]) -> str:
         if stale > 0:
             noun = "file" if stale == 1 else "files"
             warnings.append(
-                f"Index stale: {stale} source {noun} changed since last index. "
+                f"Index stale: {stale} source {noun} changed or removed since last index. "
                 "Call reindex before relying on these results."
             )
         if not has_vectors:
@@ -787,10 +800,14 @@ def _index_status(_args: dict[str, Any]) -> str:
         store.close()
 
     stale_files = 0
+    deleted_files = 0
     try:
-        from codegraph.sync.watcher import count_stale_files
+        from codegraph.sync.watcher import count_stale_files, find_deleted_files
 
-        stale_files = count_stale_files(_repo_root_for_db(), get_db_path())
+        root = _repo_root_for_db()
+        db = get_db_path()
+        stale_files = count_stale_files(root, db)
+        deleted_files = len(find_deleted_files(root, db))
     except Exception:  # noqa: BLE001 — staleness check is best-effort
         pass
 
@@ -803,21 +820,31 @@ def _index_status(_args: dict[str, Any]) -> str:
             "embedded": n_embedded,
             "summarized": n_summarized,
             "stale_files": stale_files,
-            "stale": stale_files > 0,
+            "deleted_files": deleted_files,
+            "stale": stale_files > 0 or deleted_files > 0,
         }
     )
 
 
 def _reindex(args: dict[str, Any]) -> str:
-    """Re-parse only the files changed since the last index (T17.1).
+    """Re-parse files changed since the last index and purge files that vanished (T17.1).
 
-    Reuses ``find_stale_files`` + ``index_one_file`` so an agent can refresh a
-    stale index from within the chat. Caps the batch at ``_REINDEX_FILE_CAP`` and
-    suggests the CLI for larger refreshes.
+    Reuses ``find_stale_files`` + ``index_one_file`` for changed/new files, and
+    ``find_deleted_files`` + ``delete_one_file`` for files removed outside of
+    ``codegraph watch`` (a plain delete, a branch switch, ``git checkout``) so
+    an agent can fully refresh a stale index from within the chat. Caps the
+    changed-file batch at ``_REINDEX_FILE_CAP`` and suggests the CLI for
+    larger refreshes; deletions are cheap (no parsing) and are not capped.
     """
     import time
 
-    from codegraph.sync.watcher import find_stale_files, index_one_file
+    from codegraph.sync.watcher import (
+        delete_one_file,
+        find_deleted_files,
+        find_stale_files,
+        git_head,
+        index_one_file,
+    )
 
     no_embed = bool(args.get("no_embed", False))
     db = get_db_path()
@@ -825,12 +852,20 @@ def _reindex(args: dict[str, Any]) -> str:
         return json.dumps({"error": f"No graph database at {db}. Run `codegraph index <repo>`."})
 
     root = _repo_root_for_db()
+    head = git_head(root)
     stale = find_stale_files(root, db)
+    gone = find_deleted_files(root, db)
 
-    if not stale:
-        _stale_cache.set(0)
+    if not stale and not gone:
+        _stale_cache.set(0, head)
         return json.dumps(
-            {"reindexed": 0, "entities": 0, "elapsed_ms": 0.0, "message": "Index already fresh."}
+            {
+                "reindexed": 0,
+                "deleted": 0,
+                "entities": 0,
+                "elapsed_ms": 0.0,
+                "message": "Index already fresh.",
+            }
         )
 
     if len(stale) > _REINDEX_FILE_CAP:
@@ -841,10 +876,22 @@ def _reindex(args: dict[str, Any]) -> str:
                     "refresh. Run `codegraph index <repo>` in a terminal instead."
                 ),
                 "stale_files": len(stale),
+                "deleted_files": len(gone),
             }
         )
 
     start = time.monotonic()
+
+    removed = 0
+    delete_failed = 0
+    for rel_path in gone:
+        try:
+            delete_one_file(rel_path, db)
+            removed += 1
+        except Exception:  # noqa: BLE001 — one bad file shouldn't abort the batch
+            delete_failed += 1
+            continue
+
     total_entities = 0
     reindexed = 0
     failed = 0
@@ -857,13 +904,14 @@ def _reindex(args: dict[str, Any]) -> str:
             continue
     elapsed_ms = (time.monotonic() - start) * 1000.0
 
-    if failed == 0:
-        _stale_cache.set(0)
+    if failed == 0 and delete_failed == 0:
+        _stale_cache.set(0, head)
     else:
         _stale_cache.reset()
     return json.dumps(
         {
             "reindexed": reindexed,
+            "deleted": removed,
             "entities": total_entities,
             "failed": failed,
             "elapsed_ms": round(elapsed_ms, 1),
