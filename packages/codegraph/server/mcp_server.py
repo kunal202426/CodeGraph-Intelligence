@@ -38,7 +38,7 @@ from codegraph.graph.store import GraphStore
 
 DEFAULT_DB = Path(".codegraph/graph.duckdb")
 
-# Set from --db (or CODEGRAPH_DB) in main(); read by the tool handlers (T7.2).
+# Set from --db (or CODEGRAPH_DB) in main(); read by the tool handlers.
 _db_path: Path | None = None
 
 # How long (seconds) to reuse a stale-file count before re-walking the repo.
@@ -556,7 +556,7 @@ def _ask_codebase(args: dict[str, Any]) -> str:
 
 
 def _trace_path(args: dict[str, Any]) -> str:
-    """Shortest call chain between two entity_ids (T12.2)."""
+    """Shortest call chain between two entity_ids."""
     from_id = str(args["from_id"])
     to_id = str(args["to_id"])
     max_hops = max(1, min(int(args.get("max_hops", 7)), 20))
@@ -596,7 +596,7 @@ def _trace_path(args: dict[str, Any]) -> str:
 
 
 def _get_context(args: dict[str, Any]) -> str:
-    """Hybrid search packed with callers/callees in one response (T12.1).
+    """Hybrid search packed with callers/callees in one response.
 
     Defaults to token-lean summaries (signature + docstring + short source
     preview). Pass ``detail="full"`` to include complete ``raw_source`` bodies.
@@ -740,7 +740,7 @@ def _get_context(args: dict[str, Any]) -> str:
 
 
 def _list_files(args: dict[str, Any]) -> str:
-    """Return indexed files with language, LOC, and entity count (T12.3)."""
+    """Return indexed files with language, LOC, and entity count."""
     language_filter = args.get("language")
 
     store = _open_store()
@@ -788,7 +788,7 @@ _REINDEX_FILE_CAP = 500
 
 
 def _index_status(_args: dict[str, Any]) -> str:
-    """Return index-level statistics and staleness indicator (T12.3)."""
+    """Return index-level statistics and staleness indicator."""
     store = _open_store()
     try:
         n_files = store.count_files()
@@ -827,7 +827,7 @@ def _index_status(_args: dict[str, Any]) -> str:
 
 
 def _reindex(args: dict[str, Any]) -> str:
-    """Re-parse files changed since the last index and purge files that vanished (T17.1).
+    """Re-parse files changed since the last index and purge files that vanished.
 
     Reuses ``find_stale_files`` + ``index_one_file`` for changed/new files, and
     ``find_deleted_files`` + ``delete_one_file`` for files removed outside of
@@ -1118,7 +1118,7 @@ def main() -> None:
     if args.db is not None:
         _db_path = args.db
 
-    # Staleness check (T11.3): warn to stderr if source files changed since last index.
+    # Staleness check: warn to stderr if source files changed since last index.
     # stdout is reserved for MCP framing; all diagnostics must go to stderr.
     try:
         from codegraph.sync.watcher import count_stale_files
