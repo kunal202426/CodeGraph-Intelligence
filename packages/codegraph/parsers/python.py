@@ -221,8 +221,8 @@ class PythonParser:
         )
 
     # ------------------------------------------------------------------
-    # Import extraction (T2.1) — emit edges with provisional dst_ids
-    # that the symbol resolver (T2.2) closes.
+    # Import extraction: emit edges with provisional dst_ids
+    # that the symbol resolver closes.
     #
     # Encoding:
     #   absolute  `from x.y import z`  → dst = "py:?:x.y.z"
@@ -368,7 +368,7 @@ class PythonParser:
             )
         )
 
-        # Call edges (T4.1): scan a function/method body for call expressions.
+        # Call edges: scan a function/method body for call expressions.
         if edges is not None and inner_def.type == "function_definition":
             body = inner_def.child_by_field_name("body")
             if body is not None:
@@ -380,7 +380,7 @@ class PythonParser:
         """Emit a provisional `calls` edge per call expression in `body`.
 
         Callee is the simple name (`foo` from `foo()`, `m` from `obj.m()`).
-        dst is `py:?call:<name>`; the resolver (T2.2) closes it against
+        dst is `py:?call:<name>`; the resolver closes it against
         same-file entities and the file's imports.
         """
         for call in self._iter_call_nodes(body):
