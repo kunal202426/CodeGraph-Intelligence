@@ -1,7 +1,7 @@
 # CodeGraph -- Copyright (c) 2026 Kunal Mathur.
 # Source-available under PolyForm Noncommercial 1.0.0. See LICENSE.
 # https://github.com/kunal202426/CodeGraph-Intelligence
-"""GraphRAG retrieval: vector seeds + 1-hop graph expansion, re-ranked (T5.2).
+"""GraphRAG retrieval: vector seeds + 1-hop graph expansion, re-ranked.
 
 The retrieval core for `ask` / `summarize`. Pure-text vector search alone misses
 code that's *structurally* central but lexically dissimilar; pure graph walks
@@ -40,12 +40,12 @@ _W_RECENCY = 0.1
 _EMBEDDING_DIM = 384
 _EDGE_TYPES = ("calls", "imports")
 
-# Prompt assembly (T5.3).
+# Prompt assembly.
 _PROMPTS_DIR = Path(__file__).with_name("prompts")
 _ASK_SYSTEM_PATH = _PROMPTS_DIR / "ask_system.md"
 _SUMMARIZE_SYSTEM_PATH = _PROMPTS_DIR / "summarize_system.md"
 _BODY_PREVIEW_LINES = 20  # show signature, else first N lines of raw_source
-_CONTEXT_TOKEN_BUDGET = 3000  # repository context budget, token-based (T15.2)
+_CONTEXT_TOKEN_BUDGET = 3000  # repository context budget, token-based
 _CONTEXT_CHAR_BUDGET = 12000  # deprecated ~char alias (~3000 tokens); back-compat only
 _DEFAULT_PER_DIR = 10  # representative entities sampled per top-level directory
 
@@ -241,7 +241,7 @@ def retrieve(
 
 
 # ----------------------------------------------------------------------
-# Prompt assembly (T5.3)
+# Prompt assembly
 
 
 def load_system_prompt() -> str:
