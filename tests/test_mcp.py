@@ -617,6 +617,65 @@ def test_store_summaries_ignores_blank_items(indexed_db: Path) -> None:
     assert data["stored"] == 0
 
 
+# ---------- stale-index warning in get_context ----------
+
+
+def test_get_context_warns_when_stale(indexed_db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """get_context must include a stale warning when the index is outdated."""
+    monkeypatch.setattr(mcp_server, "_get_stale_count", lambda: 5)
+    data = _call("get_context", {"query": "authenticate"})
+    stale_warnings = [w for w in data["warnings"] if "stale" in w.lower()]
+    assert stale_warnings, f"expected a stale warning, got: {data['warnings']}"
+    assert "5" in stale_warnings[0]
+    assert "reindex" in stale_warnings[0].lower()
+
+
+def test_get_context_no_stale_warning_when_fresh(
+    indexed_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No stale warning when the stale count is 0."""
+    monkeypatch.setattr(mcp_server, "_get_stale_count", lambda: 0)
+    data = _call("get_context", {"query": "authenticate"})
+    stale_warnings = [w for w in data["warnings"] if "stale" in w.lower()]
+    assert not stale_warnings
+
+
+def test_get_context_stale_warning_present_on_no_match(
+    indexed_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stale warning appears even when the query returns no results."""
+    monkeypatch.setattr(mcp_server, "_get_stale_count", lambda: 3)
+    data = _call("get_context", {"query": "zzz_no_such_symbol_99"})
+    assert data["total"] == 0
+    stale_warnings = [w for w in data["warnings"] if "stale" in w.lower()]
+    assert stale_warnings
+
+
+def test_reindex_resets_stale_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """After a successful reindex, _stale_cache reports 0 (index is fresh)."""
+    import time as _time
+
+    repo = tmp_path / "proj"
+    src = repo / "pkg" / "mod.py"
+    db = _index_temp_repo(repo, src, "def alpha():\n    return 1\n")
+    monkeypatch.setattr(mcp_server, "_db_path", db)
+
+    # Seed the cache with a non-zero count so we can confirm it resets.
+    mcp_server._stale_cache.set(7)
+    assert mcp_server._stale_cache.get() == 7
+
+    # Modify the file so there is a real stale file to reindex.
+    _time.sleep(0.05)
+    src.write_text("def alpha():\n    return 2\n", encoding="utf-8")
+
+    result = _call("reindex", {"no_embed": True})
+    assert result["reindexed"] >= 1
+    assert result["failed"] == 0
+
+    # Cache must be 0 so the next get_context won't emit a stale warning.
+    assert mcp_server._stale_cache.get() == 0
+
+
 def test_store_summaries_improves_semantic_match(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

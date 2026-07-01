@@ -25,6 +25,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +40,64 @@ DEFAULT_DB = Path(".codegraph/graph.duckdb")
 
 # Set from --db (or CODEGRAPH_DB) in main(); read by the tool handlers (T7.2).
 _db_path: Path | None = None
+
+# How long (seconds) to reuse a stale-file count before re-walking the repo.
+_STALE_TTL_SEC = 300
+
+
+class _StalenessCache:
+    """Thread-safe TTL cache for the per-process stale-file count.
+
+    Walking the repo to count stale files on every search query would add
+    10-50 ms per call. This cache reuses the result for 5 minutes and is
+    reset to 0 immediately after a successful reindex so the next get_context
+    call doesn't spuriously warn about staleness that was just fixed.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._count: int = 0
+        self._expires: float = 0.0  # monotonic epoch; 0 means "expired"
+
+    def get(self) -> int | None:
+        """Return the cached count if still fresh, else None."""
+        with self._lock:
+            if time.monotonic() < self._expires:
+                return self._count
+            return None
+
+    def set(self, count: int) -> None:
+        with self._lock:
+            self._count = count
+            self._expires = time.monotonic() + _STALE_TTL_SEC
+
+    def reset(self) -> None:
+        """Expire the cache immediately so the next call re-walks the repo."""
+        with self._lock:
+            self._expires = 0.0
+
+
+_stale_cache = _StalenessCache()
+
+
+def _get_stale_count() -> int:
+    """Return the number of source files changed since the last index.
+
+    Uses _stale_cache to avoid re-walking the repo on every tool call.
+    Returns 0 on any error so a broken staleness check never blocks search.
+    """
+    cached = _stale_cache.get()
+    if cached is not None:
+        return cached
+    try:
+        from codegraph.sync.watcher import count_stale_files
+
+        count = count_stale_files(_repo_root_for_db(), get_db_path())
+    except Exception:  # noqa: BLE001 — staleness check is best-effort
+        count = 0
+    _stale_cache.set(count)
+    return count
+
 
 server: Server = Server("codegraph")
 
@@ -546,6 +606,13 @@ def _get_context(args: dict[str, Any]) -> str:
         # Surface the one failure that is otherwise silent: a --no-embed index
         # degrades semantic search to literal-only with no signal to the agent.
         warnings: list[str] = []
+        stale = _get_stale_count()
+        if stale > 0:
+            noun = "file" if stale == 1 else "files"
+            warnings.append(
+                f"Index stale: {stale} source {noun} changed since last index. "
+                "Call reindex before relying on these results."
+            )
         if not has_vectors:
             warnings.append(
                 "No embeddings in this index -- results are literal matches only. "
@@ -761,6 +828,7 @@ def _reindex(args: dict[str, Any]) -> str:
     stale = find_stale_files(root, db)
 
     if not stale:
+        _stale_cache.set(0)
         return json.dumps(
             {"reindexed": 0, "entities": 0, "elapsed_ms": 0.0, "message": "Index already fresh."}
         )
@@ -789,6 +857,10 @@ def _reindex(args: dict[str, Any]) -> str:
             continue
     elapsed_ms = (time.monotonic() - start) * 1000.0
 
+    if failed == 0:
+        _stale_cache.set(0)
+    else:
+        _stale_cache.reset()
     return json.dumps(
         {
             "reindexed": reindexed,
