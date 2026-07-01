@@ -5,8 +5,27 @@
 - **Status:** ACTIVE — roadmap complete; product audit + E2E + manual test + usability passes done.
 - **Phase:** Maintenance & hardening (post-audit fixes, usability, repo hygiene)
 - **Next task:** (optional: persistent model service to kill per-CLI reload — see manual test #3; capture function-local imports — parsers/python.py:184-186; PyPI publish (manual))
-- **Last session:** 2026-06-15
+- **Last session:** 2026-07-01
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
+
+### Session 2026-07-01 — staleness/reindex fixes, comment cleanup
+- `mcp: get_context warns automatically when the index is stale`: previously an agent only
+  found out by proactively calling `index_status`. A 300s TTL-cached staleness check now
+  injects a warning straight into `get_context` results, naming the stale file count.
+- `reindex now purges entities for files deleted outside of watch`: a plain `rm` or a branch
+  switch used to leave dead entities in the graph indefinitely. `find_deleted_files` diffs
+  the DB against a fresh directory walk and cleans up anything missing.
+- `find_stale_files` now compares each file against its own `indexed_at` row instead of a
+  single repo-wide max, fixing a case where re-indexing one file could mask a different
+  file's real staleness.
+- Staleness cache is now keyed on the repo's git HEAD (read directly from `.git/HEAD`, no
+  subprocess) so a branch switch inside the TTL window forces a fresh check instead of
+  reusing the previous branch's cached answer.
+- Full suite: 892 passing, 1 live-skip.
+- README: added Kortex as the product's brand name alongside CodeGraph in the title and
+  prose; the actual package, CLI commands, and env vars are unchanged.
+- Cleaned up leftover internal task-tracker references (`(T5.2)`, `(T12.3)`, etc.) in
+  docstrings/comments across 17 files. No behavior change.
 
 ### Session 2026-06-15 (eve) — honest docs + MCP hang fix
 - `mcp: warm embedding model at startup to fix get_context hang` — first get_context loaded the model in an anyio worker thread; first-time import of torch/sklearn off the main thread deadlocked. Now preloaded in the main thread at server startup. Verified over real stdio: hang -> 0.1s. Auto-use + savings reporting confirmed live on a restarted agent.
