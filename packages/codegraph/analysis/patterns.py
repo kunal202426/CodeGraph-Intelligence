@@ -1,7 +1,7 @@
 # CodeGraph -- Copyright (c) 2026 Kunal Mathur.
 # Source-available under PolyForm Noncommercial 1.0.0. See LICENSE.
 # https://github.com/kunal202426/CodeGraph-Intelligence
-"""Layered-architecture analysis (T9.3).
+"""Layered-architecture analysis.
 
 Classifies each top-level directory into an architectural layer by name, then
 inspects the file-level import graph to summarize cross-layer flow and flag
