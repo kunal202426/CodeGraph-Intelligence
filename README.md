@@ -32,6 +32,9 @@ Solving high token consumption and context break during window overload.
 - Hit@1 was 7/7 on symbol lookups where the function name doesn't appear in the
   query at all (pure semantic match).
 - Warm query latency ~15ms; stale check is <1ms once the TTL cache is warm.
+- `reindex` now cleans up entities for files deleted outside of `watch` (a plain `rm`, a
+  branch switch), and the staleness cache is keyed on git HEAD so a branch switch doesn't
+  hide staleness for up to 5 minutes. Full suite: 892 passing.
 
 ---
 
