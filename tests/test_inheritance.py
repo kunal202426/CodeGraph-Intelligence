@@ -607,3 +607,38 @@ def test_go_method_only_on_embedded_type_resolves_through_promotion(tmp_path: Pa
         store.close()
     resolved = {(src, dst) for src, dst, _ in edges}
     assert ("go:main.go:Derived.Run", "go:main.go:Base.Save") in resolved
+
+
+# ---------- multiple inheritance: leftmost base wins ----------
+
+
+def test_python_multiple_inheritance_prefers_leftmost_base_with_the_method(
+    tmp_path: Path,
+) -> None:
+    """`class Foo(A, B)` where both A and B declare `save` -- Python's own MRO
+    prefers A (declared first); the resolver's walk processes bases in
+    declaration order and returns on the first match, matching that."""
+    db = _index(
+        tmp_path,
+        {
+            "app.py": (
+                "class A:\n"
+                "    def save(self):\n"
+                "        pass\n\n"
+                "class B:\n"
+                "    def save(self):\n"
+                "        pass\n\n"
+                "class Foo(A, B):\n"
+                "    def run(self):\n"
+                "        self.save()\n"
+            ),
+        },
+    )
+    store = GraphStore(db)
+    try:
+        edges = _edges(store)
+    finally:
+        store.close()
+    resolved = {(src, dst) for src, dst, _ in edges}
+    assert ("py:app.py:Foo.run", "py:app.py:A.save") in resolved
+    assert ("py:app.py:Foo.run", "py:app.py:B.save") not in resolved
