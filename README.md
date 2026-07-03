@@ -7,7 +7,7 @@ MCP so the agent queries the graph instead of re-reading your files every messag
 Solving high token consumption and context break during window overload.
 
 > **Status: active development.** Core indexing, search, and MCP tools are stable.
-> 778 tests passing. Every user-facing surface manually tested: 21/21 passed, 6 issues
+> 1001 tests passing. Every user-facing surface manually tested: 21/21 passed, 6 issues
 > fixed. [Manual test →](docs/MANUAL_TEST_REPORT.md) | [Bench notes →](docs/QUALITY_REPORT_2026-07-01.md).
 > MCP server works but still preview, not production-ready.
 
@@ -22,6 +22,19 @@ Solving high token consumption and context break during window overload.
 
 **Jul 2026**
 
+- Framework-aware call resolution: a route handler invoked only through Flask, FastAPI,
+  Express, Django, Spring, or Rails routing now has a real `calls` edge instead of showing
+  up as false-positive dead code with zero callers in `impact_analysis`. Resolves same-file
+  and cross-file (the common case — `routes.rb` → a controller file, `urls.py` → `views.py`).
+- Cross-language HTTP edges: a TS/JS `fetch()`/`axios.*()` call with a statically-known URL
+  now resolves straight through to the backend handler that serves it, across both files and
+  languages in one edge.
+- `codegraph hooks install` adds an opt-in git-hook fallback (`post-commit`/`post-merge`/
+  `post-checkout`) that re-indexes in the background, for environments where filesystem-watch
+  events aren't reliable (mounted network drives, some WSL2 `/mnt` paths).
+- Agent installer support doubled: 4 → 8 targets, adding Kiro, opencode, Hermes Agent, and
+  Antigravity alongside Claude Code, Cursor, Codex, and Gemini.
+- 1001 tests passing (up from 778), zero regressions across the pass.
 - `get_context` now warns when your index is stale, and tells you how many files changed and
   to run `reindex` before trusting results. Previously you had to call `index_status`
   yourself to find this out, which most agents skip.
