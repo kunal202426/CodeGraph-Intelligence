@@ -2,11 +2,11 @@
 
 ## Current
 
-- **Status:** ACTIVE — roadmap complete; competitive hardening (Phases 19-22, 24, 26-27) done;
+- **Status:** ACTIVE — roadmap complete; competitive hardening (Phases 19-22, 24, 26-28) done;
   CI green, `main` fully pushed, working tree clean.
 - **Phase:** Maintenance & hardening (post-audit fixes, usability, repo hygiene). No phase
   currently in progress — safe to start a new session cold from this file.
-- **Tests:** 1089 passing, 1 live-skip (needs `ANTHROPIC_API_KEY`), 0 failing. Verified both
+- **Tests:** 1102 passing, 1 live-skip (needs `ANTHROPIC_API_KEY`), 0 failing. Verified both
   locally and on GitHub Actions (`gh run list`) as of the last commit below.
 - **Next task (all optional, none blocking):**
   - Ruby `include`-mixin inheritance (only `< Base` superclass syntax is walked today)
@@ -15,10 +15,41 @@
   - Capture function-local imports — `parsers/python.py:184-186` (module-level only today)
   - PyPI publish (manual step, package metadata already ready since Phase 18)
   - **Explicitly deferred, not started:** Phase 23 (shared multi-client MCP daemon — scoped,
-    rejected as higher-risk than its benefit, see "Competitive hardening" section below);
-    Phase 25 (optional Vue/Svelte language coverage — never prioritized, no user ask)
+    rejected as higher-risk than its benefit, see "Competitive hardening" section below;
+    the fork's liveness watchdog belongs to the same process-model territory and is
+    deferred with it); Phase 25 (optional Vue/Svelte coverage — never prioritized, no ask)
 - **Last session:** 2026-07-03
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
+
+### Session 2026-07-03 (night, cont.) — battle hardening from the fork's bug history (Phase 28)
+Mined the fork's changelog and source as a free list of "bugs you will hit at scale" — each
+of their production fixes came from a real user report, so fixing the same patterns
+preemptively buys their field-testing without their user base. Four slices, every bug first
+confirmed reproducible here before fixing:
+
+- **C++ index corruption (their #1093/#1096):** a bodiless `class Foo;` forward declaration
+  was indexed as its own class (duplicating hot classes across header-heavy codebases, and a
+  fwd decl after the definition would silently clobber the real entity — same entity_id,
+  last upsert wins). Worse than their version of the bug: a method returning a reference
+  (`const X& GetTags() const`, everywhere in real C++ headers) was **dropped entirely** —
+  tree-sitter wraps its function_declarator as an unnamed child of reference_declarator, not
+  the `declarator` field the parser walked. Conversion operators (`operator Type()`) were
+  dropped too. All three fixed; FORCEINLINE-style macro robustness locked in with a test.
+- **Git hang (their #1139):** `git blame` ran with no timeout — a wedged git (network fs,
+  stuck fsmonitor) blocked `codegraph owner` forever. Bounded at 10s, degrades to empty.
+- **Poisoned-file retry-forever (their #1127):** a file persistently crashing re-index burned
+  a full attempt on every save with an identical error line each time. The watcher now
+  quarantines a path after 3 consecutive failures (DB-lock contention excluded — transient,
+  has its own retry); success resets, deletion clears the quarantine.
+- **Minified-file waste (their #1122):** bundled/minified output (any single line >10k chars)
+  is now skipped by both index paths — seconds of tree-sitter time per save saved, and
+  search stays free of entities nobody wrote.
+
+Deliberately not ported: their liveness watchdog (child process heartbeat-killing a wedged
+daemon) — it's coupled to the daemon process model this project explicitly skipped in Phase
+23; and their return-type recovery macro tables — my entity model keeps the raw signature
+text, so garbled return types don't corrupt any queryable field. 14 new tests, 1102 passing,
+zero regressions across all four slices.
 
 ### Session 2026-07-03 (night) — CI fix: deterministic multi-base inheritance ordering
 Phase 27's multiple-inheritance test (`class Foo(A, B)`, both declaring the same method)
@@ -383,7 +414,7 @@ passing, zero regressions in the existing 4-target suite.**
 
 ---
 
-## Competitive hardening (Phases 19-22, 24, 26-27) — COMPLETE
+## Competitive hardening (Phases 19-22, 24, 26-28) — COMPLETE
 
 A gap-closing pass after comparing this project against a similarly-scoped open-source
 fork, run across several sittings as the fork itself kept shipping. Two real product gaps
@@ -411,14 +442,20 @@ type-aware and inheritance-aware:
   before calls, plus a breadth-first walk up resolved bases, closes this for the 6 languages
   with real inheritance syntax and Go's struct-embedding equivalent (Rust has no inheritance
   concept, not applicable).
+- **Battle hardening (28):** the fork's production bug history, fixed preemptively — C++
+  forward-declaration index corruption plus dropped reference-return/conversion-operator
+  functions, git-blame hang (no timeout), poisoned-file retry-forever in the watcher (now
+  quarantined after 3 consecutive failures), and minified/generated files wasting parse time
+  (now skipped by both index paths).
 
 **Explicitly skipped:** Phase 23 (a shared multi-client MCP daemon) — real, but a
 process-model change with higher risk than the other phases combined, for a benefit
 (avoiding N separate per-window processes/DuckDB connections) that's real but narrower than
-the framework-resolution or method-precision wins. Revisit only if multi-window duplicate
-process overhead becomes an actual reported problem, not preemptively.
+the framework-resolution or method-precision wins. The fork's liveness watchdog is deferred
+with it (same process-model territory). Revisit only if multi-window duplicate process
+overhead becomes an actual reported problem, not preemptively.
 
-895 → 1089 tests across the seven phases, zero regressions at any step. Verified green on
+895 → 1102 tests across the eight phases, zero regressions at any step. Verified green on
 GitHub Actions (Linux), not just locally — a cross-platform ordering bug in Phase 27's
 multi-base-inheritance resolution was caught by CI running on a different OS than local dev
 and fixed the same session (see the "CI fix" entry above).

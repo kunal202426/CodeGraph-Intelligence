@@ -7,7 +7,7 @@ MCP so the agent queries the graph instead of re-reading your files every messag
 Solving high token consumption and context break during window overload.
 
 > **Status: active development.** Core indexing, search, and MCP tools are stable.
-> 1089 tests passing. Every user-facing surface manually tested: 21/21 passed, 6 issues
+> 1102 tests passing. Every user-facing surface manually tested: 21/21 passed, 6 issues
 > fixed. [Manual test →](docs/MANUAL_TEST_REPORT.md) | [Bench notes →](docs/QUALITY_REPORT_2026-07-01.md).
 > MCP server works but still preview, not production-ready.
 
@@ -22,6 +22,13 @@ Solving high token consumption and context break during window overload.
 
 **Jul 2026**
 
+- Battle hardening against real-world failure patterns (each confirmed reproducible before
+  fixing): C++ forward declarations no longer indexed as duplicate classes; methods returning
+  a reference (`const X& Get() const`) and conversion operators (`operator Type()`) — both
+  previously dropped from the index entirely — now indexed correctly; `git blame` bounded by
+  a timeout so a wedged git can't hang `codegraph owner`; the watcher quarantines a file
+  after 3 consecutive re-index failures instead of retrying forever; generated/minified
+  files (any source line over 10k chars) are skipped by both index paths.
 - Inheritance-aware method resolution: `obj.method()` now also resolves when `method` is
   declared only on a base class/interface, not `obj`'s own type — a base-class edge per
   class (`extends`/`implements`/`< Base`/`: public Base`, plus Go's embedded-struct method
@@ -34,7 +41,7 @@ Solving high token consumption and context break during window overload.
   `self.attr`/`this.attr`/`@attr` — so two unrelated classes sharing a method name no longer
   risk a call edge pointing at the wrong one. Falls back to the old name-only resolution
   whenever the type can't be confidently inferred, so this never makes a result worse.
-- 1089 tests passing (up from 1001), zero regressions across the pass — verified on both
+- 1102 tests passing (up from 1001), zero regressions across the pass — verified on both
   local runs and GitHub Actions (Linux), which caught and led to a fix for a genuine
   cross-platform ordering bug in multi-base inheritance resolution.
 - Framework-aware call resolution: a route handler invoked only through Flask, FastAPI,
@@ -561,7 +568,7 @@ more queries: **101x average** (12x on small files at worst, 190x best).
 **Search:** Hit@1 = 7/7 on symbol queries where the function name doesn't appear in
 the query string at all. Warm query ~15ms.
 
-**Tests:** 1089 passing, 0 failures, 1 live-skip (needs an API key). Covers MCP tools,
+**Tests:** 1102 passing, 0 failures, 1 live-skip (needs an API key). Covers MCP tools,
 all 22 parsers, framework route resolution, receiver-type and inheritance-aware resolution,
 graph queries, CLI, and all 8 installer targets.
 
@@ -572,7 +579,7 @@ daemon, and the MCP server (install, live query, uninstall), run by hand on this
 
 ## Roadmap
 
-Phases 10-13 ("best of both"), 14-18 ("actually usable"), and the 19-22/24/26-27 competitive
+Phases 10-13 ("best of both"), 14-18 ("actually usable"), and the 19-22/24/26-28 competitive
 hardening pass are complete:
 
 - **Phase 10**: 9 languages: Go, Rust, Java, Ruby, PHP, C, C++ added to Python + TS/JS; extended to 19 with Kotlin, C#, Scala, Bash, Elixir, R, Julia, Haskell, OCaml; further to 22 with HTML, CSS, SQL
@@ -590,6 +597,7 @@ hardening pass are complete:
 - **Phase 24**: agent installer breadth doubled, 4 → 8 targets (added Kiro, opencode, Hermes Agent, Antigravity)
 - **Phase 26**: receiver-type inference — `obj.method()` resolves to the exact declared method (not just callee name) across all 8 OO-capable languages
 - **Phase 27**: inheritance-aware method resolution — walks base classes/interfaces (or Go's embedded-struct promotion) when a method isn't declared on the receiver's own type
+- **Phase 28**: battle hardening — C++ forward-decl/reference-return/conversion-operator index corruption fixed, git-blame timeout, watcher failure quarantine, generated/minified file skip
 
 Deliberately **deferred**: deep TypeScript type resolution via `tsc`, Ruby `include`-mixin
 inheritance and Rust trait default methods (receiver-type inference through inheritance
