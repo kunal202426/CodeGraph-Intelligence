@@ -219,7 +219,8 @@ def test_function_call_edge(parser: PHPParser) -> None:
 def test_member_call_edge(parser: PHPParser) -> None:
     src = "<?php\nclass T {\n    public function run(): void { $this->listen(); }\n}"
     result = parser.parse(Path("T.php"), src)
-    assert any(e.dst_id == "php:?call:listen" for e in _call_edges(result))
+    # `$this->listen()` -- receiver type is inferred as the enclosing class T.
+    assert any(e.dst_id == "php:?methodcall:T.listen" for e in _call_edges(result))
 
 
 def test_scoped_call_edge(parser: PHPParser) -> None:
@@ -263,9 +264,9 @@ def test_fixture_server_emits_expected_entities(parser: PHPParser) -> None:
     listen = _by_name(result, "listen")
     assert listen is not None and listen.is_exported is False
 
-    # start() calls $this->listen()
+    # start() calls $this->listen() — receiver type inferred as Server
     call_edges = _call_edges(result)
-    assert any(e.dst_id == "php:?call:listen" for e in call_edges)
+    assert any(e.dst_id == "php:?methodcall:Server.listen" for e in call_edges)
 
     # use imports
     import_edges = _import_edges(result)

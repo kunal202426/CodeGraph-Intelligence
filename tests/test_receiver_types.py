@@ -16,6 +16,7 @@ from codegraph.cli import app
 from codegraph.graph.store import GraphStore
 from codegraph.parsers.go import GoParser
 from codegraph.parsers.java import JavaParser
+from codegraph.parsers.php import PHPParser
 from codegraph.parsers.python import PythonParser
 from codegraph.parsers.rust import RustParser
 from codegraph.parsers.typescript import TypeScriptParser
@@ -740,3 +741,116 @@ def test_rs_resolves_to_correct_struct_when_two_files_share_a_method_name(tmp_pa
     resolved = {(src, dst) for src, dst, _ in edges}
     assert ("rs:file_a.rs:use_it", "rs:file_a.rs:Logger.log") in resolved
     assert ("rs:file_a.rs:use_it", "rs:file_b.rs:Logger.log") not in resolved
+
+
+# ---------- PHP: pure parser unit tests (no DB) ----------
+
+
+def _php_call_edges(source: str, src_suffix: str = ""):
+    result = PHPParser().parse(Path("T.php"), source)
+    edges = [e for e in result.edges if e.type == "calls"]
+    if src_suffix:
+        edges = [e for e in edges if e.src_id.endswith(src_suffix)]
+    return edges
+
+
+def test_php_this_call_infers_enclosing_class_as_receiver_type() -> None:
+    edges = _php_call_edges(
+        "<?php\n"
+        "class Widget {\n"
+        "    function render() {}\n"
+        "    function draw() {\n"
+        "        $this->render();\n"
+        "    }\n"
+        "}\n",
+        src_suffix="Widget.draw",
+    )
+    assert len(edges) == 1
+    assert edges[0].dst_id == "php:?methodcall:Widget.render"
+
+
+def test_php_new_expression_local_variable_infers_type() -> None:
+    edges = _php_call_edges(
+        "<?php\n"
+        "class Logger {\n"
+        "    function log() {}\n"
+        "}\n"
+        "function use_it() {\n"
+        "    $lg = new Logger();\n"
+        "    $lg->log();\n"
+        "}\n",
+        src_suffix=":use_it",
+    )
+    method_calls = [e for e in edges if "?methodcall:" in e.dst_id]
+    assert len(method_calls) == 1
+    assert method_calls[0].dst_id == "php:?methodcall:Logger.log"
+
+
+def test_php_typed_parameter_infers_type() -> None:
+    edges = _php_call_edges(
+        "<?php\n"
+        "class Service {\n"
+        "    function notify() {}\n"
+        "}\n"
+        "class Caller {\n"
+        "    function use(Service $svc) {\n"
+        "        $svc->notify();\n"
+        "    }\n"
+        "}\n",
+        src_suffix="Caller.use",
+    )
+    method_calls = [e for e in edges if "?methodcall:" in e.dst_id]
+    assert len(method_calls) == 1
+    assert method_calls[0].dst_id == "php:?methodcall:Service.notify"
+
+
+def test_php_typed_property_resolves_from_other_method() -> None:
+    edges = _php_call_edges(
+        "<?php\n"
+        "class Service {\n"
+        "    function save() {}\n"
+        "}\n"
+        "class Caller {\n"
+        "    private Service $svc;\n"
+        "    function __construct() {\n"
+        "        $this->svc = new Service();\n"
+        "    }\n"
+        "    function run() {\n"
+        "        $this->svc->save();\n"
+        "    }\n"
+        "}\n",
+        src_suffix="Caller.run",
+    )
+    method_calls = [e for e in edges if "?methodcall:" in e.dst_id]
+    assert len(method_calls) == 1
+    assert method_calls[0].dst_id == "php:?methodcall:Service.save"
+
+
+# ---------- PHP: integration ----------
+
+
+def test_php_resolves_to_correct_class_when_two_files_share_a_method_name(tmp_path: Path) -> None:
+    db = _index(
+        tmp_path,
+        {
+            "file_a.php": (
+                "<?php\n"
+                "class Logger {\n"
+                "    function log() {}\n"
+                "}\n"
+                "function use_it() {\n"
+                "    $lg = new Logger();\n"
+                "    $lg->log();\n"
+                "}\n"
+            ),
+            "file_b.php": ("<?php\nclass Logger {\n    function log() {}\n}\n"),
+        },
+    )
+    store = GraphStore(db)
+    try:
+        edges = _edges(store)
+    finally:
+        store.close()
+    resolved = {(src, dst) for src, dst, _ in edges}
+    assert ("php:file_a.php:use_it", "php:file_a.php:Logger.log") in resolved
+    assert ("php:file_a.php:use_it", "php:file_b.php:Logger.log") not in resolved

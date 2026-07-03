@@ -30,6 +30,12 @@ with warnings.catch_warnings():
     from tree_sitter_languages import get_language
 
 from codegraph.parsers.base import ParseResult
+from codegraph.resolution.receiver_types.php import (
+    infer_local_types,
+    infer_param_types,
+    infer_self_attr_types,
+    receiver_type_for_call,
+)
 from codegraph.uir import (
     Edge,
     EntityType,
@@ -181,9 +187,19 @@ class PHPParser:
 
         body = node.child_by_field_name("body")
         if body is not None:
+            self_attr_types = infer_self_attr_types(body, source)
             for child in body.children:
                 if child.type == "method_declaration":
-                    self._emit_method(child, source, file, name, entity_id, entities, edges)
+                    self._emit_method(
+                        child,
+                        source,
+                        file,
+                        name,
+                        entity_id,
+                        entities,
+                        edges,
+                        self_attr_types=self_attr_types,
+                    )
 
         return entity_id
 
@@ -229,7 +245,17 @@ class PHPParser:
 
         body = node.child_by_field_name("body")
         if body is not None:
-            self._emit_calls(body, source, src_id=entity_id, edges=edges)
+            local_types = infer_param_types(node.child_by_field_name("parameters"), source)
+            local_types.update(infer_local_types(body, source))
+            self._emit_calls(
+                body,
+                source,
+                src_id=entity_id,
+                edges=edges,
+                class_name=None,
+                local_types=local_types,
+                self_attr_types={},
+            )
 
         return entity_id
 
@@ -242,6 +268,8 @@ class PHPParser:
         owner_id: str,
         entities: list[UIREntity],
         edges: list[Edge],
+        *,
+        self_attr_types: dict[str, str] | None = None,
     ) -> str | None:
         name_node = node.child_by_field_name("name")
         name = self._text(name_node, source)
@@ -281,7 +309,17 @@ class PHPParser:
 
         body = node.child_by_field_name("body")
         if body is not None:
-            self._emit_calls(body, source, src_id=entity_id, edges=edges)
+            local_types = infer_param_types(node.child_by_field_name("parameters"), source)
+            local_types.update(infer_local_types(body, source))
+            self._emit_calls(
+                body,
+                source,
+                src_id=entity_id,
+                edges=edges,
+                class_name=owner_name,
+                local_types=local_types,
+                self_attr_types=self_attr_types or {},
+            )
 
         return entity_id
 
@@ -362,19 +400,38 @@ class PHPParser:
     # ------------------------------------------------------------------
     # Call edge extraction
 
-    def _emit_calls(self, body: Node, source: bytes, *, src_id: str, edges: list[Edge]) -> None:
+    def _emit_calls(
+        self,
+        body: Node,
+        source: bytes,
+        *,
+        src_id: str,
+        edges: list[Edge],
+        class_name: str | None = None,
+        local_types: dict[str, str] | None = None,
+        self_attr_types: dict[str, str] | None = None,
+    ) -> None:
         for call in self._iter_call_nodes(body):
             callee = self._callee_name(call, source)
-            if callee:
-                edges.append(
-                    Edge(
-                        src_id=src_id,
-                        dst_id=f"php:?call:{callee}",
-                        type="calls",
-                        line=call.start_point[0] + 1,
-                        confidence=0.7,
-                    )
+            if not callee:
+                continue
+            receiver_type = receiver_type_for_call(
+                call, source, class_name, local_types or {}, self_attr_types or {}
+            )
+            dst_id = (
+                f"php:?methodcall:{receiver_type}.{callee}"
+                if receiver_type
+                else f"php:?call:{callee}"
+            )
+            edges.append(
+                Edge(
+                    src_id=src_id,
+                    dst_id=dst_id,
+                    type="calls",
+                    line=call.start_point[0] + 1,
+                    confidence=0.7,
                 )
+            )
 
     def _iter_call_nodes(self, node: Node):
         for child in node.children:
