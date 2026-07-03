@@ -2,11 +2,21 @@
 
 ## Current
 
-- **Status:** ACTIVE — roadmap complete; product audit + E2E + manual test + usability passes done.
+- **Status:** ACTIVE — roadmap complete; competitive hardening (Phases 19-22, 24) done.
 - **Phase:** Maintenance & hardening (post-audit fixes, usability, repo hygiene)
-- **Next task:** (optional: persistent model service to kill per-CLI reload — see manual test #3; capture function-local imports — parsers/python.py:184-186; PyPI publish (manual))
-- **Last session:** 2026-07-01
+- **Next task:** (optional: persistent model service to kill per-CLI reload — see manual test #3; capture function-local imports — parsers/python.py:184-186; PyPI publish (manual); Phase 23 shared MCP daemon and Phase 25 Vue/Svelte coverage explicitly deferred, not started)
+- **Last session:** 2026-07-03
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
+
+### Session 2026-07-03 — competitive hardening close-out (Phases 19-22, 24)
+Compared this project against a similarly-scoped open-source fork and closed the real gaps
+the comparison surfaced: precise per-file staleness signal (19), framework-aware call
+resolution for Flask/FastAPI/Express/Django/Spring/Rails plus cross-language HTTP edges
+(20-21), a git-hook fallback for the watcher (22), and installer breadth doubled to 8 agent
+targets (24). Phase 23 (shared multi-client MCP daemon) was scoped and explicitly skipped —
+higher-risk process-model change for a narrower benefit than the other four phases. See the
+"Competitive hardening (Phases 19-22, 24) — COMPLETE" section below for the full summary.
+895 → 1001 tests, zero regressions across all five phases.
 
 ### Session 2026-07-01 — staleness/reindex fixes, comment cleanup
 - `mcp: get_context warns automatically when the index is stale`: previously an agent only
@@ -282,6 +292,51 @@ it — closing the cross-language HTTP gap this project's own roadmap had listed
 **Phase 22 result: `codegraph watch`'s filesystem watcher now has a fallback — git hooks
 keep the index fresh across commits, pulls, and checkouts even with no watcher process
 running. 955 tests passing.**
+
+### Phase 24 — Installer breadth: 4 → 8 agent targets [DONE 1/1]
+- [x] T24.1 — Kiro and Antigravity targets use the same `mcpServers.codegraph` JSON shape
+  the existing four targets already handle (Antigravity additionally detects which of two
+  possible config paths is live via the `.migrated` marker Antigravity itself writes,
+  re-checked on every call). opencode wraps servers under `mcp.<name>` with `command` as a
+  single array combining binary + args plus an explicit `enabled` flag, at an XDG config
+  path on every platform including Windows — overrides the base class's read-modify-write
+  for this shape while still reusing `build_entry()` for the actual command/args/`--db`
+  logic. Hermes reads YAML (`config.yaml` under `$HERMES_HOME`, default `~/.hermes`), not
+  JSON like every other target — small top-level/child block text edits instead of pulling
+  in PyYAML for one target, preserving the rest of the file's formatting and comments
+  exactly. Both opencode and Hermes verified directly (not just asserted) to preserve
+  sibling MCP server entries and unrelated file content on install/uninstall. 46 new tests.
+
+**Phase 24 result: `codegraph install <target>` now supports Claude Code, Cursor, Codex,
+Gemini, Kiro, opencode, Hermes Agent, and Antigravity — 8 targets total. 1001 tests
+passing, zero regressions in the existing 4-target suite.**
+
+---
+
+## Competitive hardening (Phases 19-22, 24) — COMPLETE
+
+A gap-closing pass after comparing this project against a similarly-scoped open-source
+fork. Two real product gaps closed, one latent bug fixed, and installer breadth doubled:
+
+- **Precision (19):** `get_context` names the exact stale file instead of a repo-wide count
+  — and along the way, a real DuckDB connection bug that had silently disabled that warning
+  in production (only ever exercised through mocks) got fixed.
+- **Framework blindness (20-21):** the biggest functional gap — a route handler invoked only
+  through Flask/FastAPI/Express/Django/Spring/Rails routing had no static call site, so it
+  looked like dead code with zero callers. All six now resolve to real `calls` edges,
+  same-file and cross-file. A TS/JS `fetch`/`axios` call with a static URL now resolves
+  straight through to the backend handler that serves it — a genuinely cross-language edge.
+- **Watcher fragility (22):** git hooks (`post-commit`/`post-merge`/`post-checkout`) are now
+  an opt-in fallback for environments where filesystem-watch events aren't reliable.
+- **Distribution (24):** agent installer support doubled, 4 → 8 targets.
+
+**Explicitly skipped:** Phase 23 (a shared multi-client MCP daemon) — real, but a
+process-model change with higher risk than the other four phases combined, for a benefit
+(avoiding N separate per-window processes/DuckDB connections) that's real but narrower than
+the framework-resolution or watcher-reliability wins. Revisit only if multi-window duplicate
+process overhead becomes an actual reported problem, not preemptively.
+
+895 → 1001 tests across the five phases, zero regressions at any step.
 
 ---
 
