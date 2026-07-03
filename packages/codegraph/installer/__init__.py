@@ -17,6 +17,10 @@ ClaudeCodeTarget   -- Claude Code (~/.claude.json)
 CursorTarget       -- Cursor (~/.cursor/mcp.json)
 CodexTarget        -- Codex CLI (~/.codex/config.json)
 GeminiTarget       -- Gemini CLI (~/.gemini/settings.json)
+KiroTarget         -- Kiro (~/.kiro/settings/mcp.json)
+OpencodeTarget     -- opencode (~/.config/opencode/opencode.jsonc)
+HermesTarget       -- Hermes Agent (~/.hermes/config.yaml)
+AntigravityTarget  -- Antigravity IDE (~/.gemini/config/mcp_config.json)
 """
 
 from __future__ import annotations
@@ -26,18 +30,26 @@ import codegraph.installer.targets  # noqa: E402, F401
 from codegraph.installer.base import McpEntry, Target
 from codegraph.installer.registry import get_target, list_targets, register_target
 from codegraph.installer.targets import (  # noqa: E402
+    AntigravityTarget,
     ClaudeCodeTarget,
     CodexTarget,
     CursorTarget,
     GeminiTarget,
+    HermesTarget,
+    KiroTarget,
+    OpencodeTarget,
 )
 
 __all__ = [
+    "AntigravityTarget",
     "ClaudeCodeTarget",
     "CodexTarget",
     "CursorTarget",
     "GeminiTarget",
+    "HermesTarget",
+    "KiroTarget",
     "McpEntry",
+    "OpencodeTarget",
     "Target",
     "get_target",
     "list_targets",

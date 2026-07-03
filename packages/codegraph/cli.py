@@ -1208,7 +1208,10 @@ def _list_available_targets() -> None:
 
 @app.command()
 def install(
-    target: str = typer.Argument(..., help="Agent target: claude, cursor, codex, gemini."),
+    target: str = typer.Argument(
+        ...,
+        help="Agent target: claude, cursor, codex, gemini, kiro, opencode, hermes, antigravity.",
+    ),
     db: Path | None = typer.Option(
         None,
         "--db",
@@ -1286,7 +1289,10 @@ def install(
 
 @app.command()
 def uninstall(
-    target: str = typer.Argument(..., help="Agent target: claude, cursor, codex, gemini."),
+    target: str = typer.Argument(
+        ...,
+        help="Agent target: claude, cursor, codex, gemini, kiro, opencode, hermes, antigravity.",
+    ),
     location: str = typer.Option(
         "global", "--location", help="Config scope: global (user) or local (project)."
     ),
@@ -1485,7 +1491,9 @@ def init(
         help="Repository root to set up (default: current directory).",
     ),
     target: str = typer.Option(
-        "claude", "--target", help="Agent to wire up: claude, cursor, codex, gemini."
+        "claude",
+        "--target",
+        help="Agent to wire up: claude, cursor, codex, gemini, kiro, opencode, hermes, antigravity.",
     ),
     no_embed: bool = typer.Option(
         False, "--no-embed", help="Skip semantic embeddings (faster, literal search only)."
