@@ -241,7 +241,8 @@ def test_simple_call_edge(parser: RustParser) -> None:
 def test_method_call_extracts_method_name(parser: RustParser) -> None:
     src = "fn run(s: &Server) {\n    s.start();\n}\n"
     result = parser.parse(Path("main.rs"), src)
-    assert any(e.dst_id == "rs:?call:start" for e in _call_edges(result))
+    # `s` is a typed parameter (&Server) -- the receiver type is inferred.
+    assert any(e.dst_id == "rs:?methodcall:Server.start" for e in _call_edges(result))
 
 
 def test_scoped_call_extracts_last_segment(parser: RustParser) -> None:
@@ -288,6 +289,6 @@ def test_fixture_server_emits_expected_entities(parser: RustParser) -> None:
     import_edges = _import_edges(result)
     assert any("fmt" in e.dst_id for e in import_edges)
 
-    # start() calls self.listen() — should emit a call edge
+    # start() calls self.listen() — receiver type inferred as Server
     call_edges = _call_edges(result)
-    assert any(e.dst_id == "rs:?call:listen" for e in call_edges)
+    assert any(e.dst_id == "rs:?methodcall:Server.listen" for e in call_edges)

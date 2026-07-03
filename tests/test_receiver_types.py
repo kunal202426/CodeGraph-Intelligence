@@ -17,6 +17,7 @@ from codegraph.graph.store import GraphStore
 from codegraph.parsers.go import GoParser
 from codegraph.parsers.java import JavaParser
 from codegraph.parsers.python import PythonParser
+from codegraph.parsers.rust import RustParser
 from codegraph.parsers.typescript import TypeScriptParser
 from typer.testing import CliRunner
 
@@ -617,3 +618,125 @@ def test_go_resolves_to_correct_struct_when_two_files_share_a_method_name(tmp_pa
     resolved = {(src, dst) for src, dst, _ in edges}
     assert ("go:file_a.go:use", "go:file_a.go:Logger.Log") in resolved
     assert ("go:file_a.go:use", "go:file_b.go:Logger.Log") not in resolved
+
+
+# ---------- Rust: pure parser unit tests (no DB) ----------
+
+
+def _rs_call_edges(source: str, src_suffix: str = ""):
+    result = RustParser().parse(Path("main.rs"), source)
+    edges = [e for e in result.edges if e.type == "calls"]
+    if src_suffix:
+        edges = [e for e in edges if e.src_id.endswith(src_suffix)]
+    return edges
+
+
+def test_rs_self_call_infers_enclosing_impl_type_as_receiver_type() -> None:
+    edges = _rs_call_edges(
+        "struct Widget;\n"
+        "impl Widget {\n"
+        "    fn render(&self) {}\n"
+        "    fn draw(&self) {\n"
+        "        self.render();\n"
+        "    }\n"
+        "}\n",
+        src_suffix="Widget.draw",
+    )
+    assert len(edges) == 1
+    assert edges[0].dst_id == "rs:?methodcall:Widget.render"
+
+
+def test_rs_associated_function_local_variable_infers_type() -> None:
+    edges = _rs_call_edges(
+        "struct Logger;\n"
+        "impl Logger {\n"
+        "    fn log(&self) {}\n"
+        "}\n"
+        "fn use_it() {\n"
+        "    let lg = Logger::new();\n"
+        "    lg.log();\n"
+        "}\n",
+        src_suffix=":use_it",
+    )
+    method_calls = [e for e in edges if "?methodcall:" in e.dst_id]
+    assert len(method_calls) == 1
+    assert method_calls[0].dst_id == "rs:?methodcall:Logger.log"
+
+
+def test_rs_typed_parameter_infers_type() -> None:
+    edges = _rs_call_edges(
+        "struct Service;\n"
+        "impl Service {\n"
+        "    fn notify(&self) {}\n"
+        "}\n"
+        "fn use_it(svc: &Service) {\n"
+        "    svc.notify();\n"
+        "}\n",
+        src_suffix=":use_it",
+    )
+    method_calls = [e for e in edges if "?methodcall:" in e.dst_id]
+    assert len(method_calls) == 1
+    assert method_calls[0].dst_id == "rs:?methodcall:Service.notify"
+
+
+def test_rs_struct_field_type_resolves_through_self_chain() -> None:
+    edges = _rs_call_edges(
+        "struct Service;\n"
+        "impl Service {\n"
+        "    fn save(&self) {}\n"
+        "}\n"
+        "struct Caller {\n"
+        "    svc: Service,\n"
+        "}\n"
+        "impl Caller {\n"
+        "    fn run(&self) {\n"
+        "        self.svc.save();\n"
+        "    }\n"
+        "}\n",
+        src_suffix="Caller.run",
+    )
+    method_calls = [e for e in edges if "?methodcall:" in e.dst_id]
+    assert len(method_calls) == 1
+    assert method_calls[0].dst_id == "rs:?methodcall:Service.save"
+
+
+def test_rs_lowercase_scoped_call_is_not_treated_as_a_constructor() -> None:
+    # `mymod::do_thing()` -- lowercase path segment looks like a module, not a
+    # type, so this must not be mistaken for a Type::assoc_fn() constructor.
+    edges = _rs_call_edges(
+        "fn use_it() {\n    let y = mymod::do_thing();\n    y.run();\n}\n",
+        src_suffix=":use_it",
+    )
+    dst_ids = {e.dst_id for e in edges}
+    assert "rs:?call:run" in dst_ids
+    assert not any("?methodcall:" in dst for dst in dst_ids)
+
+
+# ---------- Rust: integration ----------
+
+
+def test_rs_resolves_to_correct_struct_when_two_files_share_a_method_name(tmp_path: Path) -> None:
+    db = _index(
+        tmp_path,
+        {
+            "file_a.rs": (
+                "struct Logger;\n"
+                "impl Logger {\n"
+                "    fn log(&self) {}\n"
+                "}\n"
+                "fn use_it() {\n"
+                "    let lg = Logger::new();\n"
+                "    lg.log();\n"
+                "}\n"
+            ),
+            "file_b.rs": ("struct Logger;\nimpl Logger {\n    fn log(&self) {}\n}\n"),
+        },
+    )
+    store = GraphStore(db)
+    try:
+        edges = _edges(store)
+    finally:
+        store.close()
+    resolved = {(src, dst) for src, dst, _ in edges}
+    assert ("rs:file_a.rs:use_it", "rs:file_a.rs:Logger.log") in resolved
+    assert ("rs:file_a.rs:use_it", "rs:file_b.rs:Logger.log") not in resolved
