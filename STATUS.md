@@ -2,11 +2,26 @@
 
 ## Current
 
-- **Status:** ACTIVE — roadmap complete; competitive hardening (Phases 19-22, 24) done.
+- **Status:** ACTIVE — roadmap complete; competitive hardening (Phases 19-22, 24, 26) done.
 - **Phase:** Maintenance & hardening (post-audit fixes, usability, repo hygiene)
-- **Next task:** (optional: persistent model service to kill per-CLI reload — see manual test #3; capture function-local imports — parsers/python.py:184-186; PyPI publish (manual); Phase 23 shared MCP daemon and Phase 25 Vue/Svelte coverage explicitly deferred, not started)
+- **Next task:** (optional: extend receiver-type inference (Phase 26) to Java/Go/Rust/PHP/Ruby/C++; persistent model service to kill per-CLI reload — see manual test #3; capture function-local imports — parsers/python.py:184-186; PyPI publish (manual); Phase 23 shared MCP daemon and Phase 25 Vue/Svelte coverage explicitly deferred, not started)
 - **Last session:** 2026-07-03
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
+
+### Session 2026-07-03 (pm) — receiver-type inference for method calls (Phase 26)
+A second, deeper comparison against an updated build of the same open-source fork surfaced
+its biggest remaining advantage: `obj.method()` calls resolved on callee name alone, so two
+unrelated classes sharing a method name (even two classes in one file) could point a call
+edge at the wrong one. `resolution/receiver_types/{python,typescript}.py` infer a call's
+receiver type from what's visible at parse time — a local variable's constructor call or
+type annotation, a typed parameter, `self`/`this`, or a `self.attr`/`this.attr` tracked
+anywhere else in the class — and the parser emits `<lang>:?methodcall:<Type>.<name>` instead
+of a bare `<lang>:?call:<name>` when it has one. The resolver tries an exact `Type.name`
+qualified-name match (same-file preferred when ambiguous) before falling back to the old
+plain-name resolution, so an unconfident guess never produces a worse edge than before.
+Shipped for Python and TypeScript/JavaScript first (this project's primary audience); Java,
+Go, Rust, PHP, Ruby, and C++ use the same mechanism but aren't wired up yet. 18 new tests,
+1019 passing, zero regressions.
 
 ### Session 2026-07-03 — competitive hardening close-out (Phases 19-22, 24)
 Compared this project against a similarly-scoped open-source fork and closed the real gaps
