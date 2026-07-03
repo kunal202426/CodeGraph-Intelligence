@@ -1,6 +1,8 @@
 """Tests for framework-aware call resolution (Phase 20).
 
-Flask/FastAPI (Python, decorator-based) and Express (TS/JS, call-based).
+Flask/FastAPI (Python, decorator-based), Express (TS/JS, call-based),
+Django (Python, urlpatterns list-based), Spring (Java, annotation-based),
+and Rails (Ruby, routes-DSL-based).
 """
 
 from __future__ import annotations
@@ -12,7 +14,9 @@ from codegraph.analysis.refactor import find_dead_code
 from codegraph.cli import app
 from codegraph.graph.queries import find_callers, find_entity_by_name_or_id
 from codegraph.graph.store import GraphStore
+from codegraph.parsers.java import JavaParser
 from codegraph.parsers.python import PythonParser
+from codegraph.parsers.ruby import RubyParser
 from codegraph.parsers.typescript import TypeScriptParser
 from typer.testing import CliRunner
 
@@ -124,6 +128,173 @@ def test_express_handler_not_defined_in_file_produces_no_edge() -> None:
 def test_express_non_http_method_call_ignored() -> None:
     """`.use(...)` and other non-REST-verb calls aren't treated as routes."""
     edges = _express_route_edges("function mw(req, res, next) {\n    next();\n}\n\napp.use(mw);\n")
+    assert edges == []
+
+
+# ---------- Django (Python) pure parser unit tests ----------
+
+
+def test_django_path_with_bare_identifier_view() -> None:
+    edges = _route_edges(
+        "from django.urls import path\n\n"
+        "def home_view(request):\n    pass\n\n"
+        'urlpatterns = [\n    path("home/", home_view),\n]\n'
+    )
+    assert len(edges) == 1
+    assert edges[0].src_id == "route:ANY home/"
+    assert edges[0].dst_id == "py:app.py:home_view"
+
+
+def test_django_path_ignores_trailing_name_kwarg() -> None:
+    """`name="about"` must not be mistaken for the view argument."""
+    edges = _route_edges(
+        "from django.urls import path\n\n"
+        "def about_view(request):\n    pass\n\n"
+        'urlpatterns = [\n    path("about/", about_view, name="about"),\n]\n'
+    )
+    assert edges[0].dst_id == "py:app.py:about_view"
+
+
+def test_django_path_with_dotted_view_reference() -> None:
+    """`views.home_view` resolves on the final segment, `home_view`."""
+    edges = _route_edges(
+        "from django.urls import path\nfrom . import views\n\n"
+        "def home_view(request):\n    pass\n\n"
+        'urlpatterns = [\n    path("home/", views.home_view),\n]\n'
+    )
+    assert edges[0].dst_id == "py:app.py:home_view"
+
+
+def test_django_path_class_based_view_resolves_to_class() -> None:
+    edges = _route_edges(
+        "from django.urls import path\n\n"
+        "class ProfileView:\n    def get(self, request):\n        pass\n\n"
+        'urlpatterns = [\n    path("profile/", ProfileView.as_view()),\n]\n'
+    )
+    assert edges[0].dst_id == "py:app.py:ProfileView"
+
+
+def test_django_re_path_also_matches() -> None:
+    edges = _route_edges(
+        "from django.urls import re_path\n\n"
+        "def old_view(request):\n    pass\n\n"
+        r"urlpatterns = ["
+        "\n"
+        r'    re_path(r"^old/$", old_view),'
+        "\n"
+        "]\n"
+    )
+    assert len(edges) == 1
+    assert edges[0].dst_id == "py:app.py:old_view"
+
+
+def test_django_unresolvable_view_produces_no_edge() -> None:
+    """A view imported from elsewhere (not defined in this file) is skipped,
+    same documented same-file-only limitation as Express."""
+    edges = _route_edges(
+        "from django.urls import path\n\n"
+        'urlpatterns = [\n    path("missing/", not_defined_here),\n]\n'
+    )
+    assert edges == []
+
+
+# ---------- Spring (Java) pure parser unit tests ----------
+
+
+def _java_route_edges(source: str):
+    result = JavaParser().parse(Path("C.java"), source)
+    return [e for e in result.edges if e.type == "calls" and e.src_id.startswith("route:")]
+
+
+def test_spring_get_mapping_with_class_base_path() -> None:
+    edges = _java_route_edges(
+        '@RequestMapping("/api")\n'
+        "public class C {\n"
+        '    @GetMapping("/users")\n'
+        "    public void listUsers() {}\n"
+        "}\n"
+    )
+    assert len(edges) == 1
+    assert edges[0].src_id == "route:GET /api/users"
+    assert edges[0].dst_id == "java:C.java:C.listUsers"
+    assert edges[0].is_dynamic is True
+
+
+def test_spring_get_mapping_without_class_base_path() -> None:
+    edges = _java_route_edges(
+        'public class C {\n    @GetMapping("/users")\n    public void listUsers() {}\n}\n'
+    )
+    assert edges[0].src_id == "route:GET /users"
+
+
+def test_spring_request_mapping_with_method_kwarg() -> None:
+    edges = _java_route_edges(
+        "public class C {\n"
+        '    @RequestMapping(value = "/users", method = RequestMethod.POST)\n'
+        "    public void createUser() {}\n"
+        "}\n"
+    )
+    assert edges[0].src_id == "route:POST /users"
+
+
+def test_spring_request_mapping_without_method_defaults_to_any() -> None:
+    edges = _java_route_edges(
+        'public class C {\n    @RequestMapping("/users")\n    public void anyMethod() {}\n}\n'
+    )
+    assert edges[0].src_id == "route:ANY /users"
+
+
+def test_spring_unmapped_method_has_no_route_edge() -> None:
+    edges = _java_route_edges(
+        'public class C {\n    @GetMapping("/users")\n    public void mapped() {}\n\n'
+        "    public void notMapped() {}\n}\n"
+    )
+    assert len(edges) == 1
+    assert edges[0].dst_id == "java:C.java:C.mapped"
+
+
+# ---------- Rails (Ruby) pure parser unit tests ----------
+
+
+def _ruby_route_edges(source: str):
+    result = RubyParser().parse(Path("routes.rb"), source)
+    return [e for e in result.edges if e.type == "calls" and e.src_id.startswith("route:")]
+
+
+def test_rails_get_with_same_file_controller_action() -> None:
+    edges = _ruby_route_edges(
+        "class UsersController\n  def index\n  end\nend\n\n"
+        "Rails.application.routes.draw do\n"
+        "  get '/users', to: 'users#index'\n"
+        "end\n"
+    )
+    assert len(edges) == 1
+    assert edges[0].src_id == "route:GET /users"
+    assert edges[0].dst_id == "rb:routes.rb:UsersController.index"
+    assert edges[0].is_dynamic is True
+
+
+def test_rails_post_action() -> None:
+    edges = _ruby_route_edges(
+        "class UsersController\n  def create\n  end\nend\n\n"
+        "Rails.application.routes.draw do\n"
+        "  post '/users', to: 'users#create'\n"
+        "end\n"
+    )
+    assert edges[0].src_id == "route:POST /users"
+
+
+def test_rails_controller_in_different_file_produces_no_edge() -> None:
+    """The common real case -- controller lives in a different file -- isn't
+    resolved by this same-file pass (documented limitation)."""
+    edges = _ruby_route_edges(
+        "Rails.application.routes.draw do\n  get '/users', to: 'users#index'\nend\n"
+    )
+    assert edges == []
+
+
+def test_rails_route_without_to_pair_ignored() -> None:
+    edges = _ruby_route_edges("Rails.application.routes.draw do\n  root 'welcome#index'\nend\n")
     assert edges == []
 
 

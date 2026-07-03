@@ -27,6 +27,10 @@ with warnings.catch_warnings():
     from tree_sitter_languages import get_language
 
 from codegraph.parsers.base import ParseResult
+from codegraph.resolution.frameworks.spring import (
+    extract_class_base_path,
+    extract_route_edges,
+)
 from codegraph.uir import (
     Edge,
     EntityType,
@@ -155,9 +159,12 @@ class JavaParser:
 
         body = node.child_by_field_name("body")
         if body is not None:
+            base_path = extract_class_base_path(node, source)
             for child in body.children:
                 if child.type in ("method_declaration", "constructor_declaration"):
-                    self._emit_method(child, source, file, name, entity_id, entities, edges)
+                    self._emit_method(
+                        child, source, file, name, entity_id, entities, edges, base_path=base_path
+                    )
 
         return entity_id
 
@@ -222,6 +229,8 @@ class JavaParser:
         owner_id: str,
         entities: list[UIREntity],
         edges: list[Edge],
+        *,
+        base_path: str = "",
     ) -> str | None:
         name_node = node.child_by_field_name("name")
         name = self._text(name_node, source)
@@ -259,6 +268,8 @@ class JavaParser:
         body = node.child_by_field_name("body")
         if body is not None:
             self._emit_calls(body, source, src_id=entity_id, edges=edges)
+
+        edges.extend(extract_route_edges(node, entity_id, source, base_path))
 
         return entity_id
 

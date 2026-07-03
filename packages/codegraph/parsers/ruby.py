@@ -32,6 +32,7 @@ with warnings.catch_warnings():
     from tree_sitter_languages import get_language
 
 from codegraph.parsers.base import ParseResult
+from codegraph.resolution.frameworks.rails import extract_route_edges
 from codegraph.uir import (
     Edge,
     EntityType,
@@ -111,6 +112,9 @@ class RubyParser:
                 self._emit_function(child, source_bytes, rel_path, module_id, entities, edges)
             elif kind == "call":
                 self._emit_require(child, source_bytes, module_id, edges)
+
+        entities_by_name = {e.name: e.entity_id for e in entities}
+        edges.extend(extract_route_edges(root, source_bytes, entities_by_name))
 
         return ParseResult(entities=entities, edges=edges, errors=errors)
 

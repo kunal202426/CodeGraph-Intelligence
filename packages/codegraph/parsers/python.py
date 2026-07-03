@@ -27,6 +27,9 @@ with warnings.catch_warnings():
     from tree_sitter_languages import get_language
 
 from codegraph.parsers.base import ParseResult
+from codegraph.resolution.frameworks.django_urls import (
+    extract_route_edges as extract_django_route_edges,
+)
 from codegraph.resolution.frameworks.python_web import extract_route_edges
 from codegraph.uir import (
     Edge,
@@ -108,6 +111,9 @@ class PythonParser:
             entities=entities,
             edges=edges,
         )
+
+        entities_by_name = {e.name: e.entity_id for e in entities}
+        edges.extend(extract_django_route_edges(root, source_bytes, entities_by_name))
 
         return ParseResult(entities=entities, edges=edges, errors=errors)
 
