@@ -531,8 +531,8 @@ more queries: **101x average** (12x on small files at worst, 190x best).
 **Search:** Hit@1 = 7/7 on symbol queries where the function name doesn't appear in
 the query string at all. Warm query ~15ms.
 
-**Tests:** 778 passing, 0 failures, 1 live-skip (needs an API key). Covers MCP tools,
-all 22 parsers, graph queries, CLI, and the installer. Runs in ~30s, no network needed.
+**Tests:** 1001 passing, 0 failures, 1 live-skip (needs an API key). Covers MCP tools,
+all 22 parsers, framework route resolution, graph queries, CLI, and all 8 installer targets.
 
 **Manual test pass (2026-06-15):** every user-facing surface, CLI, web UI, watch
 daemon, and the MCP server (install, live query, uninstall), run by hand on this repo.
@@ -541,7 +541,8 @@ daemon, and the MCP server (install, live query, uninstall), run by hand on this
 
 ## Roadmap
 
-Phases 10-13 ("best of both") and 14-18 ("actually usable") are complete:
+Phases 10-13 ("best of both"), 14-18 ("actually usable"), and the 19-22/24 competitive
+hardening pass are complete:
 
 - **Phase 10**: 9 languages: Go, Rust, Java, Ruby, PHP, C, C++ added to Python + TS/JS; extended to 19 with Kotlin, C#, Scala, Bash, Elixir, R, Julia, Haskell, OCaml; further to 22 with HTML, CSS, SQL
 - **Phase 11**: `codegraph watch`: debounced file watcher re-indexes in ~300 ms; staleness guard on `serve`/MCP startup
@@ -552,10 +553,14 @@ Phases 10-13 ("best of both") and 14-18 ("actually usable") are complete:
 - **Phase 16**: multi-project: walk-up DB discovery so one install serves every repo
 - **Phase 17**: self-healing: a `reindex` MCP tool the agent can call to refresh a stale index from the chat
 - **Phase 18**: first-run legibility (model-download notice), `codegraph init` one-shot, PyPI metadata
+- **Phase 19**: precise per-file staleness signal in `get_context`, plus a real DuckDB connection-conflict fix
+- **Phase 20-21**: framework-aware call resolution (Flask/FastAPI/Express/Django/Spring/Rails), cross-file route resolution, and cross-language HTTP edges (`fetch`/`axios` → backend handler)
+- **Phase 22**: git-hook fallback (`codegraph hooks install`) for environments where filesystem watching isn't reliable
+- **Phase 24**: agent installer breadth doubled, 4 → 8 targets (added Kiro, opencode, Hermes Agent, Antigravity)
 
-Deliberately **deferred**: deep TypeScript type resolution via `tsc`, framework-aware
-resolvers (Express/NestJS/Django/Rails), multi-client shared watcher daemon (Unix
-socket), and cross-language HTTP edge extraction. See [STATUS.md](STATUS.md).
+Deliberately **deferred**: deep TypeScript type resolution via `tsc`, and a shared
+multi-client MCP daemon (one process per agent window today, scoped and explicitly not
+built — a process-model change with more risk than the wins above). See [STATUS.md](STATUS.md).
 
 ---
 
