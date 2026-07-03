@@ -7,7 +7,7 @@ MCP so the agent queries the graph instead of re-reading your files every messag
 Solving high token consumption and context break during window overload.
 
 > **Status: active development.** Core indexing, search, and MCP tools are stable.
-> 1052 tests passing. Every user-facing surface manually tested: 21/21 passed, 6 issues
+> 1088 tests passing. Every user-facing surface manually tested: 21/21 passed, 6 issues
 > fixed. [Manual test →](docs/MANUAL_TEST_REPORT.md) | [Bench notes →](docs/QUALITY_REPORT_2026-07-01.md).
 > MCP server works but still preview, not production-ready.
 
@@ -22,6 +22,11 @@ Solving high token consumption and context break during window overload.
 
 **Jul 2026**
 
+- Inheritance-aware method resolution: `obj.method()` now also resolves when `method` is
+  declared only on a base class/interface, not `obj`'s own type — a base-class edge per
+  class (`extends`/`implements`/`< Base`/`: public Base`, plus Go's embedded-struct method
+  promotion) resolved before calls, then a same-file-preferred walk up the chain. Covers the
+  6 languages with real inheritance syntax plus Go; Rust has no inheritance concept.
 - Receiver-type inference: `obj.method()` now resolves to the exact declared method instead
   of matching on the callee name alone, across all 8 OO-capable languages (Python, TS/JS,
   Java, Go, Rust, PHP, Ruby, C/C++). Infers the receiver's type from a local variable's
@@ -29,7 +34,7 @@ Solving high token consumption and context break during window overload.
   `self.attr`/`this.attr`/`@attr` — so two unrelated classes sharing a method name no longer
   risk a call edge pointing at the wrong one. Falls back to the old name-only resolution
   whenever the type can't be confidently inferred, so this never makes a result worse.
-- 1052 tests passing (up from 1001), zero regressions across the pass.
+- 1088 tests passing (up from 1001), zero regressions across the pass.
 - Framework-aware call resolution: a route handler invoked only through Flask, FastAPI,
   Express, Django, Spring, or Rails routing now has a real `calls` edge instead of showing
   up as false-positive dead code with zero callers in `impact_analysis`. Resolves same-file
@@ -224,6 +229,9 @@ credits to start.
   a `self.attr`/`this.attr`/`@attr` tracked elsewhere in the class, across all 8 OO-capable
   languages. Two unrelated classes sharing a method name no longer risk a call edge pointing
   at the wrong one; falls back to today's name-only resolution whenever the type isn't clear.
+- **Follows inherited methods too**: if `method` isn't declared on `obj`'s own class, walks
+  its base classes/interfaces (or Go's embedded-struct method promotion) to find it, same-file
+  preferred when a name is ambiguous.
 - **Resolves framework routing to real calls**: Flask, FastAPI, Express, Django, Spring, and
   Rails route handlers get real `calls` edges from their route registration, so a handler
   invoked only through the framework's own routing doesn't show up as false-positive dead
@@ -253,11 +261,13 @@ Being honest about the limits:
   API and require a separate API key. The CLI warns you clearly if the key is missing.
 - **No runtime understanding**: Kortex reads static structure (what calls what, what
   imports what). It does not know what happens when the code actually runs.
-- **Receiver-type inference doesn't walk inheritance**: `obj.method()` resolves to the exact
-  declared type of `obj` when that type is inferrable (local variable, typed parameter,
-  `self`/`this`, a tracked attribute) — but if `method` is actually defined on a *base*
-  class/interface rather than `obj`'s own type, it isn't found there and the call falls back
-  to name-only resolution instead of failing outright.
+- **Inheritance walk has real edges but real limits**: `obj.method()` now resolves through a
+  base class/interface (Python, TS/JS, Java, PHP, Ruby, C++) or Go's embedded-struct method
+  promotion when `method` isn't declared on `obj`'s own type. Not covered: Ruby's `include`
+  mixins (only `< Base` superclass syntax is captured), Rust (no inheritance concept — traits
+  and default methods aren't walked), and multiple/diamond inheritance beyond a same-file or
+  unambiguous repo-wide base — an ambiguous chain falls back to name-only resolution rather
+  than guessing.
 - **Framework resolution covers routing, not every framework feature**: Flask, FastAPI,
   Express, Django, Spring, and Rails route handlers resolve to real `calls` edges (same-file
   and cross-file), and a static-URL `fetch`/`axios` call resolves cross-language to the
@@ -549,9 +559,9 @@ more queries: **101x average** (12x on small files at worst, 190x best).
 **Search:** Hit@1 = 7/7 on symbol queries where the function name doesn't appear in
 the query string at all. Warm query ~15ms.
 
-**Tests:** 1052 passing, 0 failures, 1 live-skip (needs an API key). Covers MCP tools,
-all 22 parsers, framework route resolution, receiver-type inference, graph queries, CLI,
-and all 8 installer targets.
+**Tests:** 1088 passing, 0 failures, 1 live-skip (needs an API key). Covers MCP tools,
+all 22 parsers, framework route resolution, receiver-type and inheritance-aware resolution,
+graph queries, CLI, and all 8 installer targets.
 
 **Manual test pass (2026-06-15):** every user-facing surface, CLI, web UI, watch
 daemon, and the MCP server (install, live query, uninstall), run by hand on this repo.
@@ -560,7 +570,7 @@ daemon, and the MCP server (install, live query, uninstall), run by hand on this
 
 ## Roadmap
 
-Phases 10-13 ("best of both"), 14-18 ("actually usable"), and the 19-22/24/26 competitive
+Phases 10-13 ("best of both"), 14-18 ("actually usable"), and the 19-22/24/26-27 competitive
 hardening pass are complete:
 
 - **Phase 10**: 9 languages: Go, Rust, Java, Ruby, PHP, C, C++ added to Python + TS/JS; extended to 19 with Kotlin, C#, Scala, Bash, Elixir, R, Julia, Haskell, OCaml; further to 22 with HTML, CSS, SQL
@@ -577,10 +587,12 @@ hardening pass are complete:
 - **Phase 22**: git-hook fallback (`codegraph hooks install`) for environments where filesystem watching isn't reliable
 - **Phase 24**: agent installer breadth doubled, 4 → 8 targets (added Kiro, opencode, Hermes Agent, Antigravity)
 - **Phase 26**: receiver-type inference — `obj.method()` resolves to the exact declared method (not just callee name) across all 8 OO-capable languages
+- **Phase 27**: inheritance-aware method resolution — walks base classes/interfaces (or Go's embedded-struct promotion) when a method isn't declared on the receiver's own type
 
-Deliberately **deferred**: deep TypeScript type resolution via `tsc`, receiver-type
-inference through inheritance (a method found only on a base class/interface), and a shared
-multi-client MCP daemon (one process per agent window today, scoped and explicitly not
+Deliberately **deferred**: deep TypeScript type resolution via `tsc`, Ruby `include`-mixin
+inheritance and Rust trait default methods (receiver-type inference through inheritance
+covers the rest), and a shared multi-client MCP daemon (one process per agent window today,
+scoped and explicitly not
 built — a process-model change with more risk than the wins above). See [STATUS.md](STATUS.md).
 
 ---
