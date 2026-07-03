@@ -218,15 +218,49 @@ def resolve_symbols(store: GraphStore) -> ResolutionStats:
     # partition the work. Both Python (py:?call:) and TS (ts:?call:, T4.2) use
     # the same suffix convention; `?methodcall:` is the receiver-typed variant
     # (py:?methodcall:<Type>.<name>) emitted when the parser inferred the
-    # receiver's type.
+    # receiver's type. `?inherits:` (a class's base-class list) is resolved
+    # first of all, since method-call resolution needs it.
+    inherits_rows = [r for r in rows if ":?inherits:" in r[1]]
     call_rows = [r for r in rows if ":?call:" in r[1] or ":?methodcall:" in r[1]]
-    import_rows = [r for r in rows if ":?call:" not in r[1] and ":?methodcall:" not in r[1]]
+    import_rows = [
+        r
+        for r in rows
+        if ":?call:" not in r[1] and ":?methodcall:" not in r[1] and ":?inherits:" not in r[1]
+    ]
 
     resolved = external = wildcard = 0
     resolved_edges: list[Edge] = []
     # file → {imported_name: resolved_target_id} — built from resolved imports,
     # used to resolve calls to imported symbols.
     imports_by_file: dict[str, dict[str, str]] = {}
+
+    # Phase 0 — inheritance edges. Resolved before calls: receiver-typed
+    # method-call resolution walks a class's resolved base classes when
+    # `Type.method` isn't declared directly on `Type` itself. Same-file base
+    # class preferred when the base name is ambiguous repo-wide; unresolved
+    # (ambiguous or missing) stays external rather than guessed at, same
+    # policy as every other name-based resolution in this module.
+    bases_by_class: dict[str, list[str]] = {}
+    for src_id, dst_id, edge_type, line in inherits_rows:
+        _, _, base_name = dst_id.partition(":?inherits:")
+        parts = src_id.split(":", 2)
+        file = parts[1] if len(parts) >= 3 else ""
+        same_file_id = idx.entities_by_file.get(file, {}).get(base_name)
+        if same_file_id:
+            new_dst, new_conf = same_file_id, 0.9
+        else:
+            candidates = idx.entity_ids_by_name.get(base_name, [])
+            new_dst, new_conf = (
+                (candidates[0], 0.7) if len(candidates) == 1 else (f"external:{base_name}", 0.5)
+            )
+        resolved_edges.append(
+            Edge(src_id=src_id, dst_id=new_dst, type=edge_type, line=line, confidence=new_conf)
+        )
+        if new_dst.startswith("external:"):
+            external += 1
+        else:
+            resolved += 1
+            bases_by_class.setdefault(src_id, []).append(new_dst)
 
     # Phase 1 — imports.
     for src_id, dst_id, edge_type, line in import_rows:
@@ -256,6 +290,9 @@ def resolve_symbols(store: GraphStore) -> ResolutionStats:
                 idx.entities_by_file,
                 imports_by_file,
                 idx.entity_ids_by_qname,
+                idx.entity_ids_by_name,
+                bases_by_class,
+                idx.name_by_id,
             )
         else:
             new_dst, new_conf = _resolve_call(dst_id, src_id, idx.entities_by_file, imports_by_file)
@@ -462,31 +499,99 @@ def _resolve_method_call(
     entities_by_file: dict[str, dict[str, str]],
     imports_by_file: dict[str, dict[str, str]],
     entity_ids_by_qname: dict[str, list[str]],
+    entity_ids_by_name: dict[str, list[str]] | None = None,
+    bases_by_class: dict[str, list[str]] | None = None,
+    name_by_id: dict[str, str] | None = None,
 ) -> tuple[str, float]:
     """Resolve a `<lang>:?methodcall:<Type>.<name>` edge -- a call whose
     receiver's type the parser inferred (a local variable, `self`, or a typed
     parameter). Tries an exact `Type.name` qualified-name match first (same-file
     preferred when the type name is ambiguous repo-wide, e.g. two unrelated
-    `Logger` classes); falls back to plain callee-name resolution when no such
-    method exists, since a wrong type guess or a builtin/stdlib type shouldn't
-    manufacture a wrong edge -- it should degrade to exactly what an untyped
-    call would have done.
+    `Logger` classes); if `name` isn't declared directly on `Type`, walks
+    `Type`'s resolved base classes looking for it there (inherited methods);
+    falls back to plain callee-name resolution when neither finds anything,
+    since a wrong type guess or a builtin/stdlib type shouldn't manufacture a
+    wrong edge -- it should degrade to exactly what an untyped call would
+    have done.
     """
     lang_prefix, _, rest = dst_id.partition(":?methodcall:")
-    _type_name, sep, callee = rest.rpartition(".")
+    type_name, sep, callee = rest.rpartition(".")
     if sep:
+        parts = src_id.split(":", 2)
+        file = parts[1] if len(parts) >= 3 else ""
         candidates = entity_ids_by_qname.get(rest, [])
         if len(candidates) == 1:
             return candidates[0], 0.9
         if len(candidates) > 1:
-            parts = src_id.split(":", 2)
-            file = parts[1] if len(parts) >= 3 else ""
             same_file = [c for c in candidates if c.split(":", 2)[1:2] == [file]]
             if len(same_file) == 1:
                 return same_file[0], 0.9
+        if entity_ids_by_name and bases_by_class and name_by_id:
+            inherited = _walk_inheritance_chain(
+                type_name,
+                callee,
+                file,
+                entity_ids_by_name,
+                entity_ids_by_qname,
+                bases_by_class,
+                name_by_id,
+            )
+            if inherited:
+                return inherited, 0.8
     else:
         callee = rest
     return _resolve_call(f"{lang_prefix}:?call:{callee}", src_id, entities_by_file, imports_by_file)
+
+
+def _walk_inheritance_chain(
+    type_name: str,
+    method: str,
+    call_file: str,
+    entity_ids_by_name: dict[str, list[str]],
+    entity_ids_by_qname: dict[str, list[str]],
+    bases_by_class: dict[str, list[str]],
+    name_by_id: dict[str, str],
+    max_depth: int = 6,
+) -> str | None:
+    """BFS up `type_name`'s resolved base classes for a `method` not declared
+    directly on it -- `Derived.method()` where `method` lives only on `Base`.
+    Same-file preferred when a class or method name is ambiguous; gives up
+    (returns None) after `max_depth` hops or once every reachable base is
+    exhausted, rather than guessing among ambiguous candidates.
+    """
+    # Only class-like entities that actually have resolved bases recorded
+    # can seed the walk -- a same-named function/method isn't a base to walk.
+    starting = [eid for eid in entity_ids_by_name.get(type_name, []) if eid in bases_by_class]
+    if not starting:
+        return None
+    if len(starting) > 1:
+        same_file = [eid for eid in starting if eid.split(":", 2)[1:2] == [call_file]]
+        starting = same_file if len(same_file) == 1 else starting
+
+    seen: set[str] = set()
+    frontier = list(starting)
+    depth = 0
+    while frontier and depth < max_depth:
+        next_frontier: list[str] = []
+        for class_id in frontier:
+            if class_id in seen:
+                continue
+            seen.add(class_id)
+            for base_id in bases_by_class.get(class_id, []):
+                base_name = name_by_id.get(base_id)
+                if not base_name:
+                    continue
+                candidates = entity_ids_by_qname.get(f"{base_name}.{method}", [])
+                if len(candidates) == 1:
+                    return candidates[0]
+                if len(candidates) > 1:
+                    same_file = [c for c in candidates if c.split(":", 2)[1:2] == [call_file]]
+                    if len(same_file) == 1:
+                        return same_file[0]
+                next_frontier.append(base_id)
+        frontier = next_frontier
+        depth += 1
+    return None
 
 
 def _path_to_module_qname(path: str) -> str:

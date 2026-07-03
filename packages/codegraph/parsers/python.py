@@ -31,6 +31,7 @@ from codegraph.resolution.frameworks.django_urls import (
     extract_route_edges as extract_django_route_edges,
 )
 from codegraph.resolution.frameworks.python_web import extract_route_edges
+from codegraph.resolution.inheritance.python import extract_base_classes
 from codegraph.resolution.receiver_types.python import (
     infer_local_types,
     infer_param_types,
@@ -390,6 +391,20 @@ class PythonParser:
                 hash=hash_source(raw_source),
             )
         )
+
+        # Inheritance edges: `class Foo(Base, Mixin):` -> one provisional
+        # edge per base, resolved by the resolver and used to walk
+        # Type.method up to a base class when unresolved directly on Type.
+        if edges is not None and inner_def.type == "class_definition":
+            for base_name in extract_base_classes(inner_def, source):
+                edges.append(
+                    Edge(
+                        src_id=entity_id,
+                        dst_id=f"py:?inherits:{base_name}",
+                        type="inherits",
+                        line=inner_def.start_point[0] + 1,
+                    )
+                )
 
         # Call edges: scan a function/method body for call expressions.
         if edges is not None and inner_def.type == "function_definition":
