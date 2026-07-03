@@ -26,6 +26,7 @@ with warnings.catch_warnings():
     from tree_sitter_languages import get_language
 
 from codegraph.parsers.base import ParseResult
+from codegraph.resolution.inheritance.go import extract_embedded_types
 from codegraph.resolution.receiver_types.go import (
     infer_local_types,
     infer_param_types,
@@ -128,7 +129,7 @@ class GoParser:
                     struct_field_types=struct_field_types,
                 )
             elif kind == "type_declaration":
-                self._emit_type_decl(child, source_bytes, rel_path, module_id, entities)
+                self._emit_type_decl(child, source_bytes, rel_path, module_id, entities, edges)
             elif kind == "import_declaration":
                 self._emit_imports(child, source_bytes, module_id, edges)
 
@@ -266,6 +267,7 @@ class GoParser:
         file: str,
         parent_id: str,
         entities: list[UIREntity],
+        edges: list[Edge],
     ) -> None:
         """Emit CLASS (struct) or INTERFACE entities from a type declaration."""
         for child in node.children:
@@ -314,6 +316,17 @@ class GoParser:
                     hash=hash_source(raw_source),
                 )
             )
+
+            if entity_type == EntityType.CLASS:
+                for base_name in extract_embedded_types(type_child, source):
+                    edges.append(
+                        Edge(
+                            src_id=entity_id,
+                            dst_id=f"go:?inherits:{base_name}",
+                            type="inherits",
+                            line=child.start_point[0] + 1,
+                        )
+                    )
 
     # ------------------------------------------------------------------
     # Import extraction — provisional `go:?:<import_path>` edges

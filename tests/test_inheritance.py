@@ -15,6 +15,7 @@ from pathlib import Path
 from codegraph.cli import app
 from codegraph.graph.store import GraphStore
 from codegraph.parsers.c_cpp import CppParser
+from codegraph.parsers.go import GoParser
 from codegraph.parsers.java import JavaParser
 from codegraph.parsers.php import PHPParser
 from codegraph.parsers.python import PythonParser
@@ -541,3 +542,68 @@ def test_cpp_method_only_on_base_class_resolves_through_inheritance(tmp_path: Pa
         store.close()
     resolved = {(src, dst) for src, dst, _ in edges}
     assert ("cpp:t.cpp:Derived.Run", "cpp:t.cpp:Base.Save") in resolved
+
+
+# ---------- Go: pure parser unit tests (no DB) ----------
+
+
+def _go_inherits_edges(source: str):
+    result = GoParser().parse(Path("main.go"), source)
+    return [e for e in result.edges if e.type == "inherits"]
+
+
+def test_go_embedded_field_produces_inherits_edge() -> None:
+    edges = _go_inherits_edges(
+        "package main\ntype Base struct{}\ntype Derived struct {\n    Base\n}\n"
+    )
+    assert len(edges) == 1
+    assert edges[0].dst_id == "go:?inherits:Base"
+
+
+def test_go_pointer_embedded_field_produces_inherits_edge() -> None:
+    edges = _go_inherits_edges(
+        "package main\ntype Base struct{}\ntype Derived struct {\n    *Base\n}\n"
+    )
+    assert len(edges) == 1
+    assert edges[0].dst_id == "go:?inherits:Base"
+
+
+def test_go_named_field_is_not_treated_as_embedded() -> None:
+    edges = _go_inherits_edges(
+        "package main\ntype Base struct{}\ntype Derived struct {\n    B Base\n}\n"
+    )
+    assert edges == []
+
+
+def test_go_struct_with_no_embedded_field_produces_no_inherits_edges() -> None:
+    edges = _go_inherits_edges("package main\ntype Foo struct {\n    Name string\n}\n")
+    assert edges == []
+
+
+# ---------- Go: integration ----------
+
+
+def test_go_method_only_on_embedded_type_resolves_through_promotion(tmp_path: Path) -> None:
+    db = _index(
+        tmp_path,
+        {
+            "main.go": (
+                "package main\n"
+                "type Base struct{}\n"
+                "func (b *Base) Save() {}\n"
+                "type Derived struct {\n"
+                "    Base\n"
+                "}\n"
+                "func (d *Derived) Run() {\n"
+                "    d.Save()\n"
+                "}\n"
+            ),
+        },
+    )
+    store = GraphStore(db)
+    try:
+        edges = _edges(store)
+    finally:
+        store.close()
+    resolved = {(src, dst) for src, dst, _ in edges}
+    assert ("go:main.go:Derived.Run", "go:main.go:Base.Save") in resolved
