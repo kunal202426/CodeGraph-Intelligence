@@ -34,6 +34,13 @@ with warnings.catch_warnings():
 from codegraph.parsers.base import ParseResult
 from codegraph.resolution.frameworks.express import extract_route_edges
 from codegraph.resolution.frameworks.http_client import extract_http_edges
+from codegraph.resolution.receiver_types.typescript import (
+    infer_local_types,
+    infer_param_types,
+    infer_self_attr_types,
+    params_source_node,
+    receiver_type_for_call,
+)
 from codegraph.uir import (
     Edge,
     EntityType,
@@ -138,6 +145,7 @@ class TypeScriptParser:
             entities=entities,
             edges=edges,
             is_exported=False,
+            self_attr_types={},
         )
 
         entities_by_name = {e.name: e.entity_id for e in entities}
@@ -162,6 +170,7 @@ class TypeScriptParser:
         entities: list[UIREntity],
         edges: list[Edge],
         is_exported: bool,
+        self_attr_types: dict[str, str],
     ) -> None:
         """Walk top-level children. Recurses into class bodies + statement blocks."""
         for child in node.children:
@@ -185,6 +194,7 @@ class TypeScriptParser:
                     entities=entities,
                     edges=edges,
                     is_exported=True,
+                    self_attr_types=self_attr_types,
                 )
 
             elif kind in (
@@ -206,6 +216,7 @@ class TypeScriptParser:
                     entities=entities,
                     edges=edges,
                     is_exported=is_exported,
+                    self_attr_types=self_attr_types,
                 )
 
             elif kind == "class_body":
@@ -219,6 +230,7 @@ class TypeScriptParser:
                     emit_lang=emit_lang,
                     entities=entities,
                     edges=edges,
+                    self_attr_types=self_attr_types,
                 )
 
             elif kind == "import_statement" and not scope:
@@ -242,6 +254,7 @@ class TypeScriptParser:
         entities: list[UIREntity],
         edges: list[Edge],
         is_exported: bool,
+        self_attr_types: dict[str, str],
     ) -> None:
         kind = decl.type
 
@@ -259,6 +272,7 @@ class TypeScriptParser:
                 entity_type=EntityType.METHOD if scope else EntityType.FUNCTION,
                 is_async=any(c.type == "async" for c in decl.children),
                 is_exported=is_exported,
+                self_attr_types=self_attr_types,
             )
 
         elif kind == "class_declaration":
@@ -275,6 +289,7 @@ class TypeScriptParser:
                 entity_type=EntityType.CLASS,
                 is_async=False,
                 is_exported=is_exported,
+                self_attr_types=self_attr_types,
             )
             if class_id is not None:
                 self._descend_into_class(
@@ -303,6 +318,7 @@ class TypeScriptParser:
                 entity_type=EntityType.INTERFACE,
                 is_async=False,
                 is_exported=is_exported,
+                self_attr_types=self_attr_types,
             )
 
         elif kind in ("lexical_declaration", "variable_declaration"):
@@ -326,6 +342,7 @@ class TypeScriptParser:
                     entity_type=EntityType.METHOD if scope else EntityType.FUNCTION,
                     is_async=any(c.type == "async" for c in value.children),
                     is_exported=is_exported,
+                    self_attr_types=self_attr_types,
                 )
 
     def _walk_class_body(
@@ -340,6 +357,7 @@ class TypeScriptParser:
         emit_lang: Language,
         entities: list[UIREntity],
         edges: list[Edge],
+        self_attr_types: dict[str, str],
     ) -> None:
         for child in body.children:
             if child.type == "method_definition":
@@ -356,6 +374,7 @@ class TypeScriptParser:
                     entity_type=EntityType.METHOD,
                     is_async=any(c.type == "async" for c in child.children),
                     is_exported=True,  # all instance/static methods are part of the class API
+                    self_attr_types=self_attr_types,
                 )
 
     def _descend_into_class(
@@ -387,6 +406,7 @@ class TypeScriptParser:
             emit_lang=emit_lang,
             entities=entities,
             edges=edges,
+            self_attr_types=infer_self_attr_types(body, source),
         )
 
     # ------------------------------------------------------------------
@@ -407,6 +427,7 @@ class TypeScriptParser:
         entity_type: EntityType,
         is_async: bool,
         is_exported: bool,
+        self_attr_types: dict[str, str],
     ) -> str | None:
         name_node = decl.child_by_field_name("name")
         name = self._text(name_node, source)
@@ -446,28 +467,61 @@ class TypeScriptParser:
         if entity_type in (EntityType.FUNCTION, EntityType.METHOD):
             body = self._call_body_node(decl)
             if body is not None:
-                self._emit_calls(body, source, src_id=entity_id, edges=edges)
+                class_name = scope[-1] if scope else None
+                local_types = infer_param_types(params_source_node(decl), source)
+                local_types.update(infer_local_types(body, source))
+                self._emit_calls(
+                    body,
+                    source,
+                    src_id=entity_id,
+                    edges=edges,
+                    class_name=class_name,
+                    local_types=local_types,
+                    self_attr_types=self_attr_types,
+                )
 
         return entity_id
 
     # ------------------------------------------------------------------
     # Call extraction: emit a provisional `calls` edge per call
-    # expression in a body. dst is `ts:?call:<name>`; the resolver closes it
-    # against same-file entities and the file's imports.
+    # expression in a body. When the receiver's type was inferred (a local
+    # variable's `new X()`/annotation, a typed parameter, `this`, or a
+    # `this.attr` tracked elsewhere in the class), dst is
+    # `ts:?methodcall:<Type>.<name>`; the resolver tries an exact match on
+    # that before falling back to plain-name resolution. Otherwise dst is
+    # `ts:?call:<name>`, resolved against same-file entities and imports.
     #
     #   foo()           → ts:?call:foo
-    #   obj.method()    → ts:?call:method   (last property identifier, like Python)
+    #   obj.method()    → ts:?call:method | ts:?methodcall:<Type>.method
     #   a.b.process()   → ts:?call:process
 
-    def _emit_calls(self, body: Node, source: bytes, *, src_id: str, edges: list[Edge]) -> None:
+    def _emit_calls(
+        self,
+        body: Node,
+        source: bytes,
+        *,
+        src_id: str,
+        edges: list[Edge],
+        class_name: str | None,
+        local_types: dict[str, str],
+        self_attr_types: dict[str, str],
+    ) -> None:
         for call in self._iter_call_nodes(body):
             callee = self._callee_name(call, source)
             if not callee:
                 continue
+            receiver_type = receiver_type_for_call(
+                call, source, class_name, local_types, self_attr_types
+            )
+            dst_id = (
+                f"ts:?methodcall:{receiver_type}.{callee}"
+                if receiver_type
+                else f"ts:?call:{callee}"
+            )
             edges.append(
                 Edge(
                     src_id=src_id,
-                    dst_id=f"ts:?call:{callee}",
+                    dst_id=dst_id,
                     type="calls",
                     line=call.start_point[0] + 1,
                     confidence=0.7,

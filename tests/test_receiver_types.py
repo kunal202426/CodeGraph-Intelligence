@@ -1,7 +1,8 @@
-"""Tests for receiver-type inference on Python method calls (Phase 26).
+"""Tests for receiver-type inference on Python and TypeScript method calls
+(Phase 26).
 
 `obj.method()` only resolves to the right `method` if `obj`'s type is known.
-Unit tests check the provisional `py:?methodcall:<Type>.<name>` edge the
+Unit tests check the provisional `<lang>:?methodcall:<Type>.<name>` edge the
 parser emits; integration tests check the resolver closes it to the correct
 entity_id, including disambiguating between two same-named methods on
 different classes -- the exact case plain name-matching gets wrong.
@@ -14,6 +15,7 @@ from pathlib import Path
 from codegraph.cli import app
 from codegraph.graph.store import GraphStore
 from codegraph.parsers.python import PythonParser
+from codegraph.parsers.typescript import TypeScriptParser
 from typer.testing import CliRunner
 
 # ---------- pure parser unit tests (no DB) ----------
@@ -254,3 +256,132 @@ def test_method_not_found_on_inferred_type_falls_back_to_plain_resolution(tmp_pa
         store.close()
     resolved = {(src, dst) for src, dst, _ in edges}
     assert ("py:app.py:use", "py:app.py:helper") in resolved
+
+
+# ---------- TypeScript: pure parser unit tests (no DB) ----------
+
+
+def _ts_call_edges(source: str, src_suffix: str = ""):
+    result = TypeScriptParser().parse(Path("app.ts"), source)
+    edges = [e for e in result.edges if e.type == "calls"]
+    if src_suffix:
+        edges = [e for e in edges if e.src_id.endswith(src_suffix)]
+    return edges
+
+
+def test_ts_this_call_infers_enclosing_class_as_receiver_type() -> None:
+    edges = _ts_call_edges(
+        "class Widget {\n  render() {}\n  draw() {\n    this.render();\n  }\n}\n",
+        src_suffix="Widget.draw",
+    )
+    assert len(edges) == 1
+    assert edges[0].dst_id == "ts:?methodcall:Widget.render"
+
+
+def test_ts_new_expression_local_variable_infers_type() -> None:
+    edges = _ts_call_edges(
+        "class Logger {\n"
+        "  log() {}\n"
+        "}\n"
+        "function use() {\n"
+        "  const lg = new Logger();\n"
+        "  lg.log();\n"
+        "}\n",
+        src_suffix=":use",
+    )
+    method_calls = [e for e in edges if "?methodcall:" in e.dst_id]
+    assert len(method_calls) == 1
+    assert method_calls[0].dst_id == "ts:?methodcall:Logger.log"
+
+
+def test_ts_annotated_local_variable_infers_type() -> None:
+    edges = _ts_call_edges(
+        "class Logger {\n"
+        "  log() {}\n"
+        "}\n"
+        "function use() {\n"
+        "  const lg: Logger = getLogger();\n"
+        "  lg.log();\n"
+        "}\n",
+        src_suffix=":use",
+    )
+    method_calls = [e for e in edges if "?methodcall:" in e.dst_id]
+    assert len(method_calls) == 1
+    assert method_calls[0].dst_id == "ts:?methodcall:Logger.log"
+
+
+def test_ts_typed_parameter_infers_type() -> None:
+    edges = _ts_call_edges(
+        "class Service {\n"
+        "  notify() {}\n"
+        "}\n"
+        "class Caller {\n"
+        "  use(svc: Service) {\n"
+        "    svc.notify();\n"
+        "  }\n"
+        "}\n",
+        src_suffix="Caller.use",
+    )
+    method_calls = [e for e in edges if "?methodcall:" in e.dst_id]
+    assert len(method_calls) == 1
+    assert method_calls[0].dst_id == "ts:?methodcall:Service.notify"
+
+
+def test_ts_field_declaration_type_resolves_from_other_method() -> None:
+    edges = _ts_call_edges(
+        "class Service {\n"
+        "  save() {}\n"
+        "}\n"
+        "class Caller {\n"
+        "  private svc: Service;\n"
+        "  constructor() {\n"
+        "    this.svc = new Service();\n"
+        "  }\n"
+        "  run() {\n"
+        "    this.svc.save();\n"
+        "  }\n"
+        "}\n",
+        src_suffix="Caller.run",
+    )
+    method_calls = [e for e in edges if "?methodcall:" in e.dst_id]
+    assert len(method_calls) == 1
+    assert method_calls[0].dst_id == "ts:?methodcall:Service.save"
+
+
+def test_ts_generic_type_annotation_is_not_treated_as_a_receiver_type() -> None:
+    edges = _ts_call_edges(
+        "function use() {\n  const items: Array<Logger> = getItems();\n  items.push(1);\n}\n",
+        src_suffix=":use",
+    )
+    dst_ids = {e.dst_id for e in edges}
+    assert "ts:?call:push" in dst_ids
+    assert not any("?methodcall:" in dst for dst in dst_ids)
+
+
+# ---------- TypeScript: integration ----------
+
+
+def test_ts_resolves_to_correct_class_when_two_files_share_a_method_name(tmp_path: Path) -> None:
+    db = _index(
+        tmp_path,
+        {
+            "file_a.ts": (
+                "export class Logger {\n"
+                "  log() {}\n"
+                "}\n"
+                "function use() {\n"
+                "  const lg = new Logger();\n"
+                "  lg.log();\n"
+                "}\n"
+            ),
+            "file_b.ts": ("export class Logger {\n  log() {}\n}\n"),
+        },
+    )
+    store = GraphStore(db)
+    try:
+        edges = _edges(store)
+    finally:
+        store.close()
+    resolved = {(src, dst) for src, dst, _ in edges}
+    assert ("ts:file_a.ts:use", "ts:file_a.ts:Logger.log") in resolved
+    assert ("ts:file_a.ts:use", "ts:file_b.ts:Logger.log") not in resolved
