@@ -27,6 +27,7 @@ with warnings.catch_warnings():
     from tree_sitter_languages import get_language
 
 from codegraph.parsers.base import ParseResult
+from codegraph.resolution.frameworks.python_web import extract_route_edges
 from codegraph.uir import (
     Edge,
     EntityType,
@@ -142,6 +143,8 @@ class PythonParser:
                     entities=entities,
                     edges=edges,
                 )
+                if inner.type == "function_definition" and emitted_id is not None:
+                    edges.extend(extract_route_edges(child, emitted_id, source))
                 if inner.type == "class_definition" and emitted_id is not None:
                     self._descend_into_class(
                         inner, source, file, scope, emitted_id, module_id, entities, edges
