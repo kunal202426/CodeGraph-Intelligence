@@ -68,6 +68,12 @@ class ChangeEvent:
 _LOCK_RETRY_ATTEMPTS = 4
 _LOCK_RETRY_BACKOFF_SEC = 0.25
 
+# After this many consecutive re-index failures for the SAME path (excluding
+# transient DB-lock contention, which has its own retry above), the path is
+# quarantined and further modify events for it are ignored -- a persistently
+# poisoned file must not silently burn a re-index on every save forever.
+_QUARANTINE_THRESHOLD = 3
+
 
 # --------------------------------------------------------------------------- #
 # Gitignore / path helpers
@@ -310,6 +316,16 @@ class _DebounceHandler:
         self._timers: dict[str, threading.Timer] = {}
         self._timer_lock = threading.Lock()
 
+        # Per-path consecutive-failure tracking. A file that persistently
+        # crashes indexing (a parser-killing construct, a permission problem)
+        # must not burn a full re-index attempt on every save forever -- after
+        # _QUARANTINE_THRESHOLD consecutive failures the path is quarantined:
+        # further modify events are dropped until the file is deleted (which
+        # clears the record) or the watcher restarts. A success resets the
+        # count, so a transient hiccup never quarantines.
+        self._fail_counts: dict[str, int] = {}
+        self._quarantined: set[str] = set()
+
     # ------------------------------------------------------------------
     # Called by RepoWatcher's bridge for each watchdog event.
 
@@ -359,6 +375,16 @@ class _DebounceHandler:
             self._timers.pop(str(abs_path), None)
 
         rel_path = abs_path.relative_to(self._repo).as_posix()
+
+        # Quarantine gate: a path that has failed _QUARANTINE_THRESHOLD times
+        # in a row is dropped silently on further modifications. Deletion
+        # still goes through (it clears the poisoned rows AND the quarantine).
+        if action == "deleted":
+            self._fail_counts.pop(rel_path, None)
+            self._quarantined.discard(rel_path)
+        elif rel_path in self._quarantined:
+            return
+
         t0 = time.monotonic()
 
         n_entities = 0
@@ -389,6 +415,20 @@ class _DebounceHandler:
                 except Exception as exc:  # noqa: BLE001 — a watcher thread must never die
                     error = f"re-index failed: {exc}"
                     break
+
+        # Consecutive-failure bookkeeping (DB-lock contention doesn't count:
+        # it's transient by nature and has its own retry loop above).
+        if error is not None and not error.startswith("database busy"):
+            count = self._fail_counts.get(rel_path, 0) + 1
+            self._fail_counts[rel_path] = count
+            if count >= _QUARANTINE_THRESHOLD:
+                self._quarantined.add(rel_path)
+                error += (
+                    f" — giving up on this file after {count} consecutive failures;"
+                    " it will be ignored until deleted or the watcher restarts"
+                )
+        elif error is None:
+            self._fail_counts.pop(rel_path, None)
 
         elapsed_ms = (time.monotonic() - t0) * 1000
         if self._on_change is not None:

@@ -388,3 +388,89 @@ def test_debounce_coalesces_rapid_events(tmp_path: Path) -> None:
 
     time.sleep(0.5)  # let the single debounced timer fire and finish
     assert len(fired) == 1
+
+
+# ---------- robustness (Phase 28): per-path failure quarantine ----------
+
+
+def _fail_always(*_args, **_kwargs):
+    raise RuntimeError("poisoned file")
+
+
+def test_persistently_failing_file_is_quarantined(tmp_path: Path, monkeypatch) -> None:
+    """After 3 consecutive failures for the same path, further modify events
+    are dropped -- a poisoned file must not burn a re-index on every save."""
+    from codegraph.sync import watcher as watcher_mod
+
+    fired: list = []
+    handler, repo, _ = _make_handler(tmp_path, fired, debounce_sec=0.0)
+    src = repo / "app.py"
+    src.write_text("def run():\n    pass\n", encoding="utf-8")
+    monkeypatch.setattr(watcher_mod, "index_one_file", _fail_always)
+
+    for _ in range(4):
+        handler.dispatch(_MockEvent(src_path=src.resolve(), event_type="modified"))
+        time.sleep(0.3)
+
+    # Events 1-3 fire with errors; the 3rd announces the quarantine; the 4th
+    # dispatch produces no event at all.
+    assert len(fired) == 3
+    assert all(e.error is not None for e in fired)
+    assert "giving up" in fired[2].error
+    assert "giving up" not in fired[0].error
+
+
+def test_success_resets_the_failure_count(tmp_path: Path, monkeypatch) -> None:
+    """Two failures, a success, then two more failures -- never quarantined,
+    because the counter only tracks CONSECUTIVE failures."""
+    from codegraph.sync import watcher as watcher_mod
+
+    fired: list = []
+    handler, repo, _ = _make_handler(tmp_path, fired, debounce_sec=0.0)
+    src = repo / "app.py"
+    src.write_text("def run():\n    pass\n", encoding="utf-8")
+
+    calls = {"n": 0}
+
+    def _fail_twice_then_ok(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] in (1, 2, 4, 5):
+            raise RuntimeError("flaky")
+        return 1
+
+    monkeypatch.setattr(watcher_mod, "index_one_file", _fail_twice_then_ok)
+
+    for _ in range(5):
+        handler.dispatch(_MockEvent(src_path=src.resolve(), event_type="modified"))
+        time.sleep(0.3)
+
+    assert len(fired) == 5  # nothing dropped
+    assert not any(e.error and "giving up" in e.error for e in fired)
+
+
+def test_deleting_a_quarantined_file_clears_the_quarantine(tmp_path: Path, monkeypatch) -> None:
+    from codegraph.sync import watcher as watcher_mod
+
+    fired: list = []
+    handler, repo, db = _make_handler(tmp_path, fired, debounce_sec=0.0)
+    src = repo / "app.py"
+    src.write_text("def run():\n    pass\n", encoding="utf-8")
+    monkeypatch.setattr(watcher_mod, "index_one_file", _fail_always)
+
+    for _ in range(3):
+        handler.dispatch(_MockEvent(src_path=src.resolve(), event_type="modified"))
+        time.sleep(0.3)
+    assert "giving up" in fired[-1].error
+
+    # Delete goes through despite quarantine, and clears it.
+    handler.dispatch(_MockEvent(src_path=src.resolve(), event_type="deleted"))
+    time.sleep(0.3)
+    assert fired[-1].action == "deleted"
+    assert fired[-1].error is None
+
+    # The path indexes again after re-creation (quarantine lifted).
+    monkeypatch.setattr(watcher_mod, "index_one_file", lambda *a, **k: 1)
+    handler.dispatch(_MockEvent(src_path=src.resolve(), event_type="modified"))
+    time.sleep(0.3)
+    assert fired[-1].action == "modified"
+    assert fired[-1].error is None
