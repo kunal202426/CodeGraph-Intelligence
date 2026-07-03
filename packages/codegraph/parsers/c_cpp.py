@@ -135,8 +135,15 @@ class _CCppMixin:
                     class_field_types=class_field_types,
                 )
             elif kind in ("class_specifier", "struct_specifier"):
+                # A bodiless `class Foo;` is a forward declaration, not a
+                # definition. Indexing it as its own class would bury the
+                # real definition behind dozens of duplicate entities in
+                # header-heavy codebases (a heavily used class is
+                # forward-declared across many headers in large C++ /
+                # game-engine projects), so only a specifier with a body
+                # counts.
                 name_node = child.child_by_field_name("name")
-                if name_node is not None:
+                if name_node is not None and child.child_by_field_name("body") is not None:
                     self._emit_class(
                         child,
                         source_bytes,
@@ -530,8 +537,25 @@ def _func_name_from_decl(node: Node | None, source: bytes) -> str | None:
         inner = node.child_by_field_name("declarator")
         if inner is not None:
             return source[inner.start_byte : inner.end_byte].decode("utf-8", errors="replace")
+    elif node.type == "operator_cast":
+        # A user-defined conversion operator (`operator EALSMovementState() const`)
+        # has no identifier -- its name IS "operator <Type>". Common in
+        # game-engine code; previously dropped entirely.
+        type_node = node.child_by_field_name("type")
+        if type_node is not None:
+            type_text = source[type_node.start_byte : type_node.end_byte].decode(
+                "utf-8", errors="replace"
+            )
+            return f"operator {type_text}"
     elif node.type in ("pointer_declarator", "reference_declarator", "abstract_pointer_declarator"):
-        return _func_name_from_decl(node.child_by_field_name("declarator"), source)
+        inner = node.child_by_field_name("declarator")
+        if inner is None:
+            # A reference_declarator wraps its function_declarator as an
+            # UNNAMED child, not via the `declarator` field -- so a method
+            # returning a reference (`const X& GetTags() const`, everywhere
+            # in real C++ headers) was dropped from the index entirely.
+            inner = next((c for c in node.children if c.is_named), None)
+        return _func_name_from_decl(inner, source)
     return None
 
 

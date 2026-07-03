@@ -303,3 +303,53 @@ def test_fixture_cpp_emits_expected_entities(cpp_parser: CppParser) -> None:
     # start() calls this->listen() — receiver type inferred as Server
     call_edges = _call_edges(result)
     assert any(e.dst_id == "cpp:?methodcall:Server.listen" for e in call_edges)
+
+
+# ---------- real-world robustness (Phase 28): forward decls, reference
+# returns, conversion operators, macro-decorated signatures ----------
+
+
+def test_cpp_forward_declaration_is_not_indexed_as_a_class(cpp_parser: CppParser) -> None:
+    # `class Widget;` repeated across headers must not bury the real definition.
+    src = "class Widget;\nclass Widget {\npublic:\n    void Render() {}\n};\n"
+    result = cpp_parser.parse(Path("t.cpp"), src)
+    widgets = [e for e in result.entities if e.name == "Widget"]
+    assert len(widgets) == 1
+    assert widgets[0].start_line == 2  # the definition, not the forward decl
+
+
+def test_c_forward_declaration_is_not_indexed_as_a_struct(c_parser: CParser) -> None:
+    src = "struct Point;\nstruct Point { int x; };\n"
+    result = c_parser.parse(Path("t.c"), src)
+    points = [e for e in result.entities if e.name == "Point"]
+    assert len(points) == 1
+    assert points[0].start_line == 2
+
+
+def test_cpp_reference_returning_function_is_indexed(cpp_parser: CppParser) -> None:
+    # The declarator is a reference_declarator wrapping an UNNAMED
+    # function_declarator child -- previously dropped from the index entirely.
+    src = "const FGameplayTagContainer& GetActiveTags() const { return tags; }\n"
+    result = cpp_parser.parse(Path("t.cpp"), src)
+    fn = _by_name(result, "GetActiveTags")
+    assert fn is not None and fn.type == EntityType.FUNCTION
+
+
+def test_cpp_conversion_operator_is_indexed_under_operator_name(cpp_parser: CppParser) -> None:
+    src = "class Converter {\npublic:\n    operator EALSMovementState() const { return s; }\n};\n"
+    result = cpp_parser.parse(Path("t.cpp"), src)
+    op = _by_name(result, "operator EALSMovementState")
+    assert op is not None and op.type == EntityType.METHOD
+    assert op.qualified_name == "Converter.operator EALSMovementState"
+
+
+def test_cpp_macro_decorated_function_keeps_its_real_name(cpp_parser: CppParser) -> None:
+    # FORCEINLINE-style macros before the return type (Unreal/Boost/Qt idiom)
+    # must not absorb the macro or return type into the function's name.
+    src = (
+        "FORCEINLINE FString GetTags() { return x; }\n"
+        "SOME_UNKNOWN_MACRO int doWork() { return 1; }\n"
+    )
+    result = cpp_parser.parse(Path("t.cpp"), src)
+    assert _by_name(result, "GetTags") is not None
+    assert _by_name(result, "doWork") is not None

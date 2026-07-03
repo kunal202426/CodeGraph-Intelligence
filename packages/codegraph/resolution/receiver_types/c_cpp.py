@@ -65,7 +65,12 @@ def params_node_from_decl(node: Node | None) -> Node | None:
     if node.type == "function_declarator":
         return node.child_by_field_name("parameters")
     if node.type in ("pointer_declarator", "reference_declarator"):
-        return params_node_from_decl(node.child_by_field_name("declarator"))
+        inner = node.child_by_field_name("declarator")
+        if inner is None:
+            # reference_declarator wraps its function_declarator as an
+            # unnamed child, not via the `declarator` field.
+            inner = next((c for c in node.children if c.is_named), None)
+        return params_node_from_decl(inner)
     return None
 
 
