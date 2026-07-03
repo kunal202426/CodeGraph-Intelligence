@@ -33,6 +33,7 @@ with warnings.catch_warnings():
 
 from codegraph.parsers.base import ParseResult
 from codegraph.resolution.frameworks.rails import extract_route_edges
+from codegraph.resolution.inheritance.ruby import extract_base_classes
 from codegraph.resolution.receiver_types.ruby import (
     infer_local_types,
     infer_self_attr_types,
@@ -166,6 +167,17 @@ class RubyParser:
                 hash=hash_source(raw_source),
             )
         )
+
+        if node.type == "class":
+            for base_name in extract_base_classes(node, source):
+                edges.append(
+                    Edge(
+                        src_id=entity_id,
+                        dst_id=f"rb:?inherits:{base_name}",
+                        type="inherits",
+                        line=node.start_point[0] + 1,
+                    )
+                )
 
         body = node.child_by_field_name("body")
         if body is not None:

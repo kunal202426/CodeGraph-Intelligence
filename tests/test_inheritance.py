@@ -17,6 +17,7 @@ from codegraph.graph.store import GraphStore
 from codegraph.parsers.java import JavaParser
 from codegraph.parsers.php import PHPParser
 from codegraph.parsers.python import PythonParser
+from codegraph.parsers.ruby import RubyParser
 from codegraph.parsers.typescript import TypeScriptParser
 from typer.testing import CliRunner
 
@@ -432,3 +433,57 @@ def test_php_method_only_on_base_class_resolves_through_inheritance(tmp_path: Pa
         store.close()
     resolved = {(src, dst) for src, dst, _ in edges}
     assert ("php:T.php:Derived.run", "php:T.php:Base.save") in resolved
+
+
+# ---------- Ruby: pure parser unit tests (no DB) ----------
+
+
+def _rb_inherits_edges(source: str):
+    result = RubyParser().parse(Path("t.rb"), source)
+    return [e for e in result.edges if e.type == "inherits"]
+
+
+def test_rb_superclass_produces_inherits_edge() -> None:
+    edges = _rb_inherits_edges("class Base\nend\nclass Foo < Base\nend\n")
+    assert len(edges) == 1
+    assert edges[0].dst_id == "rb:?inherits:Base"
+
+
+def test_rb_class_with_no_superclass_produces_no_inherits_edges() -> None:
+    edges = _rb_inherits_edges("class Foo\nend\n")
+    assert edges == []
+
+
+def test_rb_module_produces_no_inherits_edges() -> None:
+    # Modules can't have a superclass in Ruby.
+    edges = _rb_inherits_edges("module Foo\nend\n")
+    assert edges == []
+
+
+# ---------- Ruby: integration ----------
+
+
+def test_rb_method_only_on_base_class_resolves_through_inheritance(tmp_path: Path) -> None:
+    db = _index(
+        tmp_path,
+        {
+            "t.rb": (
+                "class Base\n"
+                "  def save\n"
+                "  end\n"
+                "end\n"
+                "class Derived < Base\n"
+                "  def run\n"
+                "    self.save\n"
+                "  end\n"
+                "end\n"
+            ),
+        },
+    )
+    store = GraphStore(db)
+    try:
+        edges = _edges(store)
+    finally:
+        store.close()
+    resolved = {(src, dst) for src, dst, _ in edges}
+    assert ("rb:t.rb:Derived.run", "rb:t.rb:Base.save") in resolved
