@@ -2,11 +2,38 @@
 
 ## Current
 
-- **Status:** ACTIVE — roadmap complete; competitive hardening (Phases 19-22, 24, 26-27) done.
-- **Phase:** Maintenance & hardening (post-audit fixes, usability, repo hygiene)
-- **Next task:** (optional: Ruby `include`-mixin inheritance, Rust trait default methods; persistent model service to kill per-CLI reload — see manual test #3; capture function-local imports — parsers/python.py:184-186; PyPI publish (manual); Phase 23 shared MCP daemon and Phase 25 Vue/Svelte coverage explicitly deferred, not started)
+- **Status:** ACTIVE — roadmap complete; competitive hardening (Phases 19-22, 24, 26-27) done;
+  CI green, `main` fully pushed, working tree clean.
+- **Phase:** Maintenance & hardening (post-audit fixes, usability, repo hygiene). No phase
+  currently in progress — safe to start a new session cold from this file.
+- **Tests:** 1089 passing, 1 live-skip (needs `ANTHROPIC_API_KEY`), 0 failing. Verified both
+  locally and on GitHub Actions (`gh run list`) as of the last commit below.
+- **Next task (all optional, none blocking):**
+  - Ruby `include`-mixin inheritance (only `< Base` superclass syntax is walked today)
+  - Rust trait default methods (Rust has no inheritance walk at all — traits ≠ classes)
+  - Persistent model service to kill per-CLI embedding-model reload (see manual test #3)
+  - Capture function-local imports — `parsers/python.py:184-186` (module-level only today)
+  - PyPI publish (manual step, package metadata already ready since Phase 18)
+  - **Explicitly deferred, not started:** Phase 23 (shared multi-client MCP daemon — scoped,
+    rejected as higher-risk than its benefit, see "Competitive hardening" section below);
+    Phase 25 (optional Vue/Svelte language coverage — never prioritized, no user ask)
 - **Last session:** 2026-07-03
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
+
+### Session 2026-07-03 (night) — CI fix: deterministic multi-base inheritance ordering
+Phase 27's multiple-inheritance test (`class Foo(A, B)`, both declaring the same method)
+asserted the resolver prefers `A` — matching Python's own left-to-right MRO. It passed
+locally on Windows but **failed on GitHub Actions' Linux runner**: the resolver built
+`bases_by_class` by appending `?inherits:` edges in DB row-fetch order, which SQL never
+guarantees without `ORDER BY` — it happened to match declaration order on one platform's
+query plan and not another's. Real bug, not a flaky test: base-class order was never
+actually guaranteed, just accidentally consistent locally. Fixed by encoding an explicit
+position in every provisional edge (`py:?inherits:0:Base`, `py:?inherits:1:Mixin`, ...)
+across all 7 parsers that emit them, and sorting by `(src_id, index)` in the resolver before
+building `bases_by_class` — order is now deterministic by construction, not by platform
+accident. Verified green on the actual GitHub Actions run (`gh run watch`), not just
+re-run locally. 1089 tests passing (same count — this was a correctness fix, not new
+coverage).
 
 ### Session 2026-07-03 (late pm) — inheritance-aware method resolution (Phase 27)
 Closed the exact limitation flagged at the end of Phase 26: `obj.method()` resolved to the
@@ -391,7 +418,10 @@ process-model change with higher risk than the other phases combined, for a bene
 the framework-resolution or method-precision wins. Revisit only if multi-window duplicate
 process overhead becomes an actual reported problem, not preemptively.
 
-895 → 1088 tests across the seven phases, zero regressions at any step.
+895 → 1089 tests across the seven phases, zero regressions at any step. Verified green on
+GitHub Actions (Linux), not just locally — a cross-platform ordering bug in Phase 27's
+multi-base-inheritance resolution was caught by CI running on a different OS than local dev
+and fixed the same session (see the "CI fix" entry above).
 
 ---
 

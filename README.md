@@ -7,7 +7,7 @@ MCP so the agent queries the graph instead of re-reading your files every messag
 Solving high token consumption and context break during window overload.
 
 > **Status: active development.** Core indexing, search, and MCP tools are stable.
-> 1088 tests passing. Every user-facing surface manually tested: 21/21 passed, 6 issues
+> 1089 tests passing. Every user-facing surface manually tested: 21/21 passed, 6 issues
 > fixed. [Manual test →](docs/MANUAL_TEST_REPORT.md) | [Bench notes →](docs/QUALITY_REPORT_2026-07-01.md).
 > MCP server works but still preview, not production-ready.
 
@@ -34,7 +34,9 @@ Solving high token consumption and context break during window overload.
   `self.attr`/`this.attr`/`@attr` — so two unrelated classes sharing a method name no longer
   risk a call edge pointing at the wrong one. Falls back to the old name-only resolution
   whenever the type can't be confidently inferred, so this never makes a result worse.
-- 1088 tests passing (up from 1001), zero regressions across the pass.
+- 1089 tests passing (up from 1001), zero regressions across the pass — verified on both
+  local runs and GitHub Actions (Linux), which caught and led to a fix for a genuine
+  cross-platform ordering bug in multi-base inheritance resolution.
 - Framework-aware call resolution: a route handler invoked only through Flask, FastAPI,
   Express, Django, Spring, or Rails routing now has a real `calls` edge instead of showing
   up as false-positive dead code with zero callers in `impact_analysis`. Resolves same-file
@@ -559,7 +561,7 @@ more queries: **101x average** (12x on small files at worst, 190x best).
 **Search:** Hit@1 = 7/7 on symbol queries where the function name doesn't appear in
 the query string at all. Warm query ~15ms.
 
-**Tests:** 1088 passing, 0 failures, 1 live-skip (needs an API key). Covers MCP tools,
+**Tests:** 1089 passing, 0 failures, 1 live-skip (needs an API key). Covers MCP tools,
 all 22 parsers, framework route resolution, receiver-type and inheritance-aware resolution,
 graph queries, CLI, and all 8 installer targets.
 
