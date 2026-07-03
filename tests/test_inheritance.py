@@ -14,6 +14,7 @@ from pathlib import Path
 
 from codegraph.cli import app
 from codegraph.graph.store import GraphStore
+from codegraph.parsers.c_cpp import CppParser
 from codegraph.parsers.java import JavaParser
 from codegraph.parsers.php import PHPParser
 from codegraph.parsers.python import PythonParser
@@ -487,3 +488,56 @@ def test_rb_method_only_on_base_class_resolves_through_inheritance(tmp_path: Pat
         store.close()
     resolved = {(src, dst) for src, dst, _ in edges}
     assert ("rb:t.rb:Derived.run", "rb:t.rb:Base.save") in resolved
+
+
+# ---------- C++: pure parser unit tests (no DB) ----------
+
+
+def _cpp_inherits_edges(source: str):
+    result = CppParser().parse(Path("t.cpp"), source)
+    return [e for e in result.edges if e.type == "inherits"]
+
+
+def test_cpp_single_base_produces_inherits_edge() -> None:
+    edges = _cpp_inherits_edges("class Base {};\nclass Foo : public Base {};\n")
+    assert len(edges) == 1
+    assert edges[0].dst_id == "cpp:?inherits:Base"
+
+
+def test_cpp_multiple_bases_produce_one_edge_each_regardless_of_access() -> None:
+    edges = _cpp_inherits_edges(
+        "class Base {};\nclass IFoo {};\nclass Foo : public Base, private IFoo {};\n"
+    )
+    assert {e.dst_id for e in edges} == {"cpp:?inherits:Base", "cpp:?inherits:IFoo"}
+
+
+def test_cpp_class_with_no_base_produces_no_inherits_edges() -> None:
+    edges = _cpp_inherits_edges("class Foo {};\n")
+    assert edges == []
+
+
+# ---------- C++: integration ----------
+
+
+def test_cpp_method_only_on_base_class_resolves_through_inheritance(tmp_path: Path) -> None:
+    db = _index(
+        tmp_path,
+        {
+            "t.cpp": (
+                "class Base {\npublic:\n    void Save() {}\n};\n"
+                "class Derived : public Base {\n"
+                "public:\n"
+                "    void Run() {\n"
+                "        this->Save();\n"
+                "    }\n"
+                "};\n"
+            ),
+        },
+    )
+    store = GraphStore(db)
+    try:
+        edges = _edges(store)
+    finally:
+        store.close()
+    resolved = {(src, dst) for src, dst, _ in edges}
+    assert ("cpp:t.cpp:Derived.Run", "cpp:t.cpp:Base.Save") in resolved

@@ -39,6 +39,7 @@ with warnings.catch_warnings():
     from tree_sitter_languages import get_language
 
 from codegraph.parsers.base import ParseResult
+from codegraph.resolution.inheritance.c_cpp import extract_base_classes
 from codegraph.resolution.receiver_types.c_cpp import (
     infer_class_field_types,
     infer_local_types,
@@ -257,6 +258,16 @@ class _CCppMixin:
                 hash=hash_source(raw_source),
             )
         )
+
+        for base_name in extract_base_classes(node, source):
+            edges.append(
+                Edge(
+                    src_id=entity_id,
+                    dst_id=f"{lang.value}:?inherits:{base_name}",
+                    type="inherits",
+                    line=node.start_point[0] + 1,
+                )
+            )
 
         body = node.child_by_field_name("body")
         if body is not None:
