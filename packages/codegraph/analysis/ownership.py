@@ -19,6 +19,11 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+# A wedged git (network filesystem, stuck fsmonitor hook) must not hang the
+# caller forever -- blame over a bounded line range normally finishes in well
+# under a second, so 10s is generous.
+_GIT_TIMEOUT_SEC = 10
+
 
 @dataclass(frozen=True)
 class Ownership:
@@ -57,8 +62,9 @@ def entity_ownership(
             capture_output=True,
             text=True,
             check=False,
+            timeout=_GIT_TIMEOUT_SEC,
         )
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         return []
     if proc.returncode != 0:
         return []

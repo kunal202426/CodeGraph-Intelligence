@@ -148,3 +148,18 @@ def test_cli_owner_unknown_entity(runner: CliRunner, tmp_path: Path) -> None:
     result = runner.invoke(app, ["owner", "does_not_exist", "--repo", str(repo), "--db", str(db)])
     assert result.exit_code == 1
     assert "No entity matching" in result.stdout
+
+
+# ---------- robustness (Phase 28): a wedged git must not hang the caller ----------
+
+
+def test_git_timeout_degrades_to_empty_list(monkeypatch, tmp_path: Path) -> None:
+    """A git that never returns (network filesystem, stuck fsmonitor) must
+    degrade to 'no ownership data' exactly like an untracked file, not hang."""
+
+    def _hang(*args, **kwargs):
+        assert kwargs.get("timeout") is not None  # the call must actually pass one
+        raise subprocess.TimeoutExpired(cmd="git blame", timeout=kwargs["timeout"])
+
+    monkeypatch.setattr(subprocess, "run", _hang)
+    assert entity_ownership(tmp_path, "any.py", 1, 10) == []
