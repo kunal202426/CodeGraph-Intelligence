@@ -240,13 +240,19 @@ Being honest about the limits:
   API and require a separate API key. The CLI warns you clearly if the key is missing.
 - **No runtime understanding**: Kortex reads static structure (what calls what, what
   imports what). It does not know what happens when the code actually runs.
-- **Framework magic is partial**: Express route handlers, Django views, Rails
-  `has_many` associations, and similar framework-level relationships are not yet resolved.
-  Calls through a framework may show as "external" rather than resolving to a handler.
+- **Framework resolution covers routing, not every framework feature**: Flask, FastAPI,
+  Express, Django, Spring, and Rails route handlers resolve to real `calls` edges (same-file
+  and cross-file), and a static-URL `fetch`/`axios` call resolves cross-language to the
+  handler that serves it. Other framework-level relationships — Rails `has_many`
+  associations, dependency-injection wiring, ORM relationship traversal — are not resolved.
+  A route with a fully dynamic URL (built from string interpolation, not a literal) can't be
+  matched and still shows as external.
 - **Function-local imports**: if a function does `from X import Y` inside the function
   body (rare but valid Python), that call may not trace through to the definition.
-- **One user at a time**: the local DuckDB index is single-writer. Running `codegraph
-  watch` and a heavy re-index simultaneously from two terminals may conflict.
+- **One process per client, no shared daemon**: each connected agent window spawns its own
+  MCP server process. The local DuckDB index is single-writer, so running `codegraph watch`
+  and a heavy re-index simultaneously from two terminals may conflict. A shared multi-client
+  daemon was scoped and deliberately not built — see [STATUS.md](STATUS.md).
 - **Web UI is local-only**: `codegraph serve` opens a browser to `localhost`. It is not
   hosted, shared, or deployed anywhere.
 - **22 languages**: Python, TypeScript, JavaScript, Go, Rust, Java, Ruby, PHP, C, C++,
