@@ -18,6 +18,7 @@ from codegraph.parsers.go import GoParser
 from codegraph.parsers.java import JavaParser
 from codegraph.parsers.php import PHPParser
 from codegraph.parsers.python import PythonParser
+from codegraph.parsers.ruby import RubyParser
 from codegraph.parsers.rust import RustParser
 from codegraph.parsers.typescript import TypeScriptParser
 from typer.testing import CliRunner
@@ -854,3 +855,95 @@ def test_php_resolves_to_correct_class_when_two_files_share_a_method_name(tmp_pa
     resolved = {(src, dst) for src, dst, _ in edges}
     assert ("php:file_a.php:use_it", "php:file_a.php:Logger.log") in resolved
     assert ("php:file_a.php:use_it", "php:file_b.php:Logger.log") not in resolved
+
+
+# ---------- Ruby: pure parser unit tests (no DB) ----------
+
+
+def _rb_call_edges(source: str, src_suffix: str = ""):
+    result = RubyParser().parse(Path("t.rb"), source)
+    edges = [e for e in result.edges if e.type == "calls"]
+    if src_suffix:
+        edges = [e for e in edges if e.src_id.endswith(src_suffix)]
+    return edges
+
+
+def test_rb_self_call_infers_enclosing_class_as_receiver_type() -> None:
+    edges = _rb_call_edges(
+        "class Widget\n  def render\n  end\n  def draw\n    self.render\n  end\nend\n",
+        src_suffix="Widget.draw",
+    )
+    assert len(edges) == 1
+    assert edges[0].dst_id == "rb:?methodcall:Widget.render"
+
+
+def test_rb_local_variable_new_call_infers_type() -> None:
+    edges = _rb_call_edges(
+        "class Logger\n  def log\n  end\nend\ndef use_it\n  lg = Logger.new\n  lg.log\nend\n",
+        src_suffix=":use_it",
+    )
+    method_calls = [e for e in edges if "?methodcall:" in e.dst_id]
+    assert len(method_calls) == 1
+    assert method_calls[0].dst_id == "rb:?methodcall:Logger.log"
+
+
+def test_rb_instance_variable_resolves_from_other_method() -> None:
+    edges = _rb_call_edges(
+        "class Service\n"
+        "  def save\n"
+        "  end\n"
+        "end\n"
+        "class Caller\n"
+        "  def initialize\n"
+        "    @svc = Service.new\n"
+        "  end\n"
+        "  def run\n"
+        "    @svc.save\n"
+        "  end\n"
+        "end\n",
+        src_suffix="Caller.run",
+    )
+    method_calls = [e for e in edges if "?methodcall:" in e.dst_id]
+    assert len(method_calls) == 1
+    assert method_calls[0].dst_id == "rb:?methodcall:Service.save"
+
+
+def test_rb_non_new_call_is_not_treated_as_a_constructor() -> None:
+    # `Server.create(...)` isn't `.new` -- don't guess it constructs a Server.
+    edges = _rb_call_edges(
+        "def use_it\n  y = Server.create('x')\n  y.run\nend\n",
+        src_suffix=":use_it",
+    )
+    dst_ids = {e.dst_id for e in edges}
+    assert "rb:?call:run" in dst_ids
+    assert not any("?methodcall:" in dst for dst in dst_ids)
+
+
+# ---------- Ruby: integration ----------
+
+
+def test_rb_resolves_to_correct_class_when_two_files_share_a_method_name(tmp_path: Path) -> None:
+    db = _index(
+        tmp_path,
+        {
+            "file_a.rb": (
+                "class Logger\n"
+                "  def log\n"
+                "  end\n"
+                "end\n"
+                "def use_it\n"
+                "  lg = Logger.new\n"
+                "  lg.log\n"
+                "end\n"
+            ),
+            "file_b.rb": ("class Logger\n  def log\n  end\nend\n"),
+        },
+    )
+    store = GraphStore(db)
+    try:
+        edges = _edges(store)
+    finally:
+        store.close()
+    resolved = {(src, dst) for src, dst, _ in edges}
+    assert ("rb:file_a.rb:use_it", "rb:file_a.rb:Logger.log") in resolved
+    assert ("rb:file_a.rb:use_it", "rb:file_b.rb:Logger.log") not in resolved

@@ -209,7 +209,8 @@ def test_explicit_call_edge(parser: RubyParser) -> None:
 def test_method_call_with_receiver(parser: RubyParser) -> None:
     src = "class T\n  def run\n    self.listen\n  end\nend\n"
     result = parser.parse(Path("t.rb"), src)
-    assert any(e.dst_id == "rb:?call:listen" for e in _call_edges(result))
+    # `self.listen` -- receiver type is inferred as the enclosing class T.
+    assert any(e.dst_id == "rb:?methodcall:T.listen" for e in _call_edges(result))
 
 
 def test_class_method_call(parser: RubyParser) -> None:
@@ -256,9 +257,9 @@ def test_fixture_server_emits_expected_entities(parser: RubyParser) -> None:
     greet = _by_name(result, "greet")
     assert greet is not None and greet.type == EntityType.FUNCTION
 
-    # start() calls self.listen
+    # start() calls self.listen — receiver type inferred as Server
     call_edges = _call_edges(result)
-    assert any(e.dst_id == "rb:?call:listen" for e in call_edges)
+    assert any(e.dst_id == "rb:?methodcall:Server.listen" for e in call_edges)
 
     # imports
     import_edges = _import_edges(result)
