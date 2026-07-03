@@ -31,6 +31,12 @@ from codegraph.resolution.frameworks.django_urls import (
     extract_route_edges as extract_django_route_edges,
 )
 from codegraph.resolution.frameworks.python_web import extract_route_edges
+from codegraph.resolution.receiver_types.python import (
+    infer_local_types,
+    infer_param_types,
+    infer_self_attr_types,
+    receiver_type_for_call,
+)
 from codegraph.uir import (
     Edge,
     EntityType,
@@ -110,6 +116,7 @@ class PythonParser:
             module_id=module_id,
             entities=entities,
             edges=edges,
+            self_attr_types={},
         )
 
         entities_by_name = {e.name: e.entity_id for e in entities}
@@ -131,6 +138,7 @@ class PythonParser:
         module_id: str,
         entities: list[UIREntity],
         edges: list[Edge],
+        self_attr_types: dict[str, str],
     ) -> None:
         """Walk top-level children. Descends into class bodies only — not function bodies."""
         for child in node.children:
@@ -148,6 +156,7 @@ class PythonParser:
                     parent_id=parent_id,
                     entities=entities,
                     edges=edges,
+                    self_attr_types=self_attr_types,
                 )
                 if inner.type == "function_definition" and emitted_id is not None:
                     edges.extend(extract_route_edges(child, emitted_id, source))
@@ -165,6 +174,7 @@ class PythonParser:
                     parent_id=parent_id,
                     entities=entities,
                     edges=edges,
+                    self_attr_types=self_attr_types,
                 )
                 if emitted_id is not None:
                     self._descend_into_class(
@@ -180,6 +190,7 @@ class PythonParser:
                     parent_id=parent_id,
                     entities=entities,
                     edges=edges,
+                    self_attr_types=self_attr_types,
                 )
             elif kind == "block":
                 # `block` wraps a class/function body's statements — recurse.
@@ -192,6 +203,7 @@ class PythonParser:
                     module_id=module_id,
                     entities=entities,
                     edges=edges,
+                    self_attr_types=self_attr_types,
                 )
             elif kind == "import_statement" and not scope:
                 self._emit_bare_import(child, source, module_id, edges)
@@ -227,6 +239,7 @@ class PythonParser:
             module_id=module_id,
             entities=entities,
             edges=edges,
+            self_attr_types=infer_self_attr_types(body, source),
         )
 
     # ------------------------------------------------------------------
@@ -339,6 +352,7 @@ class PythonParser:
         parent_id: str | None,
         entities: list[UIREntity],
         edges: list[Edge] | None = None,
+        self_attr_types: dict[str, str] | None = None,
     ) -> str | None:
         name = self._text(inner_def.child_by_field_name("name"), source)
         if not name:
@@ -381,25 +395,58 @@ class PythonParser:
         if edges is not None and inner_def.type == "function_definition":
             body = inner_def.child_by_field_name("body")
             if body is not None:
-                self._emit_calls(body, source, src_id=entity_id, edges=edges)
+                class_name = scope[-1] if scope else None
+                self._emit_calls(
+                    inner_def,
+                    body,
+                    source,
+                    src_id=entity_id,
+                    edges=edges,
+                    class_name=class_name,
+                    self_attr_types=self_attr_types or {},
+                )
 
         return entity_id
 
-    def _emit_calls(self, body: Node, source: bytes, *, src_id: str, edges: list[Edge]) -> None:
+    def _emit_calls(
+        self,
+        func_node: Node,
+        body: Node,
+        source: bytes,
+        *,
+        src_id: str,
+        edges: list[Edge],
+        class_name: str | None,
+        self_attr_types: dict[str, str],
+    ) -> None:
         """Emit a provisional `calls` edge per call expression in `body`.
 
-        Callee is the simple name (`foo` from `foo()`, `m` from `obj.m()`).
-        dst is `py:?call:<name>`; the resolver closes it against
-        same-file entities and the file's imports.
+        When the receiver's type can be inferred (a local variable's
+        constructor/annotation, a typed parameter, `self`, or a `self.attr`
+        tracked elsewhere in the class), dst is `py:?methodcall:<Type>.<name>`,
+        which the resolver tries to match to that exact type's method before
+        falling back to plain-name resolution. Otherwise dst is `py:?call:<name>`
+        (the callee's simple name), resolved against same-file entities and
+        the file's imports same as before.
         """
+        local_types = infer_param_types(func_node, source)
+        local_types.update(infer_local_types(body, source))
         for call in self._iter_call_nodes(body):
             callee = self._callee_name(call, source)
             if not callee:
                 continue
+            receiver_type = receiver_type_for_call(
+                call, source, class_name, local_types, self_attr_types
+            )
+            dst_id = (
+                f"py:?methodcall:{receiver_type}.{callee}"
+                if receiver_type
+                else f"py:?call:{callee}"
+            )
             edges.append(
                 Edge(
                     src_id=src_id,
-                    dst_id=f"py:?call:{callee}",
+                    dst_id=dst_id,
                     type="calls",
                     line=call.start_point[0] + 1,
                     confidence=0.7,

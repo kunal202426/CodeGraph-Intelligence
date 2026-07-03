@@ -13,12 +13,14 @@ Provisional → resolved mapping (Python example):
   py:?:<module>           import <module>              (the module itself)
   py:?:<module>.*         from <module> import *       (wildcard)
   py:?rel<N>:<rest>       relative import, N leading dots
+  py:?call:<name>         a call whose receiver's type wasn't inferred
+  py:?methodcall:<T>.<n>  a call whose receiver was inferred to type T
 
 Output edge categories:
 
   conf=1.0  → resolved to a known entity_id:  `py:<file>:<qualified_name>`
   conf=1.0  → resolved to a module entity:    `py:<file>:<module_qname>`
-  conf=0.9  → resolved via import table (call resolved to an imported name)
+  conf=0.9  → resolved via import table, or an exact receiver-type match
   conf=0.7  → wildcard, module known:         `wildcard:py:<file>`
   conf=0.5  → stdlib / 3rd-party / unresolvable: `external:<dotted>`
 
@@ -214,9 +216,11 @@ def resolve_symbols(store: GraphStore) -> ResolutionStats:
 
     # Calls are resolved after imports (they may reference imported names), so
     # partition the work. Both Python (py:?call:) and TS (ts:?call:, T4.2) use
-    # the same suffix convention.
-    call_rows = [r for r in rows if ":?call:" in r[1]]
-    import_rows = [r for r in rows if ":?call:" not in r[1]]
+    # the same suffix convention; `?methodcall:` is the receiver-typed variant
+    # (py:?methodcall:<Type>.<name>) emitted when the parser inferred the
+    # receiver's type.
+    call_rows = [r for r in rows if ":?call:" in r[1] or ":?methodcall:" in r[1]]
+    import_rows = [r for r in rows if ":?call:" not in r[1] and ":?methodcall:" not in r[1]]
 
     resolved = external = wildcard = 0
     resolved_edges: list[Edge] = []
@@ -245,7 +249,16 @@ def resolve_symbols(store: GraphStore) -> ResolutionStats:
 
     # Phase 2 — calls (now that imports_by_file is populated).
     for src_id, dst_id, edge_type, line in call_rows:
-        new_dst, new_conf = _resolve_call(dst_id, src_id, idx.entities_by_file, imports_by_file)
+        if ":?methodcall:" in dst_id:
+            new_dst, new_conf = _resolve_method_call(
+                dst_id,
+                src_id,
+                idx.entities_by_file,
+                imports_by_file,
+                idx.entity_ids_by_qname,
+            )
+        else:
+            new_dst, new_conf = _resolve_call(dst_id, src_id, idx.entities_by_file, imports_by_file)
         resolved_edges.append(
             Edge(src_id=src_id, dst_id=new_dst, type=edge_type, line=line, confidence=new_conf)
         )
@@ -364,6 +377,9 @@ class _Indexes:
     name_by_id: dict[str, str]  # entity_id → name (import-target naming)
     entities_by_file: dict[str, dict[str, str]]  # file → {name: entity_id}
     entity_ids_by_name: dict[str, list[str]]  # name → every entity_id repo-wide (route handlers)
+    entity_ids_by_qname: dict[
+        str, list[str]
+    ]  # qualified_name → every entity_id (receiver-typed calls)
 
 
 def _build_indexes(store: GraphStore) -> _Indexes:
@@ -371,12 +387,14 @@ def _build_indexes(store: GraphStore) -> _Indexes:
     name_by_id: dict[str, str] = {}
     entities_by_file: dict[str, dict[str, str]] = {}
     entity_ids_by_name: dict[str, list[str]] = {}
+    entity_ids_by_qname: dict[str, list[str]] = {}
     for entity_id, file, name, qname in store.conn.execute(
         "SELECT entity_id, file, name, qualified_name FROM entities"
     ).fetchall():
         by_file_name[(file, name)] = entity_id
         name_by_id[entity_id] = name
         entity_ids_by_name.setdefault(name, []).append(entity_id)
+        entity_ids_by_qname.setdefault(qname, []).append(entity_id)
         fmap = entities_by_file.setdefault(file, {})
         # On a name collision within a file (e.g. two classes' `validate`
         # methods), prefer the top-level definition (qualified_name == name),
@@ -407,6 +425,7 @@ def _build_indexes(store: GraphStore) -> _Indexes:
         name_by_id=name_by_id,
         entities_by_file=entities_by_file,
         entity_ids_by_name=entity_ids_by_name,
+        entity_ids_by_qname=entity_ids_by_qname,
     )
 
 
@@ -435,6 +454,39 @@ def _resolve_call(
         return imported[callee], 0.9
 
     return f"external:{callee}", 0.5
+
+
+def _resolve_method_call(
+    dst_id: str,
+    src_id: str,
+    entities_by_file: dict[str, dict[str, str]],
+    imports_by_file: dict[str, dict[str, str]],
+    entity_ids_by_qname: dict[str, list[str]],
+) -> tuple[str, float]:
+    """Resolve a `<lang>:?methodcall:<Type>.<name>` edge -- a call whose
+    receiver's type the parser inferred (a local variable, `self`, or a typed
+    parameter). Tries an exact `Type.name` qualified-name match first (same-file
+    preferred when the type name is ambiguous repo-wide, e.g. two unrelated
+    `Logger` classes); falls back to plain callee-name resolution when no such
+    method exists, since a wrong type guess or a builtin/stdlib type shouldn't
+    manufacture a wrong edge -- it should degrade to exactly what an untyped
+    call would have done.
+    """
+    lang_prefix, _, rest = dst_id.partition(":?methodcall:")
+    _type_name, sep, callee = rest.rpartition(".")
+    if sep:
+        candidates = entity_ids_by_qname.get(rest, [])
+        if len(candidates) == 1:
+            return candidates[0], 0.9
+        if len(candidates) > 1:
+            parts = src_id.split(":", 2)
+            file = parts[1] if len(parts) >= 3 else ""
+            same_file = [c for c in candidates if c.split(":", 2)[1:2] == [file]]
+            if len(same_file) == 1:
+                return same_file[0], 0.9
+    else:
+        callee = rest
+    return _resolve_call(f"{lang_prefix}:?call:{callee}", src_id, entities_by_file, imports_by_file)
 
 
 def _path_to_module_qname(path: str) -> str:
