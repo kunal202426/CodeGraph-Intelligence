@@ -2,11 +2,27 @@
 
 ## Current
 
-- **Status:** ACTIVE — roadmap complete; competitive hardening (Phases 19-22, 24, 26) done.
+- **Status:** ACTIVE — roadmap complete; competitive hardening (Phases 19-22, 24, 26-27) done.
 - **Phase:** Maintenance & hardening (post-audit fixes, usability, repo hygiene)
-- **Next task:** (optional: persistent model service to kill per-CLI reload — see manual test #3; capture function-local imports — parsers/python.py:184-186; PyPI publish (manual); Phase 23 shared MCP daemon and Phase 25 Vue/Svelte coverage explicitly deferred, not started)
+- **Next task:** (optional: Ruby `include`-mixin inheritance, Rust trait default methods; persistent model service to kill per-CLI reload — see manual test #3; capture function-local imports — parsers/python.py:184-186; PyPI publish (manual); Phase 23 shared MCP daemon and Phase 25 Vue/Svelte coverage explicitly deferred, not started)
 - **Last session:** 2026-07-03
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
+
+### Session 2026-07-03 (late pm) — inheritance-aware method resolution (Phase 27)
+Closed the exact limitation flagged at the end of Phase 26: `obj.method()` resolved to the
+receiver's exact type, but only if that type declared `method` itself — a method declared
+only on a base class/interface still fell back to name-only resolution. Each parser now
+emits a provisional `<lang>:?inherits:<Base>` edge per declared base (`class Foo(Base)` in
+Python, `extends`/`implements` in TS/Java/PHP, `< Base` in Ruby, `: public Base` in C++, and
+Go's embedded-struct-field method promotion, which has no `extends` syntax but works exactly
+like inheritance for call resolution). A new resolver phase (`graph/resolver.py`) resolves
+these to real class entities *before* calls are resolved, then a breadth-first walk
+(`_walk_inheritance_chain`, same-file preferred when ambiguous, capped at 6 hops) tries each
+resolved base's `Base.method` when `Type.method` isn't declared directly on `Type`. A
+derived class's own override still wins, since the walk only fires after the direct lookup
+fails. Shipped for the 6 languages with real inheritance syntax (Python, TS/JS, Java, PHP,
+Ruby, C++) plus Go's struct-embedding equivalent; Rust has no inheritance concept so isn't
+applicable. 36 new tests, 1088 passing, zero regressions across all 7 slices.
 
 ### Session 2026-07-03 (pm) — receiver-type inference for method calls, all 8 OO languages (Phase 26)
 A second, deeper comparison against an updated build of the same open-source fork surfaced
@@ -340,11 +356,12 @@ passing, zero regressions in the existing 4-target suite.**
 
 ---
 
-## Competitive hardening (Phases 19-22, 24, 26) — COMPLETE
+## Competitive hardening (Phases 19-22, 24, 26-27) — COMPLETE
 
 A gap-closing pass after comparing this project against a similarly-scoped open-source
-fork, run in two sittings as the fork itself kept shipping. Two real product gaps closed,
-one latent bug fixed, installer breadth doubled, and call resolution made type-aware:
+fork, run across several sittings as the fork itself kept shipping. Two real product gaps
+closed, one latent bug fixed, installer breadth doubled, and call resolution made
+type-aware and inheritance-aware:
 
 - **Precision (19):** `get_context` names the exact stale file instead of a repo-wide count
   — and along the way, a real DuckDB connection bug that had silently disabled that warning
@@ -357,11 +374,16 @@ one latent bug fixed, installer breadth doubled, and call resolution made type-a
 - **Watcher fragility (22):** git hooks (`post-commit`/`post-merge`/`post-checkout`) are now
   an opt-in fallback for environments where filesystem-watch events aren't reliable.
 - **Distribution (24):** agent installer support doubled, 4 → 8 targets.
-- **Method-call precision (26):** the largest remaining gap — `obj.method()` resolved on
-  callee name alone, so two unrelated classes sharing a method name could point a call edge
-  at the wrong one. Receiver-type inference now closes this across all 8 OO-capable
-  languages (Python, TS/JS, Java, Go, Rust, PHP, Ruby, C/C++), falling back to the old
-  name-only resolution whenever the type can't be confidently inferred.
+- **Method-call precision (26):** `obj.method()` resolved on callee name alone, so two
+  unrelated classes sharing a method name could point a call edge at the wrong one.
+  Receiver-type inference now closes this across all 8 OO-capable languages (Python, TS/JS,
+  Java, Go, Rust, PHP, Ruby, C/C++), falling back to the old name-only resolution whenever
+  the type can't be confidently inferred.
+- **Inherited-method resolution (27):** Phase 26 alone still missed a method declared only
+  on a base class. A base-class/interface/embedded-struct-field edge per class, resolved
+  before calls, plus a breadth-first walk up resolved bases, closes this for the 6 languages
+  with real inheritance syntax and Go's struct-embedding equivalent (Rust has no inheritance
+  concept, not applicable).
 
 **Explicitly skipped:** Phase 23 (a shared multi-client MCP daemon) — real, but a
 process-model change with higher risk than the other phases combined, for a benefit
@@ -369,7 +391,7 @@ process-model change with higher risk than the other phases combined, for a bene
 the framework-resolution or method-precision wins. Revisit only if multi-window duplicate
 process overhead becomes an actual reported problem, not preemptively.
 
-895 → 1052 tests across the six phases, zero regressions at any step.
+895 → 1088 tests across the seven phases, zero regressions at any step.
 
 ---
 
