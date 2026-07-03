@@ -227,6 +227,27 @@ Full interactive manual test of every user-facing surface (CLI, web UI, watch, M
 a count, and a real DuckDB read-write/read-only connection collision that had silently
 disabled the staleness warning in production is fixed. 895 tests passing.**
 
+### Phase 20 — Framework-aware call resolution [DONE 2/2]
+- [x] T20.1 — Flask/FastAPI + Express: `resolution/frameworks/python_web.py` detects
+  Flask/FastAPI route decorators (`.get`/`.post`/... shortcuts and `.route(path,
+  methods=[...])`) directly during Python parsing, since the decorator sits right on the
+  handler; `resolution/frameworks/express.py` walks a file for `app.get('/path',
+  handler)`-shaped calls and resolves same-file handlers. Both emit a synthetic
+  `route:<METHOD> <path>` calls edge using the existing dangling-src_id convention edge
+  queries already handle for unresolved external targets. 14 new tests, 909 passing.
+- [x] T20.2 — Django + Spring + Rails: `resolution/frameworks/django_urls.py` (`urlpatterns`
+  `path()`/`re_path()` calls — bare, dotted, and `as_view()` references; emits `route:ANY
+  <path>` since Django dispatches by branching inside the view, not by URLconf verb),
+  `resolution/frameworks/spring.py` (`@GetMapping`/... combined with a class-level
+  `@RequestMapping` base path), `resolution/frameworks/rails.py` (`routes.rb`'s
+  `get`/`post`/... DSL). 15 new tests (6 Django, 5 Spring, 4 Rails), 924 passing.
+
+**Phase 20 result: a handler invoked only through a web framework's own request routing
+(Flask, FastAPI, Express, Django, Spring, Rails) now has a real `calls` edge instead of
+showing up as false-positive dead code with zero callers in `impact_analysis`. The existing
+decorator-name dead-code heuristic stays as a fallback for frameworks not covered here.
+924 tests passing.**
+
 ---
 
 ## "Actually usable" roadmap (Phases 14-18) — COMPLETE
