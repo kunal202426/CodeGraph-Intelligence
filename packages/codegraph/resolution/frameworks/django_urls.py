@@ -7,13 +7,10 @@ Django registers a view through a plain function call inside a `urlpatterns`
 list -- there's no decorator on the view itself (unlike Flask/FastAPI) and no
 inline handler argument shape to match against a single file the way Express
 does (unlike Express, real Django apps near-universally split `urls.py` from
-`views.py`). This still resolves same-file references (a urls.py that also
-defines its own view functions, common in small apps/tests) and extracts the
-(path, view_name) pair either way; the cross-file case -- the far more common
-one in real Django projects -- needs a repo-wide symbol table, which is
-exactly what Phase 21's cross-file resolution pass builds for the HTTP-edge
-work, so that pass is the natural place to close this gap for cross-file
-matches too.
+`views.py`). A same-file view is resolved immediately (confident); a view not
+found in this file -- the common case -- is emitted as a provisional
+`route:?handler:name` edge that the cross-file resolution pass in
+resolver.py closes against every file's entities.
 
 No HTTP method is embedded in the synthetic edge's route label: Django's
 URLconf doesn't discriminate by verb (a view function branches on
@@ -25,6 +22,7 @@ from __future__ import annotations
 
 from tree_sitter import Node
 
+from codegraph.resolution.frameworks._paths import normalize_path
 from codegraph.uir import Edge
 
 _PATH_FUNCS = {"path", "re_path", "url"}
@@ -33,20 +31,22 @@ _ROUTE_EDGE_CONFIDENCE = 0.6
 
 def extract_route_edges(root: Node, source: bytes, entities_by_name: dict[str, str]) -> list[Edge]:
     """Return synthetic `calls` edges for `path()`/`re_path()`/`url()` calls
-    in `root` whose view argument resolves to a same-file entity."""
+    in `root`. A view resolved in this file gets a confident edge straight
+    to it; one not found here gets a provisional edge for the cross-file
+    resolution pass to close."""
     edges: list[Edge] = []
     for call in _iter_call_expressions(root):
         info = _path_call_info(call, source)
         if info is None:
             continue
         path, view_name = info
+        norm_path = normalize_path(path)
         target = entities_by_name.get(view_name)
-        if target is None:
-            continue
+        dst_id = target if target is not None else f"route:?handler:{view_name}"
         edges.append(
             Edge(
-                src_id=f"route:ANY {path}",
-                dst_id=target,
+                src_id=f"route:ANY {norm_path}",
+                dst_id=dst_id,
                 type="calls",
                 line=call.start_point[0] + 1,
                 confidence=_ROUTE_EDGE_CONFIDENCE,

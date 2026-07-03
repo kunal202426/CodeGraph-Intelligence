@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from tree_sitter import Node
 
+from codegraph.resolution.frameworks._paths import normalize_path
 from codegraph.uir import Edge
 
 _HTTP_METHODS = {"get", "post", "put", "delete", "patch", "head", "options"}
@@ -59,11 +60,12 @@ def extract_route_edges(decorated_def: Node, handler_entity_id: str, source: byt
         else:
             continue
 
+        norm_path = normalize_path(path)
         line = child.start_point[0] + 1
         for method in methods:
             edges.append(
                 Edge(
-                    src_id=f"route:{method} {path}",
+                    src_id=f"route:{method} {norm_path}",
                     dst_id=handler_entity_id,
                     type="calls",
                     line=line,

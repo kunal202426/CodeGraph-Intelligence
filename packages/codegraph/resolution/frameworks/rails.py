@@ -7,13 +7,10 @@ Rails routes live in `config/routes.rb`, referencing a controller action by
 `"controller#action"` string -- the action method itself is defined in a
 *different* file (`app/controllers/users_controller.rb`), which is the
 overwhelmingly common real-world shape (unlike Express, where an inline or
-same-file handler is routine). So this same-file pass will rarely find a
-match in a real Rails app; it exists to extract the (method, path, action)
-triple correctly and handle the rare same-file case (small apps, tests)
-consistently with the other frameworks here. The cross-file match --
-routes.rb's action name against every controller file's methods -- is the
-one that actually matters for Rails, and belongs with Phase 21's cross-file
-resolution pass rather than duplicated here.
+same-file handler is routine). A same-file action is resolved immediately
+(confident); the far more common cross-file case is emitted as a provisional
+`route:?handler:action` edge that the cross-file resolution pass in
+resolver.py closes against every file's entities.
 
 `resources :users` (which expands to 7 conventional RESTful routes) isn't
 expanded -- only explicit `get`/`post`/`put`/`patch`/`delete` calls with a
@@ -24,6 +21,7 @@ from __future__ import annotations
 
 from tree_sitter import Node
 
+from codegraph.resolution.frameworks._paths import normalize_path
 from codegraph.uir import Edge
 
 _HTTP_METHODS = {"get", "post", "put", "patch", "delete"}
@@ -32,21 +30,22 @@ _ROUTE_EDGE_CONFIDENCE = 0.6
 
 def extract_route_edges(root: Node, source: bytes, entities_by_name: dict[str, str]) -> list[Edge]:
     """Return synthetic `calls` edges for `get/post/put/patch/delete(path,
-    to: "controller#action")` calls whose action resolves to a same-file
-    entity."""
+    to: "controller#action")` calls. An action resolved in this file gets a
+    confident edge straight to it; one not found here gets a provisional
+    edge for the cross-file resolution pass to close."""
     edges: list[Edge] = []
     for call in _iter_call_nodes(root):
         info = _route_call_info(call, source)
         if info is None:
             continue
         method, path, action_name = info
+        norm_path = normalize_path(path)
         target = entities_by_name.get(action_name)
-        if target is None:
-            continue
+        dst_id = target if target is not None else f"route:?handler:{action_name}"
         edges.append(
             Edge(
-                src_id=f"route:{method} {path}",
-                dst_id=target,
+                src_id=f"route:{method} {norm_path}",
+                dst_id=dst_id,
                 type="calls",
                 line=call.start_point[0] + 1,
                 confidence=_ROUTE_EDGE_CONFIDENCE,

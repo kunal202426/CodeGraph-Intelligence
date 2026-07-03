@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from tree_sitter import Node
 
+from codegraph.resolution.frameworks._paths import normalize_path
 from codegraph.uir import Edge
 
 _MAPPING_TO_METHOD = {
@@ -143,15 +144,7 @@ def _request_mapping_methods(ann: Node, source: bytes) -> list[str] | None:
 
 
 def _combine_paths(base: str, sub: str) -> str:
-    base = base.strip("/")
-    sub = sub.strip("/")
-    if base and sub:
-        return f"/{base}/{sub}"
-    if base:
-        return f"/{base}"
-    if sub:
-        return f"/{sub}"
-    return "/"
+    return normalize_path(f"{base}/{sub}")
 
 
 def _text(node: Node | None, source: bytes) -> str | None:

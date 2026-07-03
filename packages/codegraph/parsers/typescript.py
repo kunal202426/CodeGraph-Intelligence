@@ -33,6 +33,7 @@ with warnings.catch_warnings():
 
 from codegraph.parsers.base import ParseResult
 from codegraph.resolution.frameworks.express import extract_route_edges
+from codegraph.resolution.frameworks.http_client import extract_http_edges
 from codegraph.uir import (
     Edge,
     EntityType,
@@ -141,6 +142,7 @@ class TypeScriptParser:
 
         entities_by_name = {e.name: e.entity_id for e in entities}
         edges.extend(extract_route_edges(root, source_bytes, entities_by_name))
+        edges.extend(extract_http_edges(root, source_bytes, entities, module_id))
 
         return ParseResult(entities=entities, edges=edges, errors=errors)
 

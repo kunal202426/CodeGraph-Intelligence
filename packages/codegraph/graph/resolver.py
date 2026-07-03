@@ -261,8 +261,91 @@ def resolve_symbols(store: GraphStore) -> ResolutionStats:
         store.conn.execute(f"DELETE FROM edges WHERE {_PROVISIONAL_WHERE}")
         store.upsert_edges(resolved_edges)
 
+    # Phase 3 — route-handler edges from Express/Django/Rails (Flask/FastAPI/
+    # Spring never emit these -- their handler is same-file by construction,
+    # resolved directly at parse time). A route registration's handler name
+    # is looked up against every file's entities, not just one; only resolve
+    # when the name is unambiguous repo-wide -- unlike a same-file call,
+    # there's no "closest file" tiebreaker for a name that lives in a
+    # different subsystem (routes.rb vs a controller file), so a wrong guess
+    # here would create a false call edge instead of just missing one.
+    route_rows = store.conn.execute(
+        "SELECT src_id, dst_id, type, line FROM edges WHERE dst_id LIKE 'route:?handler:%'"
+    ).fetchall()
+    if route_rows:
+        route_resolved_edges: list[Edge] = []
+        for src_id, dst_id, edge_type, line in route_rows:
+            name = dst_id.removeprefix("route:?handler:")
+            candidates = idx.entity_ids_by_name.get(name, [])
+            if len(candidates) == 1:
+                new_dst = candidates[0]
+                resolved += 1
+            else:
+                new_dst = f"external:route_handler:{name}"
+                external += 1
+            route_resolved_edges.append(
+                Edge(
+                    src_id=src_id,
+                    dst_id=new_dst,
+                    type=edge_type,
+                    line=line,
+                    confidence=0.5,
+                    is_dynamic=True,
+                )
+            )
+        store.conn.execute("DELETE FROM edges WHERE dst_id LIKE 'route:?handler:%'")
+        store.upsert_edges(route_resolved_edges)
+
+    # Phase 4 — cross-language HTTP edges. Every backend resolver above
+    # (Flask/FastAPI/Express/Django/Spring/Rails) emits `route:<METHOD>
+    # <path>` as an edge SOURCE pointing at its handler; a frontend
+    # fetch/axios call site (extracted by http_client.py) is a `calls` edge
+    # whose provisional dst_id encodes the same (method, path). Matching the
+    # two turns "frontend calls this URL" + "backend handles this URL" into
+    # one edge straight from the call site to the handler, regardless of
+    # language -- this closes the gap this project's own README called out
+    # as deliberately deferred. Read fresh from the DB rather than reusing
+    # `resolved_edges`/`route_resolved_edges` in memory: those two lists
+    # don't cover every route source (Flask/FastAPI/Spring's route edges were
+    # never provisional, so they were written straight to the table at index
+    # time and never touch either list above).
+    http_rows = store.conn.execute(
+        "SELECT src_id, dst_id, type, line FROM edges WHERE dst_id LIKE 'route:?http:%'"
+    ).fetchall()
+    if http_rows:
+        route_handlers: dict[str, list[str]] = {}
+        for route_src, handler_dst in store.conn.execute(
+            "SELECT src_id, dst_id FROM edges WHERE src_id LIKE 'route:%' AND type = 'calls'"
+        ).fetchall():
+            if not handler_dst.startswith("external:"):
+                route_handlers.setdefault(route_src, []).append(handler_dst)
+
+        http_resolved_edges: list[Edge] = []
+        for src_id, dst_id, edge_type, line in http_rows:
+            method, _, path = dst_id.removeprefix("route:?http:").partition(":")
+            route_key = f"route:{method} {path}"
+            handlers = route_handlers.get(route_key, [])
+            if len(handlers) == 1:
+                new_dst = handlers[0]
+                resolved += 1
+            else:
+                new_dst = f"external:http_route:{method}:{path}"
+                external += 1
+            http_resolved_edges.append(
+                Edge(
+                    src_id=src_id,
+                    dst_id=new_dst,
+                    type=edge_type,
+                    line=line,
+                    confidence=0.5,
+                    is_dynamic=True,
+                )
+            )
+        store.conn.execute("DELETE FROM edges WHERE dst_id LIKE 'route:?http:%'")
+        store.upsert_edges(http_resolved_edges)
+
     return ResolutionStats(
-        inspected=len(rows),
+        inspected=len(rows) + len(route_rows) + len(http_rows),
         resolved=resolved,
         external=external,
         wildcard=wildcard,
@@ -280,17 +363,20 @@ class _Indexes:
     known_files: set[str]  # all indexed file paths (TS module probing)
     name_by_id: dict[str, str]  # entity_id → name (import-target naming)
     entities_by_file: dict[str, dict[str, str]]  # file → {name: entity_id}
+    entity_ids_by_name: dict[str, list[str]]  # name → every entity_id repo-wide (route handlers)
 
 
 def _build_indexes(store: GraphStore) -> _Indexes:
     by_file_name: dict[tuple[str, str], str] = {}
     name_by_id: dict[str, str] = {}
     entities_by_file: dict[str, dict[str, str]] = {}
+    entity_ids_by_name: dict[str, list[str]] = {}
     for entity_id, file, name, qname in store.conn.execute(
         "SELECT entity_id, file, name, qualified_name FROM entities"
     ).fetchall():
         by_file_name[(file, name)] = entity_id
         name_by_id[entity_id] = name
+        entity_ids_by_name.setdefault(name, []).append(entity_id)
         fmap = entities_by_file.setdefault(file, {})
         # On a name collision within a file (e.g. two classes' `validate`
         # methods), prefer the top-level definition (qualified_name == name),
@@ -320,6 +406,7 @@ def _build_indexes(store: GraphStore) -> _Indexes:
         known_files=known_files,
         name_by_id=name_by_id,
         entities_by_file=entities_by_file,
+        entity_ids_by_name=entity_ids_by_name,
     )
 
 

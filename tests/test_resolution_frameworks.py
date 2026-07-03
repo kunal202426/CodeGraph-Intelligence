@@ -118,11 +118,13 @@ def test_express_inline_arrow_handler_produces_no_edge() -> None:
     assert edges == []
 
 
-def test_express_handler_not_defined_in_file_produces_no_edge() -> None:
-    """A handler imported from elsewhere isn't resolved in this pass (documented
-    limitation -- same-file only)."""
+def test_express_handler_not_defined_in_file_produces_provisional_edge() -> None:
+    """A handler not found in this file gets a provisional edge for the
+    cross-file resolution pass, not silently dropped."""
     edges = _express_route_edges('app.get("/imported", externalHandler);\n')
-    assert edges == []
+    assert len(edges) == 1
+    assert edges[0].src_id == "route:GET /imported"
+    assert edges[0].dst_id == "route:?handler:externalHandler"
 
 
 def test_express_non_http_method_call_ignored() -> None:
@@ -141,7 +143,7 @@ def test_django_path_with_bare_identifier_view() -> None:
         'urlpatterns = [\n    path("home/", home_view),\n]\n'
     )
     assert len(edges) == 1
-    assert edges[0].src_id == "route:ANY home/"
+    assert edges[0].src_id == "route:ANY /home"
     assert edges[0].dst_id == "py:app.py:home_view"
 
 
@@ -188,14 +190,16 @@ def test_django_re_path_also_matches() -> None:
     assert edges[0].dst_id == "py:app.py:old_view"
 
 
-def test_django_unresolvable_view_produces_no_edge() -> None:
-    """A view imported from elsewhere (not defined in this file) is skipped,
-    same documented same-file-only limitation as Express."""
+def test_django_unresolvable_view_produces_provisional_edge() -> None:
+    """A view not found in this file (the common Django shape) gets a
+    provisional edge for the cross-file resolution pass, not silently dropped."""
     edges = _route_edges(
         "from django.urls import path\n\n"
         'urlpatterns = [\n    path("missing/", not_defined_here),\n]\n'
     )
-    assert edges == []
+    assert len(edges) == 1
+    assert edges[0].src_id == "route:ANY /missing"
+    assert edges[0].dst_id == "route:?handler:not_defined_here"
 
 
 # ---------- Spring (Java) pure parser unit tests ----------
@@ -284,18 +288,78 @@ def test_rails_post_action() -> None:
     assert edges[0].src_id == "route:POST /users"
 
 
-def test_rails_controller_in_different_file_produces_no_edge() -> None:
-    """The common real case -- controller lives in a different file -- isn't
-    resolved by this same-file pass (documented limitation)."""
+def test_rails_controller_in_different_file_produces_provisional_edge() -> None:
+    """The common real case -- controller lives in a different file -- gets a
+    provisional edge for the cross-file resolution pass, not silently dropped."""
     edges = _ruby_route_edges(
         "Rails.application.routes.draw do\n  get '/users', to: 'users#index'\nend\n"
     )
-    assert edges == []
+    assert len(edges) == 1
+    assert edges[0].src_id == "route:GET /users"
+    assert edges[0].dst_id == "route:?handler:index"
 
 
 def test_rails_route_without_to_pair_ignored() -> None:
     edges = _ruby_route_edges("Rails.application.routes.draw do\n  root 'welcome#index'\nend\n")
     assert edges == []
+
+
+# ---------- HTTP client (TS/JS fetch/axios) pure parser unit tests ----------
+
+
+def _http_edges(source: str):
+    result = TypeScriptParser().parse(Path("client.ts"), source)
+    return [e for e in result.edges if e.dst_id.startswith("route:?http:")]
+
+
+def test_fetch_with_method_option() -> None:
+    edges = _http_edges(
+        'function submitForm() {\n    return fetch("/api/users", { method: "POST" });\n}\n'
+    )
+    assert len(edges) == 1
+    assert edges[0].src_id == "ts:client.ts:submitForm"
+    assert edges[0].dst_id == "route:?http:POST:/api/users"
+
+
+def test_fetch_without_options_defaults_to_get() -> None:
+    edges = _http_edges('function loadItems() {\n    return fetch("/api/items");\n}\n')
+    assert edges[0].dst_id == "route:?http:GET:/api/items"
+
+
+def test_fetch_template_literal_no_interpolation() -> None:
+    edges = _http_edges("function loadItems() {\n    return fetch(`/api/items`);\n}\n")
+    assert edges[0].dst_id == "route:?http:GET:/api/items"
+
+
+def test_fetch_dynamic_url_produces_no_edge() -> None:
+    """A URL built from interpolation can't be statically matched -- skipped."""
+    edges = _http_edges("function loadUser(id) {\n    return fetch(`/api/users/${id}`);\n}\n")
+    assert edges == []
+
+
+def test_axios_get() -> None:
+    edges = _http_edges('function loadOrders() {\n    return axios.get("/api/orders");\n}\n')
+    assert edges[0].dst_id == "route:?http:GET:/api/orders"
+
+
+def test_axios_unsupported_method_ignored() -> None:
+    edges = _http_edges('function f() {\n    return axios.request("/api/x");\n}\n')
+    assert edges == []
+
+
+def test_fetch_call_attributed_to_containing_function_not_module() -> None:
+    edges = _http_edges(
+        "function unrelated() {\n    return 1;\n}\n\n"
+        'function actuallyFetches() {\n    return fetch("/api/data");\n}\n'
+    )
+    assert len(edges) == 1
+    assert edges[0].src_id == "ts:client.ts:actuallyFetches"
+
+
+def test_top_level_fetch_attributed_to_module() -> None:
+    edges = _http_edges('fetch("/api/data");\n')
+    assert len(edges) == 1
+    assert edges[0].src_id == "ts:client.ts:client"
 
 
 # ---------- integration: real graph edges, not just deadcode exclusion ----------
