@@ -51,7 +51,7 @@ from codegraph.parsers.scala import ScalaParser
 from codegraph.parsers.sql import SQLParser
 from codegraph.parsers.typescript import TypeScriptParser
 from codegraph.uir import Language, hash_source
-from codegraph.walker import walk
+from codegraph.walker import looks_generated, walk
 
 app = typer.Typer(
     name="codegraph",
@@ -203,6 +203,7 @@ def index(
 
     files = list(walk(repo))
     skipped_lang = 0
+    skipped_generated = 0
     parse_errors = 0
     parsed_files = 0
     unchanged_files = 0  # T2.3: hash matched, skipped re-parse
@@ -227,6 +228,11 @@ def index(
             except OSError as exc:
                 console.print(f"[red]Skipping unreadable file {path}: {exc}[/red]")
                 parse_errors += 1
+                progress.advance(task)
+                continue
+
+            if looks_generated(source):
+                skipped_generated += 1
                 progress.advance(task)
                 continue
 
@@ -314,6 +320,11 @@ def index(
             )
     if skipped_lang:
         console.print(f"[dim]Skipped {skipped_lang} files with unsupported languages.[/dim]")
+    if skipped_generated:
+        console.print(
+            f"[dim]Skipped {skipped_generated} generated/minified files "
+            "(a source line over 10k chars).[/dim]"
+        )
     if parse_errors:
         console.print(f"[yellow]{parse_errors} files had errors (see above).[/yellow]")
     if parsed_files == 0 and unchanged_files == 0 and skipped_lang == 0:

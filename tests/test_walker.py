@@ -229,3 +229,38 @@ def test_walk_on_sample_repo_fixture() -> None:
 @pytest.mark.parametrize("ext, expected", list(LANGUAGE_BY_EXT.items()))
 def test_language_table_coverage(ext: str, expected: Language) -> None:
     assert detect_language(Path(f"x{ext}")) == expected
+
+
+# ---------- generated/minified file detection (Phase 28) ----------
+
+
+def test_minified_single_line_file_looks_generated() -> None:
+    from codegraph.walker import looks_generated
+
+    assert looks_generated("var a=1;" * 3000)  # one ~24k-char line
+
+
+def test_long_file_with_normal_lines_does_not_look_generated() -> None:
+    from codegraph.walker import looks_generated
+
+    # 5000 lines of ordinary code is bigger than the threshold in total
+    # but has no absurd single line -- must NOT be flagged.
+    assert not looks_generated("def f():\n    return 1\n" * 5000)
+
+
+def test_small_file_never_looks_generated() -> None:
+    from codegraph.walker import looks_generated
+
+    assert not looks_generated("x = 1\n")
+
+
+def test_generated_file_is_skipped_by_index_one_file(tmp_path: Path) -> None:
+    from codegraph.sync.watcher import index_one_file
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    minified = repo / "bundle.js"
+    minified.write_text("var a=1;" * 3000, encoding="utf-8")
+    db = tmp_path / "graph.duckdb"
+
+    assert index_one_file(repo, minified, db, no_embed=True) == 0

@@ -43,7 +43,7 @@ import pathspec
 from codegraph.graph.resolver import resolve_symbols
 from codegraph.graph.store import GraphStore
 from codegraph.uir import hash_source
-from codegraph.walker import ALWAYS_EXCLUDE, detect_language, walk
+from codegraph.walker import ALWAYS_EXCLUDE, detect_language, looks_generated, walk
 
 # --------------------------------------------------------------------------- #
 # Public data-transfer object
@@ -186,6 +186,11 @@ def index_one_file(
     try:
         source = abs_path.read_text(encoding="utf-8", errors="replace")
     except OSError:
+        return 0
+
+    # A build step overwriting a source path with minified/bundled output
+    # must not burn seconds of tree-sitter time per save on it.
+    if looks_generated(source):
         return 0
 
     rel_path = abs_path.relative_to(repo).as_posix()

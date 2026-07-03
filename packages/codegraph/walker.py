@@ -117,6 +117,25 @@ def is_binary(path: Path) -> bool:
     return b"\x00" in chunk
 
 
+# A single source line longer than this is essentially never hand-written --
+# it's minified/bundled JS/CSS, a generated blob, or an inlined source map.
+# Indexing such a file wastes seconds of tree-sitter time per save and
+# pollutes search with entities nobody wrote.
+GENERATED_MAX_LINE_LEN = 10_000
+
+
+def looks_generated(source: str) -> bool:
+    """True when file content is almost certainly generated/minified output.
+
+    The test is a single line longer than ``GENERATED_MAX_LINE_LEN`` chars.
+    Deliberately conservative: a big hand-written module with normal line
+    lengths never matches.
+    """
+    if len(source) <= GENERATED_MAX_LINE_LEN:
+        return False
+    return any(len(line) > GENERATED_MAX_LINE_LEN for line in source.splitlines())
+
+
 def _load_gitignore(root: Path) -> pathspec.PathSpec | None:
     gi = root / ".gitignore"
     if not gi.is_file():
