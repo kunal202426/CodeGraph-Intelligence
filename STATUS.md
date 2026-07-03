@@ -248,6 +248,26 @@ showing up as false-positive dead code with zero callers in `impact_analysis`. T
 decorator-name dead-code heuristic stays as a fallback for frameworks not covered here.
 924 tests passing.**
 
+### Phase 21 — Cross-file route resolution + cross-language HTTP edges [DONE 1/1]
+- [x] T21.1 — Express, Django, and Rails now emit a provisional `route:?handler:<name>` edge
+  when the handler isn't in the same file as the route registration — the common real shape
+  (`routes.rb` → a controller file, `urls.py` → `views.py`) that Phase 20 documented as
+  unresolved. A new cross-file pass in `resolve_symbols()` (`graph/resolver.py`) resolves it
+  against every file's entities repo-wide, only when the name is unambiguous — an ambiguous
+  or missing name stays external rather than being guessed at. A new extractor
+  (`resolution/frameworks/http_client.py`) finds `fetch()`/`axios.*()` call sites with a
+  statically-known URL, and a second resolver phase matches these against the `route:<METHOD>
+  <path>` edges every backend framework resolver already emits — wiring a frontend fetch call
+  straight through to the backend handler that serves it, across both files and languages in
+  one edge. Added `resolution/frameworks/_paths.py::normalize_path` and switched all six
+  backend resolvers to it, since they'd been spelling paths inconsistently (leading/trailing
+  slash). 23 new tests.
+
+**Phase 21 result: framework route handlers now resolve across files, and a TS/JS
+`fetch`/`axios` call with a static URL resolves straight to the backend handler that serves
+it — closing the cross-language HTTP gap this project's own roadmap had listed as
+"deliberately deferred". 939 tests passing.**
+
 ---
 
 ## "Actually usable" roadmap (Phases 14-18) — COMPLETE
