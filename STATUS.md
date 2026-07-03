@@ -4,24 +4,36 @@
 
 - **Status:** ACTIVE — roadmap complete; competitive hardening (Phases 19-22, 24, 26) done.
 - **Phase:** Maintenance & hardening (post-audit fixes, usability, repo hygiene)
-- **Next task:** (optional: extend receiver-type inference (Phase 26) to Java/Go/Rust/PHP/Ruby/C++; persistent model service to kill per-CLI reload — see manual test #3; capture function-local imports — parsers/python.py:184-186; PyPI publish (manual); Phase 23 shared MCP daemon and Phase 25 Vue/Svelte coverage explicitly deferred, not started)
+- **Next task:** (optional: persistent model service to kill per-CLI reload — see manual test #3; capture function-local imports — parsers/python.py:184-186; PyPI publish (manual); Phase 23 shared MCP daemon and Phase 25 Vue/Svelte coverage explicitly deferred, not started)
 - **Last session:** 2026-07-03
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
 
-### Session 2026-07-03 (pm) — receiver-type inference for method calls (Phase 26)
+### Session 2026-07-03 (pm) — receiver-type inference for method calls, all 8 OO languages (Phase 26)
 A second, deeper comparison against an updated build of the same open-source fork surfaced
 its biggest remaining advantage: `obj.method()` calls resolved on callee name alone, so two
 unrelated classes sharing a method name (even two classes in one file) could point a call
-edge at the wrong one. `resolution/receiver_types/{python,typescript}.py` infer a call's
-receiver type from what's visible at parse time — a local variable's constructor call or
-type annotation, a typed parameter, `self`/`this`, or a `self.attr`/`this.attr` tracked
-anywhere else in the class — and the parser emits `<lang>:?methodcall:<Type>.<name>` instead
-of a bare `<lang>:?call:<name>` when it has one. The resolver tries an exact `Type.name`
-qualified-name match (same-file preferred when ambiguous) before falling back to the old
-plain-name resolution, so an unconfident guess never produces a worse edge than before.
-Shipped for Python and TypeScript/JavaScript first (this project's primary audience); Java,
-Go, Rust, PHP, Ruby, and C++ use the same mechanism but aren't wired up yet. 18 new tests,
-1019 passing, zero regressions.
+edge at the wrong one. `resolution/receiver_types/*.py` (one module per language) infer a
+call's receiver type from what's visible at parse time — a local variable's constructor call
+or type annotation, a typed parameter, `self`/`this`, or a `self.attr`/`this.attr`/`@attr`
+tracked elsewhere in the class/struct — and the parser emits `<lang>:?methodcall:<Type>.<name>`
+instead of a bare `<lang>:?call:<name>` when it has one. The resolver tries an exact
+`Type.name` qualified-name match (same-file preferred when ambiguous) before falling back to
+the old plain-name resolution, so an unconfident guess never produces a worse edge than before.
+
+Shipped incrementally across all 8 OO-capable languages in one sitting, each with its own
+grammar-specific inference: Python and TypeScript/JavaScript first (`self`/`this`, local
+constructor/annotation, typed params, class-wide `self.attr`/`this.attr` tracking); Java
+(the same shape, plus a typed field declaration as a more reliable attr-type source); Go and
+Rust (no `self`/`this` keyword — a method's receiver is just another typed local, and struct
+fields are always explicitly typed, so a whole-file `{Type: {field: FieldType}}` table
+generalizes `x.field.method()` to *any* local of a known type, not just the receiver); PHP
+(`$this`, typed properties); Ruby (no type annotations at all — only a `Type.new` constructor
+call and `@instance_var` tracking are possible); C/C++ (declarator-based pointer/reference
+unwrapping, whole-file class-field table like Go/Rust, shared by both `CParser` and
+`CppParser`). Each language slice updated 0-2 pre-existing tests whose `self.method()`-shaped
+assertions predated the feature (the call now resolves to the precise class instead of a bare
+name) — a real precision improvement, not a regression. 51 new tests across the 8 slices,
+1052 passing overall, zero regressions at any step.
 
 ### Session 2026-07-03 — competitive hardening close-out (Phases 19-22, 24)
 Compared this project against a similarly-scoped open-source fork and closed the real gaps
@@ -328,30 +340,36 @@ passing, zero regressions in the existing 4-target suite.**
 
 ---
 
-## Competitive hardening (Phases 19-22, 24) — COMPLETE
+## Competitive hardening (Phases 19-22, 24, 26) — COMPLETE
 
 A gap-closing pass after comparing this project against a similarly-scoped open-source
-fork. Two real product gaps closed, one latent bug fixed, and installer breadth doubled:
+fork, run in two sittings as the fork itself kept shipping. Two real product gaps closed,
+one latent bug fixed, installer breadth doubled, and call resolution made type-aware:
 
 - **Precision (19):** `get_context` names the exact stale file instead of a repo-wide count
   — and along the way, a real DuckDB connection bug that had silently disabled that warning
   in production (only ever exercised through mocks) got fixed.
-- **Framework blindness (20-21):** the biggest functional gap — a route handler invoked only
-  through Flask/FastAPI/Express/Django/Spring/Rails routing had no static call site, so it
-  looked like dead code with zero callers. All six now resolve to real `calls` edges,
-  same-file and cross-file. A TS/JS `fetch`/`axios` call with a static URL now resolves
-  straight through to the backend handler that serves it — a genuinely cross-language edge.
+- **Framework blindness (20-21):** a route handler invoked only through
+  Flask/FastAPI/Express/Django/Spring/Rails routing had no static call site, so it looked
+  like dead code with zero callers. All six now resolve to real `calls` edges, same-file and
+  cross-file. A TS/JS `fetch`/`axios` call with a static URL now resolves straight through to
+  the backend handler that serves it — a genuinely cross-language edge.
 - **Watcher fragility (22):** git hooks (`post-commit`/`post-merge`/`post-checkout`) are now
   an opt-in fallback for environments where filesystem-watch events aren't reliable.
 - **Distribution (24):** agent installer support doubled, 4 → 8 targets.
+- **Method-call precision (26):** the largest remaining gap — `obj.method()` resolved on
+  callee name alone, so two unrelated classes sharing a method name could point a call edge
+  at the wrong one. Receiver-type inference now closes this across all 8 OO-capable
+  languages (Python, TS/JS, Java, Go, Rust, PHP, Ruby, C/C++), falling back to the old
+  name-only resolution whenever the type can't be confidently inferred.
 
 **Explicitly skipped:** Phase 23 (a shared multi-client MCP daemon) — real, but a
-process-model change with higher risk than the other four phases combined, for a benefit
+process-model change with higher risk than the other phases combined, for a benefit
 (avoiding N separate per-window processes/DuckDB connections) that's real but narrower than
-the framework-resolution or watcher-reliability wins. Revisit only if multi-window duplicate
+the framework-resolution or method-precision wins. Revisit only if multi-window duplicate
 process overhead becomes an actual reported problem, not preemptively.
 
-895 → 1001 tests across the five phases, zero regressions at any step.
+895 → 1052 tests across the six phases, zero regressions at any step.
 
 ---
 
