@@ -14,6 +14,7 @@ from pathlib import Path
 
 from codegraph.cli import app
 from codegraph.graph.store import GraphStore
+from codegraph.parsers.java import JavaParser
 from codegraph.parsers.python import PythonParser
 from codegraph.parsers.typescript import TypeScriptParser
 from typer.testing import CliRunner
@@ -301,3 +302,84 @@ def test_ts_method_overridden_on_derived_class_prefers_derived(tmp_path: Path) -
     resolved = {(src, dst) for src, dst, _ in edges}
     assert ("ts:app.ts:Derived.run", "ts:app.ts:Derived.save") in resolved
     assert ("ts:app.ts:Derived.run", "ts:app.ts:Base.save") not in resolved
+
+
+# ---------- Java: pure parser unit tests (no DB) ----------
+
+
+def _java_inherits_edges(source: str):
+    result = JavaParser().parse(Path("T.java"), source)
+    return [e for e in result.edges if e.type == "inherits"]
+
+
+def test_java_extends_produces_inherits_edge() -> None:
+    edges = _java_inherits_edges("class Base {}\nclass Foo extends Base {}\n")
+    assert len(edges) == 1
+    assert edges[0].dst_id == "java:?inherits:Base"
+
+
+def test_java_implements_produces_inherits_edges() -> None:
+    edges = _java_inherits_edges(
+        "interface IFoo {}\ninterface IBar {}\nclass Foo implements IFoo, IBar {}\n"
+    )
+    assert {e.dst_id for e in edges} == {"java:?inherits:IFoo", "java:?inherits:IBar"}
+
+
+def test_java_extends_and_implements_both_captured() -> None:
+    edges = _java_inherits_edges(
+        "class Base {}\ninterface IFoo {}\nclass Foo extends Base implements IFoo {}\n"
+    )
+    assert {e.dst_id for e in edges} == {"java:?inherits:Base", "java:?inherits:IFoo"}
+
+
+# ---------- Java: integration ----------
+
+
+def test_java_method_only_on_base_class_resolves_through_inheritance(tmp_path: Path) -> None:
+    db = _index(
+        tmp_path,
+        {
+            "T.java": (
+                "class Base {\n"
+                "    void save() {}\n"
+                "}\n"
+                "class Derived extends Base {\n"
+                "    void run() {\n"
+                "        this.save();\n"
+                "    }\n"
+                "}\n"
+            ),
+        },
+    )
+    store = GraphStore(db)
+    try:
+        edges = _edges(store)
+    finally:
+        store.close()
+    resolved = {(src, dst) for src, dst, _ in edges}
+    assert ("java:T.java:Derived.run", "java:T.java:Base.save") in resolved
+
+
+def test_java_default_interface_method_resolves_through_implements(tmp_path: Path) -> None:
+    db = _index(
+        tmp_path,
+        {
+            "T.java": (
+                "interface Greeter {\n"
+                "    default void greet() {}\n"
+                "}\n"
+                "class Foo implements Greeter {\n"
+                "    void run() {\n"
+                "        this.greet();\n"
+                "    }\n"
+                "}\n"
+            ),
+        },
+    )
+    store = GraphStore(db)
+    try:
+        edges = _edges(store)
+    finally:
+        store.close()
+    resolved = {(src, dst) for src, dst, _ in edges}
+    assert ("java:T.java:Foo.run", "java:T.java:Greeter.greet") in resolved

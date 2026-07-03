@@ -31,6 +31,9 @@ from codegraph.resolution.frameworks.spring import (
     extract_class_base_path,
     extract_route_edges,
 )
+from codegraph.resolution.inheritance.java import (
+    extract_base_classes as extract_java_base_classes,
+)
 from codegraph.resolution.receiver_types.java import (
     infer_local_types,
     infer_param_types,
@@ -162,6 +165,16 @@ class JavaParser:
                 hash=hash_source(raw_source),
             )
         )
+
+        for base_name in extract_java_base_classes(node, source):
+            edges.append(
+                Edge(
+                    src_id=entity_id,
+                    dst_id=f"java:?inherits:{base_name}",
+                    type="inherits",
+                    line=node.start_point[0] + 1,
+                )
+            )
 
         body = node.child_by_field_name("body")
         if body is not None:
