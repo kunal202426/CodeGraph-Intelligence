@@ -396,11 +396,11 @@ class PythonParser:
         # edge per base, resolved by the resolver and used to walk
         # Type.method up to a base class when unresolved directly on Type.
         if edges is not None and inner_def.type == "class_definition":
-            for base_name in extract_base_classes(inner_def, source):
+            for i, base_name in enumerate(extract_base_classes(inner_def, source)):
                 edges.append(
                     Edge(
                         src_id=entity_id,
-                        dst_id=f"py:?inherits:{base_name}",
+                        dst_id=f"py:?inherits:{i}:{base_name}",
                         type="inherits",
                         line=inner_def.start_point[0] + 1,
                     )

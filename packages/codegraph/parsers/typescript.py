@@ -466,11 +466,11 @@ class TypeScriptParser:
 
         # Inheritance edges: `class Foo extends Base { ... }`.
         if entity_type == EntityType.CLASS:
-            for base_name in extract_base_classes(decl, source):
+            for i, base_name in enumerate(extract_base_classes(decl, source)):
                 edges.append(
                     Edge(
                         src_id=entity_id,
-                        dst_id=f"ts:?inherits:{base_name}",
+                        dst_id=f"ts:?inherits:{i}:{base_name}",
                         type="inherits",
                         line=decl.start_point[0] + 1,
                     )

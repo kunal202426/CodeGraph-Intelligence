@@ -34,14 +34,14 @@ def _inherits_edges(source: str):
 def test_single_base_class_produces_inherits_edge() -> None:
     edges = _inherits_edges("class Base:\n    pass\n\nclass Foo(Base):\n    pass\n")
     assert len(edges) == 1
-    assert edges[0].dst_id == "py:?inherits:Base"
+    assert edges[0].dst_id == "py:?inherits:0:Base"
 
 
-def test_multiple_bases_produce_one_edge_each() -> None:
+def test_multiple_bases_produce_one_edge_each_in_declaration_order() -> None:
     edges = _inherits_edges(
         "class Base:\n    pass\nclass Mixin:\n    pass\nclass Foo(Base, Mixin):\n    pass\n"
     )
-    assert {e.dst_id for e in edges} == {"py:?inherits:Base", "py:?inherits:Mixin"}
+    assert [e.dst_id for e in edges] == ["py:?inherits:0:Base", "py:?inherits:1:Mixin"]
 
 
 def test_metaclass_keyword_argument_is_not_a_base_class() -> None:
@@ -240,7 +240,7 @@ def _ts_inherits_edges(source: str):
 def test_ts_extends_clause_produces_inherits_edge() -> None:
     edges = _ts_inherits_edges("class Base {}\nclass Foo extends Base {}\n")
     assert len(edges) == 1
-    assert edges[0].dst_id == "ts:?inherits:Base"
+    assert edges[0].dst_id == "ts:?inherits:0:Base"
 
 
 def test_ts_implements_only_produces_no_inherits_edge() -> None:
@@ -319,21 +319,21 @@ def _java_inherits_edges(source: str):
 def test_java_extends_produces_inherits_edge() -> None:
     edges = _java_inherits_edges("class Base {}\nclass Foo extends Base {}\n")
     assert len(edges) == 1
-    assert edges[0].dst_id == "java:?inherits:Base"
+    assert edges[0].dst_id == "java:?inherits:0:Base"
 
 
 def test_java_implements_produces_inherits_edges() -> None:
     edges = _java_inherits_edges(
         "interface IFoo {}\ninterface IBar {}\nclass Foo implements IFoo, IBar {}\n"
     )
-    assert {e.dst_id for e in edges} == {"java:?inherits:IFoo", "java:?inherits:IBar"}
+    assert [e.dst_id for e in edges] == ["java:?inherits:0:IFoo", "java:?inherits:1:IBar"]
 
 
 def test_java_extends_and_implements_both_captured() -> None:
     edges = _java_inherits_edges(
         "class Base {}\ninterface IFoo {}\nclass Foo extends Base implements IFoo {}\n"
     )
-    assert {e.dst_id for e in edges} == {"java:?inherits:Base", "java:?inherits:IFoo"}
+    assert [e.dst_id for e in edges] == ["java:?inherits:0:Base", "java:?inherits:1:IFoo"]
 
 
 # ---------- Java: integration ----------
@@ -400,7 +400,7 @@ def _php_inherits_edges(source: str):
 def test_php_extends_produces_inherits_edge() -> None:
     edges = _php_inherits_edges("<?php\nclass Base {}\nclass Foo extends Base {}\n")
     assert len(edges) == 1
-    assert edges[0].dst_id == "php:?inherits:Base"
+    assert edges[0].dst_id == "php:?inherits:0:Base"
 
 
 def test_php_implements_only_produces_no_inherits_edge() -> None:
@@ -448,7 +448,7 @@ def _rb_inherits_edges(source: str):
 def test_rb_superclass_produces_inherits_edge() -> None:
     edges = _rb_inherits_edges("class Base\nend\nclass Foo < Base\nend\n")
     assert len(edges) == 1
-    assert edges[0].dst_id == "rb:?inherits:Base"
+    assert edges[0].dst_id == "rb:?inherits:0:Base"
 
 
 def test_rb_class_with_no_superclass_produces_no_inherits_edges() -> None:
@@ -502,14 +502,14 @@ def _cpp_inherits_edges(source: str):
 def test_cpp_single_base_produces_inherits_edge() -> None:
     edges = _cpp_inherits_edges("class Base {};\nclass Foo : public Base {};\n")
     assert len(edges) == 1
-    assert edges[0].dst_id == "cpp:?inherits:Base"
+    assert edges[0].dst_id == "cpp:?inherits:0:Base"
 
 
 def test_cpp_multiple_bases_produce_one_edge_each_regardless_of_access() -> None:
     edges = _cpp_inherits_edges(
         "class Base {};\nclass IFoo {};\nclass Foo : public Base, private IFoo {};\n"
     )
-    assert {e.dst_id for e in edges} == {"cpp:?inherits:Base", "cpp:?inherits:IFoo"}
+    assert [e.dst_id for e in edges] == ["cpp:?inherits:0:Base", "cpp:?inherits:1:IFoo"]
 
 
 def test_cpp_class_with_no_base_produces_no_inherits_edges() -> None:
@@ -557,7 +557,7 @@ def test_go_embedded_field_produces_inherits_edge() -> None:
         "package main\ntype Base struct{}\ntype Derived struct {\n    Base\n}\n"
     )
     assert len(edges) == 1
-    assert edges[0].dst_id == "go:?inherits:Base"
+    assert edges[0].dst_id == "go:?inherits:0:Base"
 
 
 def test_go_pointer_embedded_field_produces_inherits_edge() -> None:
@@ -565,7 +565,7 @@ def test_go_pointer_embedded_field_produces_inherits_edge() -> None:
         "package main\ntype Base struct{}\ntype Derived struct {\n    *Base\n}\n"
     )
     assert len(edges) == 1
-    assert edges[0].dst_id == "go:?inherits:Base"
+    assert edges[0].dst_id == "go:?inherits:0:Base"
 
 
 def test_go_named_field_is_not_treated_as_embedded() -> None:

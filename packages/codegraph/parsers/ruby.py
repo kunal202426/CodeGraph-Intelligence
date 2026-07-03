@@ -169,11 +169,11 @@ class RubyParser:
         )
 
         if node.type == "class":
-            for base_name in extract_base_classes(node, source):
+            for i, base_name in enumerate(extract_base_classes(node, source)):
                 edges.append(
                     Edge(
                         src_id=entity_id,
-                        dst_id=f"rb:?inherits:{base_name}",
+                        dst_id=f"rb:?inherits:{i}:{base_name}",
                         type="inherits",
                         line=node.start_point[0] + 1,
                     )

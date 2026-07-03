@@ -318,11 +318,11 @@ class GoParser:
             )
 
             if entity_type == EntityType.CLASS:
-                for base_name in extract_embedded_types(type_child, source):
+                for i, base_name in enumerate(extract_embedded_types(type_child, source)):
                     edges.append(
                         Edge(
                             src_id=entity_id,
-                            dst_id=f"go:?inherits:{base_name}",
+                            dst_id=f"go:?inherits:{i}:{base_name}",
                             type="inherits",
                             line=child.start_point[0] + 1,
                         )

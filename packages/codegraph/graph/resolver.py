@@ -240,9 +240,23 @@ def resolve_symbols(store: GraphStore) -> ResolutionStats:
     # class preferred when the base name is ambiguous repo-wide; unresolved
     # (ambiguous or missing) stays external rather than guessed at, same
     # policy as every other name-based resolution in this module.
+    #
+    # dst_id carries an explicit `<index>:` prefix (`py:?inherits:0:Base`) so
+    # bases_by_class can be built in the declared left-to-right order
+    # (matching Python/C++'s own MRO preference for the common non-diamond
+    # case) regardless of the DB's row-fetch order -- SQL result order isn't
+    # guaranteed without ORDER BY, and relying on incidental fetch order was
+    # a real bug caught by CI running on a different platform than local dev.
+    def _inherits_sort_key(row: tuple) -> tuple[str, int]:
+        _, dst, _, _ = row
+        _, _, rest = dst.partition(":?inherits:")
+        index_str, _, _ = rest.partition(":")
+        return (row[0], int(index_str) if index_str.isdigit() else 0)
+
     bases_by_class: dict[str, list[str]] = {}
-    for src_id, dst_id, edge_type, line in inherits_rows:
-        _, _, base_name = dst_id.partition(":?inherits:")
+    for src_id, dst_id, edge_type, line in sorted(inherits_rows, key=_inherits_sort_key):
+        _, _, rest = dst_id.partition(":?inherits:")
+        _, _, base_name = rest.partition(":")
         parts = src_id.split(":", 2)
         file = parts[1] if len(parts) >= 3 else ""
         same_file_id = idx.entities_by_file.get(file, {}).get(base_name)
