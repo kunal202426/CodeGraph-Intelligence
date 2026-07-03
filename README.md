@@ -211,11 +211,18 @@ credits to start.
 - **Analyzes structure**: dependency trees, reverse-call impact, import-cycle detection
   (Tarjan SCC), code-smell heuristics, dead-code candidates, git-blame ownership, and
   architectural layer analysis.
+- **Resolves framework routing to real calls**: Flask, FastAPI, Express, Django, Spring, and
+  Rails route handlers get real `calls` edges from their route registration, so a handler
+  invoked only through the framework's own routing doesn't show up as false-positive dead
+  code. A TS/JS `fetch`/`axios` call with a static URL resolves straight through to the
+  backend handler that serves it, across files and languages in one edge.
 - **Stays fresh automatically**: `codegraph watch` debounces filesystem events and
-  re-indexes only the changed files in ~300 ms, keeping the graph current as you code.
+  re-indexes only the changed files in ~300 ms, keeping the graph current as you code. An
+  opt-in git-hook fallback (`codegraph hooks install`) keeps the index fresh across commits,
+  pulls, and checkouts in environments where filesystem watching isn't reliable.
 - **Plugs into any MCP agent**: 11 MCP tools (search, context, trace, impact, status,
-  reindex, agent-driven summaries, ...) plus a one-command installer for Claude Code,
-  Cursor, Codex, and Gemini.
+  reindex, agent-driven summaries, ...) plus a one-command installer for 8 agents: Claude
+  Code, Cursor, Codex, Gemini, Kiro, opencode, Hermes Agent, and Antigravity.
 
 ---
 
