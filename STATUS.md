@@ -268,6 +268,21 @@ decorator-name dead-code heuristic stays as a fallback for frameworks not covere
 it — closing the cross-language HTTP gap this project's own roadmap had listed as
 "deliberately deferred". 939 tests passing.**
 
+### Phase 22 — Git-hook fallback for the watcher [DONE 1/1]
+- [x] T22.1 — `sync/git_hooks.py` installs an opt-in, idempotent snippet into `post-commit`,
+  `post-merge` (covers `git pull`), and `post-checkout` that re-indexes in the background
+  after operations that actually change files on disk — a fallback for environments where OS
+  filesystem-change events aren't reliable (mounted network drives, some WSL2 `/mnt` paths),
+  which otherwise leave the index silently stale until someone remembers to re-index by hand.
+  Mirrors `installer/guide.py`'s BEGIN/END marker pattern: re-running install is a no-op,
+  uninstall removes only what this wrote, any other hook content is left untouched, and it
+  no-ops cleanly if `codegraph` isn't on PATH. New CLI `codegraph hooks install`/`uninstall
+  [repo]`, plus a `--install-hooks` flag on `codegraph init`. 16 new tests.
+
+**Phase 22 result: `codegraph watch`'s filesystem watcher now has a fallback — git hooks
+keep the index fresh across commits, pulls, and checkouts even with no watcher process
+running. 955 tests passing.**
+
 ---
 
 ## "Actually usable" roadmap (Phases 14-18) — COMPLETE
