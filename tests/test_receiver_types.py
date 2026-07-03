@@ -14,6 +14,7 @@ from pathlib import Path
 
 from codegraph.cli import app
 from codegraph.graph.store import GraphStore
+from codegraph.parsers.go import GoParser
 from codegraph.parsers.java import JavaParser
 from codegraph.parsers.python import PythonParser
 from codegraph.parsers.typescript import TypeScriptParser
@@ -513,3 +514,106 @@ def test_java_resolves_to_correct_class_when_two_files_share_a_method_name(
     resolved = {(src, dst) for src, dst, _ in edges}
     assert ("java:FileA.java:T.use", "java:FileA.java:Logger.log") in resolved
     assert ("java:FileA.java:T.use", "java:FileB.java:Logger.log") not in resolved
+
+
+# ---------- Go: pure parser unit tests (no DB) ----------
+
+
+def _go_call_edges(source: str, src_suffix: str = ""):
+    result = GoParser().parse(Path("main.go"), source)
+    edges = [e for e in result.edges if e.type == "calls"]
+    if src_suffix:
+        edges = [e for e in edges if e.src_id.endswith(src_suffix)]
+    return edges
+
+
+def test_go_receiver_variable_infers_type_from_receiver_declaration() -> None:
+    edges = _go_call_edges(
+        "package main\n"
+        "type Widget struct{}\n"
+        "func (w *Widget) Render() {}\n"
+        "func (w *Widget) Draw() {\n"
+        "    w.Render()\n"
+        "}\n",
+        src_suffix="Widget.Draw",
+    )
+    assert len(edges) == 1
+    assert edges[0].dst_id == "go:?methodcall:Widget.Render"
+
+
+def test_go_short_var_composite_literal_infers_type() -> None:
+    edges = _go_call_edges(
+        "package main\n"
+        "type Logger struct{}\n"
+        "func (l *Logger) Log() {}\n"
+        "func use() {\n"
+        "    lg := &Logger{}\n"
+        "    lg.Log()\n"
+        "}\n",
+        src_suffix=":use",
+    )
+    method_calls = [e for e in edges if "?methodcall:" in e.dst_id]
+    assert len(method_calls) == 1
+    assert method_calls[0].dst_id == "go:?methodcall:Logger.Log"
+
+
+def test_go_typed_parameter_infers_type() -> None:
+    edges = _go_call_edges(
+        "package main\n"
+        "type Service struct{}\n"
+        "func (s *Service) Notify() {}\n"
+        "func use(svc *Service) {\n"
+        "    svc.Notify()\n"
+        "}\n",
+        src_suffix=":use",
+    )
+    method_calls = [e for e in edges if "?methodcall:" in e.dst_id]
+    assert len(method_calls) == 1
+    assert method_calls[0].dst_id == "go:?methodcall:Service.Notify"
+
+
+def test_go_struct_field_type_resolves_through_receiver_chain() -> None:
+    edges = _go_call_edges(
+        "package main\n"
+        "type Service struct{}\n"
+        "func (s *Service) Save() {}\n"
+        "type Caller struct {\n"
+        "    svc *Service\n"
+        "}\n"
+        "func (c *Caller) Run() {\n"
+        "    c.svc.Save()\n"
+        "}\n",
+        src_suffix="Caller.Run",
+    )
+    method_calls = [e for e in edges if "?methodcall:" in e.dst_id]
+    assert len(method_calls) == 1
+    assert method_calls[0].dst_id == "go:?methodcall:Service.Save"
+
+
+# ---------- Go: integration ----------
+
+
+def test_go_resolves_to_correct_struct_when_two_files_share_a_method_name(tmp_path: Path) -> None:
+    db = _index(
+        tmp_path,
+        {
+            "file_a.go": (
+                "package main\n"
+                "type Logger struct{}\n"
+                "func (l *Logger) Log() {}\n"
+                "func use() {\n"
+                "    lg := &Logger{}\n"
+                "    lg.Log()\n"
+                "}\n"
+            ),
+            "file_b.go": ("package main\ntype Logger struct{}\nfunc (l *Logger) Log() {}\n"),
+        },
+    )
+    store = GraphStore(db)
+    try:
+        edges = _edges(store)
+    finally:
+        store.close()
+    resolved = {(src, dst) for src, dst, _ in edges}
+    assert ("go:file_a.go:use", "go:file_a.go:Logger.Log") in resolved
+    assert ("go:file_a.go:use", "go:file_b.go:Logger.Log") not in resolved

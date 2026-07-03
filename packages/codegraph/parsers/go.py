@@ -26,6 +26,12 @@ with warnings.catch_warnings():
     from tree_sitter_languages import get_language
 
 from codegraph.parsers.base import ParseResult
+from codegraph.resolution.receiver_types.go import (
+    infer_local_types,
+    infer_param_types,
+    infer_struct_field_types,
+    receiver_type_for_call,
+)
 from codegraph.uir import (
     Edge,
     EntityType,
@@ -98,12 +104,29 @@ class GoParser:
         if root.has_error:
             errors.append("tree-sitter reported parse errors (entities still emitted)")
 
+        struct_field_types = infer_struct_field_types(root, source_bytes)
         for child in root.children:
             kind = child.type
             if kind == "function_declaration":
-                self._emit_function(child, source_bytes, rel_path, module_id, entities, edges)
+                self._emit_function(
+                    child,
+                    source_bytes,
+                    rel_path,
+                    module_id,
+                    entities,
+                    edges,
+                    struct_field_types=struct_field_types,
+                )
             elif kind == "method_declaration":
-                self._emit_method(child, source_bytes, rel_path, module_id, entities, edges)
+                self._emit_method(
+                    child,
+                    source_bytes,
+                    rel_path,
+                    module_id,
+                    entities,
+                    edges,
+                    struct_field_types=struct_field_types,
+                )
             elif kind == "type_declaration":
                 self._emit_type_decl(child, source_bytes, rel_path, module_id, entities)
             elif kind == "import_declaration":
@@ -122,6 +145,8 @@ class GoParser:
         parent_id: str,
         entities: list[UIREntity],
         edges: list[Edge],
+        *,
+        struct_field_types: dict[str, dict[str, str]] | None = None,
     ) -> str | None:
         name_node = node.child_by_field_name("name")
         name = self._text(name_node, source)
@@ -158,7 +183,16 @@ class GoParser:
 
         body = node.child_by_field_name("body")
         if body is not None:
-            self._emit_calls(body, source, src_id=entity_id, edges=edges)
+            local_types = infer_param_types(node.child_by_field_name("parameters"), source)
+            local_types.update(infer_local_types(body, source))
+            self._emit_calls(
+                body,
+                source,
+                src_id=entity_id,
+                edges=edges,
+                local_types=local_types,
+                struct_field_types=struct_field_types or {},
+            )
 
         return entity_id
 
@@ -170,6 +204,8 @@ class GoParser:
         module_id: str,
         entities: list[UIREntity],
         edges: list[Edge],
+        *,
+        struct_field_types: dict[str, dict[str, str]] | None = None,
     ) -> str | None:
         name_node = node.child_by_field_name("name")
         name = self._text(name_node, source)
@@ -209,7 +245,17 @@ class GoParser:
 
         body = node.child_by_field_name("body")
         if body is not None:
-            self._emit_calls(body, source, src_id=entity_id, edges=edges)
+            local_types = infer_param_types(node.child_by_field_name("receiver"), source)
+            local_types.update(infer_param_types(node.child_by_field_name("parameters"), source))
+            local_types.update(infer_local_types(body, source))
+            self._emit_calls(
+                body,
+                source,
+                src_id=entity_id,
+                edges=edges,
+                local_types=local_types,
+                struct_field_types=struct_field_types or {},
+            )
 
         return entity_id
 
@@ -318,15 +364,32 @@ class GoParser:
     # ------------------------------------------------------------------
     # Call edge extraction — provisional `go:?call:<callee>` edges
 
-    def _emit_calls(self, body: Node, source: bytes, *, src_id: str, edges: list[Edge]) -> None:
+    def _emit_calls(
+        self,
+        body: Node,
+        source: bytes,
+        *,
+        src_id: str,
+        edges: list[Edge],
+        local_types: dict[str, str] | None = None,
+        struct_field_types: dict[str, dict[str, str]] | None = None,
+    ) -> None:
         for call in self._iter_call_nodes(body):
             callee = self._callee_name(call, source)
             if not callee:
                 continue
+            receiver_type = receiver_type_for_call(
+                call, source, local_types or {}, struct_field_types or {}
+            )
+            dst_id = (
+                f"go:?methodcall:{receiver_type}.{callee}"
+                if receiver_type
+                else f"go:?call:{callee}"
+            )
             edges.append(
                 Edge(
                     src_id=src_id,
-                    dst_id=f"go:?call:{callee}",
+                    dst_id=dst_id,
                     type="calls",
                     line=call.start_point[0] + 1,
                     confidence=0.7,

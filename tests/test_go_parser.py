@@ -222,7 +222,8 @@ def test_selector_call_extracts_method_name(parser: GoParser) -> None:
     src = "package main\n\nfunc run(s *Server) {\n\ts.Start()\n}\n"
     result = parser.parse(Path("main.go"), src)
     edges = _call_edges(result)
-    assert any(e.dst_id == "go:?call:Start" for e in edges)
+    # `s` is a typed parameter (*Server) -- the receiver type is inferred.
+    assert any(e.dst_id == "go:?methodcall:Server.Start" for e in edges)
 
 
 def test_call_edges_have_low_confidence(parser: GoParser) -> None:
