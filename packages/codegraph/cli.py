@@ -1331,6 +1331,67 @@ def uninstall(
         console.print("[dim]Removed the CodeGraph block from CLAUDE.md.[/dim]")
 
 
+hooks_app = typer.Typer(
+    help="Git hook fallback for `codegraph watch` -- re-index after commit/pull/checkout."
+)
+app.add_typer(hooks_app, name="hooks")
+
+
+@hooks_app.command("install")
+def hooks_install(
+    repo: Path = typer.Argument(
+        Path("."),
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        resolve_path=True,
+        help="Repository root (default: current directory).",
+    ),
+) -> None:
+    """Install post-commit/post-merge/post-checkout hooks that re-index in the background.
+
+    A fallback for environments where `codegraph watch`'s filesystem events
+    aren't reliable (network shares, some WSL2 /mnt paths). Idempotent --
+    safe to run again.
+    """
+    from codegraph.sync.git_hooks import install_git_hooks
+
+    touched = install_git_hooks(repo)
+    if not touched:
+        console.print(f"[yellow]{repo} doesn't look like a git repo (no .git directory).[/yellow]")
+        raise typer.Exit(code=1)
+
+    console.print(
+        f"[green]Installed.[/green] {len(touched)} hooks updated in {repo / '.git' / 'hooks'}:"
+    )
+    for path in touched:
+        console.print(f"  [dim]{path.name}[/dim]")
+
+
+@hooks_app.command("uninstall")
+def hooks_uninstall(
+    repo: Path = typer.Argument(
+        Path("."),
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        resolve_path=True,
+        help="Repository root (default: current directory).",
+    ),
+) -> None:
+    """Remove the CodeGraph sync snippet from git hooks. Other hook content is untouched."""
+    from codegraph.sync.git_hooks import uninstall_git_hooks
+
+    touched = uninstall_git_hooks(repo)
+    if not touched:
+        console.print("[yellow]No CodeGraph git hooks found to remove.[/yellow]")
+        return
+
+    console.print(f"[green]Removed.[/green] {len(touched)} hooks updated:")
+    for path in touched:
+        console.print(f"  [dim]{path.name}[/dim]")
+
+
 def _count_entities(db: Path) -> int:
     """Entity count in the index, or 0 if the DB is missing/unreadable."""
     if not db.exists():
@@ -1432,6 +1493,12 @@ def init(
     location: str = typer.Option(
         "global", "--location", help="Agent config scope: global (user) or local (project)."
     ),
+    install_hooks: bool = typer.Option(
+        False,
+        "--install-hooks",
+        help="Also install git hooks (post-commit/merge/checkout) as a fallback "
+        "re-index path for filesystems where `codegraph watch` isn't reliable.",
+    ),
 ) -> None:
     """One-shot setup: index the repo, wire up your agent, and write the guide. [T18.2]
 
@@ -1468,6 +1535,17 @@ def init(
     console.print("\n[bold]Step 3/3[/bold] Writing agent guide...")
     guide_path = write_agent_guide(repo)
     console.print(f"[green]Guide written[/green] [dim]({guide_path})[/dim]")
+
+    if install_hooks:
+        from codegraph.sync.git_hooks import install_git_hooks
+
+        hook_files = install_git_hooks(repo)
+        if hook_files:
+            console.print(
+                f"[green]Git hooks installed[/green] [dim]({len(hook_files)} hooks)[/dim]"
+            )
+        else:
+            console.print("[yellow]Skipped git hooks: not a git repo.[/yellow]")
 
     # Self-verify: confirm the index really resolved and is non-empty, so the
     # user gets a clear pass/fail instead of trusting three silent steps.
