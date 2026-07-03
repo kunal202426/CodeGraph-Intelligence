@@ -436,6 +436,10 @@ uv run codegraph uninstall claude
 | `cursor` | Cursor IDE | `~/.cursor/mcp.json` |
 | `codex` | OpenAI Codex CLI | `~/.codex/config.json` |
 | `gemini` | Google Gemini CLI | `~/.gemini/settings.json` |
+| `kiro` | Kiro | `~/.kiro/settings/mcp.json` |
+| `opencode` | opencode | `~/.config/opencode/opencode.jsonc` (XDG path, all platforms) |
+| `hermes` | Hermes Agent | `~/.hermes/config.yaml` (YAML, not JSON) |
+| `antigravity` | Antigravity IDE | `~/.gemini/config/mcp_config.json` |
 
 **One install, every project.** By default no `--db` is written: the MCP server discovers
 the nearest `.codegraph/graph.duckdb` from its working directory, so a single global entry
