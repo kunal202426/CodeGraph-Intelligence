@@ -15,6 +15,7 @@ from pathlib import Path
 from codegraph.cli import app
 from codegraph.graph.store import GraphStore
 from codegraph.parsers.python import PythonParser
+from codegraph.parsers.typescript import TypeScriptParser
 from typer.testing import CliRunner
 
 # ---------- pure parser unit tests (no DB) ----------
@@ -221,3 +222,82 @@ def test_method_not_found_anywhere_in_chain_falls_back_to_plain_resolution(
         store.close()
     resolved = {(src, dst) for src, dst, _ in edges}
     assert ("py:app.py:Derived.run", "py:app.py:missing") in resolved
+
+
+# ---------- TypeScript: pure parser unit tests (no DB) ----------
+
+
+def _ts_inherits_edges(source: str):
+    result = TypeScriptParser().parse(Path("app.ts"), source)
+    return [e for e in result.edges if e.type == "inherits"]
+
+
+def test_ts_extends_clause_produces_inherits_edge() -> None:
+    edges = _ts_inherits_edges("class Base {}\nclass Foo extends Base {}\n")
+    assert len(edges) == 1
+    assert edges[0].dst_id == "ts:?inherits:Base"
+
+
+def test_ts_implements_only_produces_no_inherits_edge() -> None:
+    edges = _ts_inherits_edges("interface IFoo {}\nclass Foo implements IFoo {}\n")
+    assert edges == []
+
+
+def test_ts_class_with_no_heritage_produces_no_inherits_edges() -> None:
+    edges = _ts_inherits_edges("class Foo {}\n")
+    assert edges == []
+
+
+# ---------- TypeScript: integration ----------
+
+
+def test_ts_method_only_on_base_class_resolves_through_inheritance(tmp_path: Path) -> None:
+    db = _index(
+        tmp_path,
+        {
+            "app.ts": (
+                "class Base {\n"
+                "  save() {}\n"
+                "}\n"
+                "class Derived extends Base {\n"
+                "  run() {\n"
+                "    this.save();\n"
+                "  }\n"
+                "}\n"
+            ),
+        },
+    )
+    store = GraphStore(db)
+    try:
+        edges = _edges(store)
+    finally:
+        store.close()
+    resolved = {(src, dst) for src, dst, _ in edges}
+    assert ("ts:app.ts:Derived.run", "ts:app.ts:Base.save") in resolved
+
+
+def test_ts_method_overridden_on_derived_class_prefers_derived(tmp_path: Path) -> None:
+    db = _index(
+        tmp_path,
+        {
+            "app.ts": (
+                "class Base {\n"
+                "  save() {}\n"
+                "}\n"
+                "class Derived extends Base {\n"
+                "  save() {}\n"
+                "  run() {\n"
+                "    this.save();\n"
+                "  }\n"
+                "}\n"
+            ),
+        },
+    )
+    store = GraphStore(db)
+    try:
+        edges = _edges(store)
+    finally:
+        store.close()
+    resolved = {(src, dst) for src, dst, _ in edges}
+    assert ("ts:app.ts:Derived.run", "ts:app.ts:Derived.save") in resolved
+    assert ("ts:app.ts:Derived.run", "ts:app.ts:Base.save") not in resolved

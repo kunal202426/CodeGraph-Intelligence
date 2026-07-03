@@ -34,6 +34,7 @@ with warnings.catch_warnings():
 from codegraph.parsers.base import ParseResult
 from codegraph.resolution.frameworks.express import extract_route_edges
 from codegraph.resolution.frameworks.http_client import extract_http_edges
+from codegraph.resolution.inheritance.typescript import extract_base_classes
 from codegraph.resolution.receiver_types.typescript import (
     infer_local_types,
     infer_param_types,
@@ -462,6 +463,18 @@ class TypeScriptParser:
                 hash=hash_source(raw_source),
             )
         )
+
+        # Inheritance edges: `class Foo extends Base { ... }`.
+        if entity_type == EntityType.CLASS:
+            for base_name in extract_base_classes(decl, source):
+                edges.append(
+                    Edge(
+                        src_id=entity_id,
+                        dst_id=f"ts:?inherits:{base_name}",
+                        type="inherits",
+                        line=decl.start_point[0] + 1,
+                    )
+                )
 
         # Call edges: scan a function/method/arrow body for call expressions.
         if entity_type in (EntityType.FUNCTION, EntityType.METHOD):
