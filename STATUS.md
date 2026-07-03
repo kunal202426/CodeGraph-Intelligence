@@ -214,6 +214,19 @@ Full interactive manual test of every user-facing surface (CLI, web UI, watch, M
 
 **Phase 18 result: zero-to-first-query is one command (`codegraph init`), the first-run model download is legible, and the package carries full PyPI metadata + a LICENSE ready to publish. 769 tests passing, 1 live-skip.**
 
+### Phase 19 — Precise per-file staleness signal [DONE 1/1]
+- [x] T19.1 — `get_context` names the exact stale file(s) among its results instead of only
+  a repo-wide count. Building it exposed a real pre-existing bug: `find_stale_files` /
+  `find_deleted_files` opened their internal `GraphStore` connection read-write, which
+  DuckDB rejects while `get_context`'s own read-only connection is already open on the same
+  file — the exception was silently swallowed by a broad `except`, so the repo-wide
+  staleness warning had likely never actually fired in a live call, only in mocked tests.
+  Both functions now open `read_only=True` and skip `init_schema()`. 3 new tests.
+
+**Phase 19 result: `get_context` tells the agent exactly which file changed instead of just
+a count, and a real DuckDB read-write/read-only connection collision that had silently
+disabled the staleness warning in production is fixed. 895 tests passing.**
+
 ---
 
 ## "Actually usable" roadmap (Phases 14-18) — COMPLETE
