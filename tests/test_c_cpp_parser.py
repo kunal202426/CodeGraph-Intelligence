@@ -228,7 +228,8 @@ def test_c_direct_call_edge(c_parser: CParser) -> None:
 def test_cpp_this_member_call(cpp_parser: CppParser) -> None:
     src = "class T {\npublic:\n    void run() { this->listen(); }\nprivate:\n    void listen() {}\n};\n"
     result = cpp_parser.parse(Path("t.cpp"), src)
-    assert any(e.dst_id == "cpp:?call:listen" for e in _call_edges(result))
+    # `this->listen()` -- receiver type is inferred as the enclosing class T.
+    assert any(e.dst_id == "cpp:?methodcall:T.listen" for e in _call_edges(result))
 
 
 def test_cpp_scoped_call(cpp_parser: CppParser) -> None:
@@ -299,6 +300,6 @@ def test_fixture_cpp_emits_expected_entities(cpp_parser: CppParser) -> None:
     import_edges = _import_edges(result)
     assert any("string" in e.dst_id for e in import_edges)
 
-    # start() calls this->listen()
+    # start() calls this->listen() — receiver type inferred as Server
     call_edges = _call_edges(result)
-    assert any(e.dst_id == "cpp:?call:listen" for e in call_edges)
+    assert any(e.dst_id == "cpp:?methodcall:Server.listen" for e in call_edges)

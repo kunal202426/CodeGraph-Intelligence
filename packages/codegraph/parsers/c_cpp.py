@@ -39,6 +39,13 @@ with warnings.catch_warnings():
     from tree_sitter_languages import get_language
 
 from codegraph.parsers.base import ParseResult
+from codegraph.resolution.receiver_types.c_cpp import (
+    infer_class_field_types,
+    infer_local_types,
+    infer_param_types,
+    params_node_from_decl,
+    receiver_type_for_call,
+)
 from codegraph.uir import (
     Edge,
     EntityType,
@@ -113,14 +120,31 @@ class _CCppMixin:
         if root.has_error:
             errors.append("tree-sitter reported parse errors (entities still emitted)")
 
+        class_field_types = infer_class_field_types(root, source_bytes)
         for child in root.children:
             kind = child.type
             if kind == "function_definition":
-                self._emit_function(child, source_bytes, rel_path, module_id, entities, edges)
+                self._emit_function(
+                    child,
+                    source_bytes,
+                    rel_path,
+                    module_id,
+                    entities,
+                    edges,
+                    class_field_types=class_field_types,
+                )
             elif kind in ("class_specifier", "struct_specifier"):
                 name_node = child.child_by_field_name("name")
                 if name_node is not None:
-                    self._emit_class(child, source_bytes, rel_path, module_id, entities, edges)
+                    self._emit_class(
+                        child,
+                        source_bytes,
+                        rel_path,
+                        module_id,
+                        entities,
+                        edges,
+                        class_field_types=class_field_types,
+                    )
             elif kind == "type_definition":
                 self._emit_typedef(child, source_bytes, rel_path, module_id, entities)
             elif kind == "preproc_include":
@@ -139,6 +163,8 @@ class _CCppMixin:
         parent_id: str,
         entities: list[UIREntity],
         edges: list[Edge],
+        *,
+        class_field_types: dict[str, dict[str, str]] | None = None,
     ) -> str | None:
         decl = node.child_by_field_name("declarator")
         name = _func_name_from_decl(decl, source)
@@ -175,7 +201,17 @@ class _CCppMixin:
 
         body = node.child_by_field_name("body")
         if body is not None:
-            self._emit_calls(body, source, src_id=entity_id, edges=edges)
+            local_types = infer_param_types(params_node_from_decl(decl), source)
+            local_types.update(infer_local_types(body, source))
+            self._emit_calls(
+                body,
+                source,
+                src_id=entity_id,
+                edges=edges,
+                class_name=None,
+                local_types=local_types,
+                class_field_types=class_field_types or {},
+            )
 
         return entity_id
 
@@ -187,6 +223,8 @@ class _CCppMixin:
         parent_id: str,
         entities: list[UIREntity],
         edges: list[Edge],
+        *,
+        class_field_types: dict[str, dict[str, str]] | None = None,
     ) -> str | None:
         name_node = node.child_by_field_name("name")
         name = _text(name_node, source)
@@ -242,6 +280,7 @@ class _CCppMixin:
                         entities,
                         edges,
                         is_exported=not is_private,
+                        class_field_types=class_field_types,
                     )
 
         return entity_id
@@ -257,6 +296,7 @@ class _CCppMixin:
         edges: list[Edge],
         *,
         is_exported: bool,
+        class_field_types: dict[str, dict[str, str]] | None = None,
     ) -> str | None:
         decl = node.child_by_field_name("declarator")
         name = _func_name_from_decl(decl, source)
@@ -293,7 +333,17 @@ class _CCppMixin:
 
         body = node.child_by_field_name("body")
         if body is not None:
-            self._emit_calls(body, source, src_id=entity_id, edges=edges)
+            local_types = infer_param_types(params_node_from_decl(decl), source)
+            local_types.update(infer_local_types(body, source))
+            self._emit_calls(
+                body,
+                source,
+                src_id=entity_id,
+                edges=edges,
+                class_name=owner_name,
+                local_types=local_types,
+                class_field_types=class_field_types or {},
+            )
 
         return entity_id
 
@@ -391,20 +441,39 @@ class _CCppMixin:
     # ------------------------------------------------------------------
     # Call edge extraction
 
-    def _emit_calls(self, body: Node, source: bytes, *, src_id: str, edges: list[Edge]) -> None:
+    def _emit_calls(
+        self,
+        body: Node,
+        source: bytes,
+        *,
+        src_id: str,
+        edges: list[Edge],
+        class_name: str | None = None,
+        local_types: dict[str, str] | None = None,
+        class_field_types: dict[str, dict[str, str]] | None = None,
+    ) -> None:
         lang_prefix = self.language.value
         for call in _iter_call_nodes(body):
             callee = _callee_name(call, source)
-            if callee:
-                edges.append(
-                    Edge(
-                        src_id=src_id,
-                        dst_id=f"{lang_prefix}:?call:{callee}",
-                        type="calls",
-                        line=call.start_point[0] + 1,
-                        confidence=0.7,
-                    )
+            if not callee:
+                continue
+            receiver_type = receiver_type_for_call(
+                call, source, class_name, local_types or {}, class_field_types or {}
+            )
+            dst_id = (
+                f"{lang_prefix}:?methodcall:{receiver_type}.{callee}"
+                if receiver_type
+                else f"{lang_prefix}:?call:{callee}"
+            )
+            edges.append(
+                Edge(
+                    src_id=src_id,
+                    dst_id=dst_id,
+                    type="calls",
+                    line=call.start_point[0] + 1,
+                    confidence=0.7,
                 )
+            )
 
 
 # ------------------------------------------------------------------

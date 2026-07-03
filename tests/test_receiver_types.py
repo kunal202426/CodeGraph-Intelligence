@@ -14,6 +14,7 @@ from pathlib import Path
 
 from codegraph.cli import app
 from codegraph.graph.store import GraphStore
+from codegraph.parsers.c_cpp import CppParser
 from codegraph.parsers.go import GoParser
 from codegraph.parsers.java import JavaParser
 from codegraph.parsers.php import PHPParser
@@ -947,3 +948,113 @@ def test_rb_resolves_to_correct_class_when_two_files_share_a_method_name(tmp_pat
     resolved = {(src, dst) for src, dst, _ in edges}
     assert ("rb:file_a.rb:use_it", "rb:file_a.rb:Logger.log") in resolved
     assert ("rb:file_a.rb:use_it", "rb:file_b.rb:Logger.log") not in resolved
+
+
+# ---------- C++: pure parser unit tests (no DB) ----------
+
+
+def _cpp_call_edges(source: str, src_suffix: str = ""):
+    result = CppParser().parse(Path("t.cpp"), source)
+    edges = [e for e in result.edges if e.type == "calls"]
+    if src_suffix:
+        edges = [e for e in edges if e.src_id.endswith(src_suffix)]
+    return edges
+
+
+def test_cpp_this_call_infers_enclosing_class_as_receiver_type() -> None:
+    edges = _cpp_call_edges(
+        "class Widget {\n"
+        "public:\n"
+        "    void Render() {}\n"
+        "    void Draw() {\n"
+        "        this->Render();\n"
+        "    }\n"
+        "};\n",
+        src_suffix="Widget.Draw",
+    )
+    assert len(edges) == 1
+    assert edges[0].dst_id == "cpp:?methodcall:Widget.Render"
+
+
+def test_cpp_new_expression_local_variable_infers_type() -> None:
+    edges = _cpp_call_edges(
+        "class Logger {\npublic:\n    void Log() {}\n};\n"
+        "void use_it() {\n"
+        "    Logger* lg = new Logger();\n"
+        "    lg->Log();\n"
+        "}\n",
+        src_suffix=":use_it",
+    )
+    method_calls = [e for e in edges if "?methodcall:" in e.dst_id]
+    assert len(method_calls) == 1
+    assert method_calls[0].dst_id == "cpp:?methodcall:Logger.Log"
+
+
+def test_cpp_typed_parameter_infers_type() -> None:
+    edges = _cpp_call_edges(
+        "class Service {\npublic:\n    void Notify() {}\n};\n"
+        "class Caller {\npublic:\n"
+        "    void Use(Service* svc) {\n"
+        "        svc->Notify();\n"
+        "    }\n"
+        "};\n",
+        src_suffix="Caller.Use",
+    )
+    method_calls = [e for e in edges if "?methodcall:" in e.dst_id]
+    assert len(method_calls) == 1
+    assert method_calls[0].dst_id == "cpp:?methodcall:Service.Notify"
+
+
+def test_cpp_class_field_type_resolves_through_this_chain() -> None:
+    edges = _cpp_call_edges(
+        "class Service {\npublic:\n    void Save() {}\n};\n"
+        "class Caller {\n"
+        "public:\n"
+        "    void Run() {\n"
+        "        this->svc->Save();\n"
+        "    }\n"
+        "private:\n"
+        "    Service* svc;\n"
+        "};\n",
+        src_suffix="Caller.Run",
+    )
+    method_calls = [e for e in edges if "?methodcall:" in e.dst_id]
+    assert len(method_calls) == 1
+    assert method_calls[0].dst_id == "cpp:?methodcall:Service.Save"
+
+
+def test_cpp_primitive_type_is_not_treated_as_a_receiver_type() -> None:
+    edges = _cpp_call_edges(
+        "void use_it() {\n    int x = get_thing();\n    x.process();\n}\n",
+        src_suffix=":use_it",
+    )
+    dst_ids = {e.dst_id for e in edges}
+    assert "cpp:?call:process" in dst_ids
+    assert not any("?methodcall:" in dst for dst in dst_ids)
+
+
+# ---------- C++: integration ----------
+
+
+def test_cpp_resolves_to_correct_class_when_two_files_share_a_method_name(tmp_path: Path) -> None:
+    db = _index(
+        tmp_path,
+        {
+            "file_a.cpp": (
+                "class Logger {\npublic:\n    void Log() {}\n};\n"
+                "void use_it() {\n"
+                "    Logger* lg = new Logger();\n"
+                "    lg->Log();\n"
+                "}\n"
+            ),
+            "file_b.cpp": ("class Logger {\npublic:\n    void Log() {}\n};\n"),
+        },
+    )
+    store = GraphStore(db)
+    try:
+        edges = _edges(store)
+    finally:
+        store.close()
+    resolved = {(src, dst) for src, dst, _ in edges}
+    assert ("cpp:file_a.cpp:use_it", "cpp:file_a.cpp:Logger.Log") in resolved
+    assert ("cpp:file_a.cpp:use_it", "cpp:file_b.cpp:Logger.Log") not in resolved
