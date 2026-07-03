@@ -15,6 +15,7 @@ from pathlib import Path
 from codegraph.cli import app
 from codegraph.graph.store import GraphStore
 from codegraph.parsers.java import JavaParser
+from codegraph.parsers.php import PHPParser
 from codegraph.parsers.python import PythonParser
 from codegraph.parsers.typescript import TypeScriptParser
 from typer.testing import CliRunner
@@ -383,3 +384,51 @@ def test_java_default_interface_method_resolves_through_implements(tmp_path: Pat
         store.close()
     resolved = {(src, dst) for src, dst, _ in edges}
     assert ("java:T.java:Foo.run", "java:T.java:Greeter.greet") in resolved
+
+
+# ---------- PHP: pure parser unit tests (no DB) ----------
+
+
+def _php_inherits_edges(source: str):
+    result = PHPParser().parse(Path("T.php"), source)
+    return [e for e in result.edges if e.type == "inherits"]
+
+
+def test_php_extends_produces_inherits_edge() -> None:
+    edges = _php_inherits_edges("<?php\nclass Base {}\nclass Foo extends Base {}\n")
+    assert len(edges) == 1
+    assert edges[0].dst_id == "php:?inherits:Base"
+
+
+def test_php_implements_only_produces_no_inherits_edge() -> None:
+    edges = _php_inherits_edges("<?php\ninterface IFoo {}\nclass Foo implements IFoo {}\n")
+    assert edges == []
+
+
+# ---------- PHP: integration ----------
+
+
+def test_php_method_only_on_base_class_resolves_through_inheritance(tmp_path: Path) -> None:
+    db = _index(
+        tmp_path,
+        {
+            "T.php": (
+                "<?php\n"
+                "class Base {\n"
+                "    function save() {}\n"
+                "}\n"
+                "class Derived extends Base {\n"
+                "    function run() {\n"
+                "        $this->save();\n"
+                "    }\n"
+                "}\n"
+            ),
+        },
+    )
+    store = GraphStore(db)
+    try:
+        edges = _edges(store)
+    finally:
+        store.close()
+    resolved = {(src, dst) for src, dst, _ in edges}
+    assert ("php:T.php:Derived.run", "php:T.php:Base.save") in resolved
