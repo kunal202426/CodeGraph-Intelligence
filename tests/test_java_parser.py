@@ -235,7 +235,8 @@ def test_simple_call_edge(parser: JavaParser) -> None:
 def test_method_call_extracts_method_name(parser: JavaParser) -> None:
     src = "public class T {\n    public void run() { this.listen(); }\n}"
     result = parser.parse(Path("T.java"), src)
-    assert any(e.dst_id == "java:?call:listen" for e in _call_edges(result))
+    # `this.listen()` -- receiver type is inferred as the enclosing class T.
+    assert any(e.dst_id == "java:?methodcall:T.listen" for e in _call_edges(result))
 
 
 def test_static_call_extracts_method_name(parser: JavaParser) -> None:
@@ -280,9 +281,9 @@ def test_fixture_server_emits_expected_entities(parser: JavaParser) -> None:
     listen = _by_name(result, "listen")
     assert listen is not None and listen.is_exported is False
 
-    # start() calls this.listen() — call edge
+    # start() calls this.listen() — call edge, receiver type inferred as Server
     call_edges = _call_edges(result)
-    assert any(e.dst_id == "java:?call:listen" for e in call_edges)
+    assert any(e.dst_id == "java:?methodcall:Server.listen" for e in call_edges)
 
     # imports: java.util.List and java.io.*
     import_edges = _import_edges(result)

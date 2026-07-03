@@ -31,6 +31,12 @@ from codegraph.resolution.frameworks.spring import (
     extract_class_base_path,
     extract_route_edges,
 )
+from codegraph.resolution.receiver_types.java import (
+    infer_local_types,
+    infer_param_types,
+    infer_self_attr_types,
+    receiver_type_for_call,
+)
 from codegraph.uir import (
     Edge,
     EntityType,
@@ -160,10 +166,19 @@ class JavaParser:
         body = node.child_by_field_name("body")
         if body is not None:
             base_path = extract_class_base_path(node, source)
+            self_attr_types = infer_self_attr_types(body, source)
             for child in body.children:
                 if child.type in ("method_declaration", "constructor_declaration"):
                     self._emit_method(
-                        child, source, file, name, entity_id, entities, edges, base_path=base_path
+                        child,
+                        source,
+                        file,
+                        name,
+                        entity_id,
+                        entities,
+                        edges,
+                        base_path=base_path,
+                        self_attr_types=self_attr_types,
                     )
 
         return entity_id
@@ -231,6 +246,7 @@ class JavaParser:
         edges: list[Edge],
         *,
         base_path: str = "",
+        self_attr_types: dict[str, str] | None = None,
     ) -> str | None:
         name_node = node.child_by_field_name("name")
         name = self._text(name_node, source)
@@ -267,7 +283,17 @@ class JavaParser:
 
         body = node.child_by_field_name("body")
         if body is not None:
-            self._emit_calls(body, source, src_id=entity_id, edges=edges)
+            local_types = infer_param_types(node, source)
+            local_types.update(infer_local_types(body, source))
+            self._emit_calls(
+                body,
+                source,
+                src_id=entity_id,
+                edges=edges,
+                class_name=owner_name,
+                local_types=local_types,
+                self_attr_types=self_attr_types or {},
+            )
 
         edges.extend(extract_route_edges(node, entity_id, source, base_path))
 
@@ -307,15 +333,33 @@ class JavaParser:
     # ------------------------------------------------------------------
     # Call edge extraction — provisional `java:?call:<callee>` edges
 
-    def _emit_calls(self, body: Node, source: bytes, *, src_id: str, edges: list[Edge]) -> None:
+    def _emit_calls(
+        self,
+        body: Node,
+        source: bytes,
+        *,
+        src_id: str,
+        edges: list[Edge],
+        class_name: str | None = None,
+        local_types: dict[str, str] | None = None,
+        self_attr_types: dict[str, str] | None = None,
+    ) -> None:
         for call in self._iter_call_nodes(body):
             callee = self._callee_name(call, source)
             if not callee:
                 continue
+            receiver_type = receiver_type_for_call(
+                call, source, class_name, local_types or {}, self_attr_types or {}
+            )
+            dst_id = (
+                f"java:?methodcall:{receiver_type}.{callee}"
+                if receiver_type
+                else f"java:?call:{callee}"
+            )
             edges.append(
                 Edge(
                     src_id=src_id,
-                    dst_id=f"java:?call:{callee}",
+                    dst_id=dst_id,
                     type="calls",
                     line=call.start_point[0] + 1,
                     confidence=0.7,

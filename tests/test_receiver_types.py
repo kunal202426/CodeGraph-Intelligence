@@ -14,6 +14,7 @@ from pathlib import Path
 
 from codegraph.cli import app
 from codegraph.graph.store import GraphStore
+from codegraph.parsers.java import JavaParser
 from codegraph.parsers.python import PythonParser
 from codegraph.parsers.typescript import TypeScriptParser
 from typer.testing import CliRunner
@@ -385,3 +386,130 @@ def test_ts_resolves_to_correct_class_when_two_files_share_a_method_name(tmp_pat
     resolved = {(src, dst) for src, dst, _ in edges}
     assert ("ts:file_a.ts:use", "ts:file_a.ts:Logger.log") in resolved
     assert ("ts:file_a.ts:use", "ts:file_b.ts:Logger.log") not in resolved
+
+
+# ---------- Java: pure parser unit tests (no DB) ----------
+
+
+def _java_call_edges(source: str, src_suffix: str = ""):
+    result = JavaParser().parse(Path("T.java"), source)
+    edges = [e for e in result.edges if e.type == "calls"]
+    if src_suffix:
+        edges = [e for e in edges if e.src_id.endswith(src_suffix)]
+    return edges
+
+
+def test_java_this_call_infers_enclosing_class_as_receiver_type() -> None:
+    edges = _java_call_edges(
+        "class Widget {\n  void render() {}\n  void draw() {\n    this.render();\n  }\n}\n",
+        src_suffix="Widget.draw",
+    )
+    assert len(edges) == 1
+    assert edges[0].dst_id == "java:?methodcall:Widget.render"
+
+
+def test_java_object_creation_local_variable_infers_type() -> None:
+    edges = _java_call_edges(
+        "class Logger {\n"
+        "  void log() {}\n"
+        "}\n"
+        "class T {\n"
+        "  void use() {\n"
+        "    Logger lg = new Logger();\n"
+        "    lg.log();\n"
+        "  }\n"
+        "}\n",
+        src_suffix="T.use",
+    )
+    method_calls = [e for e in edges if "?methodcall:" in e.dst_id]
+    assert len(method_calls) == 1
+    assert method_calls[0].dst_id == "java:?methodcall:Logger.log"
+
+
+def test_java_typed_parameter_infers_type() -> None:
+    edges = _java_call_edges(
+        "class Service {\n"
+        "  void notify() {}\n"
+        "}\n"
+        "class Caller {\n"
+        "  void use(Service svc) {\n"
+        "    svc.notify();\n"
+        "  }\n"
+        "}\n",
+        src_suffix="Caller.use",
+    )
+    method_calls = [e for e in edges if "?methodcall:" in e.dst_id]
+    assert len(method_calls) == 1
+    assert method_calls[0].dst_id == "java:?methodcall:Service.notify"
+
+
+def test_java_field_declaration_type_resolves_from_other_method() -> None:
+    edges = _java_call_edges(
+        "class Service {\n"
+        "  void save() {}\n"
+        "}\n"
+        "class Caller {\n"
+        "  private Service svc;\n"
+        "  Caller() {\n"
+        "    this.svc = new Service();\n"
+        "  }\n"
+        "  void run() {\n"
+        "    this.svc.save();\n"
+        "  }\n"
+        "}\n",
+        src_suffix="Caller.run",
+    )
+    method_calls = [e for e in edges if "?methodcall:" in e.dst_id]
+    assert len(method_calls) == 1
+    assert method_calls[0].dst_id == "java:?methodcall:Service.save"
+
+
+def test_java_var_local_infers_type_from_object_creation() -> None:
+    edges = _java_call_edges(
+        "class Logger {\n"
+        "  void log() {}\n"
+        "}\n"
+        "class T {\n"
+        "  void use() {\n"
+        "    var lg = new Logger();\n"
+        "    lg.log();\n"
+        "  }\n"
+        "}\n",
+        src_suffix="T.use",
+    )
+    method_calls = [e for e in edges if "?methodcall:" in e.dst_id]
+    assert len(method_calls) == 1
+    assert method_calls[0].dst_id == "java:?methodcall:Logger.log"
+
+
+# ---------- Java: integration ----------
+
+
+def test_java_resolves_to_correct_class_when_two_files_share_a_method_name(
+    tmp_path: Path,
+) -> None:
+    db = _index(
+        tmp_path,
+        {
+            "FileA.java": (
+                "class Logger {\n"
+                "  void log() {}\n"
+                "}\n"
+                "class T {\n"
+                "  void use() {\n"
+                "    Logger lg = new Logger();\n"
+                "    lg.log();\n"
+                "  }\n"
+                "}\n"
+            ),
+            "FileB.java": ("class Logger {\n  void log() {}\n}\n"),
+        },
+    )
+    store = GraphStore(db)
+    try:
+        edges = _edges(store)
+    finally:
+        store.close()
+    resolved = {(src, dst) for src, dst, _ in edges}
+    assert ("java:FileA.java:T.use", "java:FileA.java:Logger.log") in resolved
+    assert ("java:FileA.java:T.use", "java:FileB.java:Logger.log") not in resolved
