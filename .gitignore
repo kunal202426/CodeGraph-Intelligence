@@ -73,3 +73,6 @@ logs/
 
 # Local-only real-world stress-test project — never committed, never uploaded
 /Test Project/
+
+# Stray file from a Windows `> nul` redirect gone wrong
+/nul
