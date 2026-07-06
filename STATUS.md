@@ -4,6 +4,8 @@
 
 - **Status:** ACTIVE — roadmap complete; competitive hardening (Phases 19-22, 24, 26-28) plus
   a real-world stress test (Phase 29) done; CI green, `main` fully pushed, working tree clean.
+  README polished and internal build-planning docs (`AGENTS.md`, `BUILD_PLAN.md`, the source
+  spec, `plan/`) moved out of the public repo into a local, gitignored `.internal/` folder.
 - **Phase:** Maintenance & hardening (post-audit fixes, usability, repo hygiene). No phase
   currently in progress — safe to start a new session cold from this file.
 - **Tests:** 1114 passing, 1 live-skip (needs `ANTHROPIC_API_KEY`), 0 failing. Verified both
