@@ -644,13 +644,18 @@ starts, automatically.
 
 **Which agents are supported?**
 
-Claude Code, Cursor IDE, OpenAI Codex CLI, and Google Gemini CLI. One command each:
+Claude Code, Cursor, OpenAI Codex CLI, Google Gemini CLI, Kiro, opencode, Hermes Agent,
+and Antigravity. One command each:
 
 ```bash
 codegraph install claude    # Claude Code
 codegraph install cursor    # Cursor
 codegraph install codex     # OpenAI Codex CLI
 codegraph install gemini    # Google Gemini CLI
+codegraph install kiro      # Kiro
+codegraph install opencode  # opencode
+codegraph install hermes    # Hermes Agent
+codegraph install antigravity  # Antigravity
 ```
 
 **Can I use it on multiple projects without reinstalling?**
