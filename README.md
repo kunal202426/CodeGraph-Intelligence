@@ -164,7 +164,7 @@ The AI still *wrote* the same ~1–1.5k-token answer either way; that part is un
 | Python 3.11 or newer | [python.org/downloads](https://python.org/downloads) |
 | `uv` (Python package manager) | `pip install uv` or `brew install uv` on Mac |
 | Git | [git-scm.com](https://git-scm.com) |
-| Claude Code, Cursor, Codex, or Gemini (at least one) | Their respective sites |
+| A supported agent: Claude Code, Cursor, Codex, Gemini, Kiro, opencode, Hermes Agent, or Antigravity (at least one) | Their respective sites |
 
 **You do NOT need:**
 - An Anthropic API key *(for the core features, see the next section)*
