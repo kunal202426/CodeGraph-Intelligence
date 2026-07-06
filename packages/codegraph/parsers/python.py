@@ -30,7 +30,10 @@ from codegraph.parsers.base import ParseResult
 from codegraph.resolution.frameworks.django_urls import (
     extract_route_edges as extract_django_route_edges,
 )
-from codegraph.resolution.frameworks.python_web import extract_route_edges
+from codegraph.resolution.frameworks.python_web import (
+    extract_dependency_calls,
+    extract_route_edges,
+)
 from codegraph.resolution.inheritance.python import extract_base_classes
 from codegraph.resolution.receiver_types.python import (
     infer_local_types,
@@ -420,6 +423,7 @@ class PythonParser:
                     class_name=class_name,
                     self_attr_types=self_attr_types or {},
                 )
+            edges.extend(extract_dependency_calls(inner_def, entity_id, source))
 
         return entity_id
 

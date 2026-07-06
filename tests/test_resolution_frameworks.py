@@ -434,3 +434,58 @@ def test_route_handler_not_flagged_dead_via_real_edge(runner: CliRunner, tmp_pat
         store.close()
     assert "list_users" not in names
     assert "really_dead" in names
+
+
+# ---------- FastAPI Depends() dependency injection (found stress-testing a
+# real production FastAPI backend) ----------
+
+
+def test_fastapi_depends_produces_call_edge() -> None:
+    """`current_user: User = Depends(get_current_user)` invokes get_current_user
+    on every request -- but it's a parameter default, not a call expression in
+    the body, so the ordinary call scan never sees it. Without this, every
+    FastAPI dependency (auth checks, DB sessions, quota checks) looks unused;
+    confirmed as the dominant false-positive source in a real backend."""
+    source = (
+        "from fastapi import Depends\n"
+        "def get_db():\n"
+        "    pass\n"
+        "def get_current_user(db=Depends(get_db)):\n"
+        "    pass\n"
+        "def me(current_user=Depends(get_current_user)):\n"
+        "    pass\n"
+    )
+    result = PythonParser().parse(Path("app.py"), source)
+    call_edges = [e for e in result.edges if e.type == "calls"]
+    me_edges = [e for e in call_edges if e.src_id.endswith(":me")]
+    assert any(e.dst_id == "py:?call:get_current_user" for e in me_edges)
+
+
+def test_fastapi_depends_is_not_dead_code(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "app.py").write_text(
+        "from fastapi import Depends\n"
+        "def get_current_user():\n"
+        "    pass\n"
+        "def me(current_user=Depends(get_current_user)):\n"
+        "    pass\n",
+        encoding="utf-8",
+    )
+    db = tmp_path / "g.duckdb"
+    result = CliRunner().invoke(app, ["index", str(repo), "--db", str(db)])
+    assert result.exit_code == 0, result.stdout
+    store = GraphStore(db)
+    try:
+        names = {d.name for d in find_dead_code(store.conn)}
+    finally:
+        store.close()
+    assert "get_current_user" not in names
+
+
+def test_depends_with_non_identifier_argument_is_not_guessed() -> None:
+    # `Depends(lambda: Service())` -- not a bare identifier, don't guess.
+    source = "def me(db=Depends(lambda: Service())):\n    pass\n"
+    result = PythonParser().parse(Path("app.py"), source)
+    call_edges = [e for e in result.edges if e.type == "calls" and e.src_id.endswith(":me")]
+    assert not any("Service" in e.dst_id or "lambda" in e.dst_id for e in call_edges)
