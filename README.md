@@ -11,8 +11,6 @@ cutting the token cost and context-window pressure that come with that.
 > fixed. [Manual test →](docs/MANUAL_TEST_REPORT.md) | [Bench notes →](docs/QUALITY_REPORT_2026-07-01.md).
 > MCP server works but still preview, not production-ready.
 
-![Kortex demo](docs/demo.gif)
-
 > Everything runs on your machine. The only network call is the Anthropic API for
 > `ask` / `summarize` (optional; all graph and search features work offline).
 
