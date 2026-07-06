@@ -426,7 +426,7 @@ and is invoked by the API route [py:api/users.py:login_handler]...
 ```mermaid
 flowchart LR
     repo[Repo files] --> walker[Walker<br/>.gitignore + lang detect]
-    walker --> parsers[tree-sitter parsers<br/>Python / TypeScript]
+    walker --> parsers[tree-sitter parsers<br/>22 languages]
     parsers --> uir[UIR entities + edges]
     uir --> store[(DuckDB<br/>entities · edges · embeddings)]
     parsers --> resolver[Symbol resolver] --> store
@@ -497,9 +497,9 @@ Every description is written to tell the agent *when to prefer it over reading f
 | Tool | What it does |
 |---|---|
 | `get_context` | **Start here.** Hybrid search + signatures + callers/callees, token-lean by default (`detail="full"` for bodies). Replaces 3-4 round-trips at ~10x fewer tokens. |
-| `search_code` | Hybrid literal + semantic search -> entities with `file:line` |
+| `search_code` | Hybrid literal + semantic search → entities with `file:line` |
 | `get_entity_context` | Full source + neighbours (`depends_on`, `called_by`) for an `entity_id` |
-| `impact_analysis` | Reverse-call blast radius -- what breaks if an entity changes |
+| `impact_analysis` | Reverse-call blast radius — what breaks if an entity changes |
 | `trace_path` | Shortest call chain between two `entity_id`s (BFS), with readable labels |
 | `list_files` | All indexed files with language, LOC, and entity count; filterable by language |
 | `index_status` | File / entity / edge / embedding / summary counts + staleness indicator |
@@ -534,7 +534,7 @@ python -m codegraph.server.mcp_server
 | Layer | Choice |
 |---|---|
 | Language / tooling | Python 3.11, [uv](https://github.com/astral-sh/uv), [ruff](https://docs.astral.sh/ruff/), pytest |
-| Parsing | [tree-sitter](https://tree-sitter.github.io/): Python, TS/JS, Go, Rust, Java, Ruby, PHP, C, C++ |
+| Parsing | [tree-sitter](https://tree-sitter.github.io/): 22 languages — Python, TS/JS, Go, Rust, Java, Ruby, PHP, C, C++, Kotlin, C#, Scala, Bash, Elixir, R, Julia, Haskell, OCaml, HTML, CSS, SQL |
 | Storage | [DuckDB](https://duckdb.org/): entities, edges, `FLOAT[384]` vectors, one file |
 | Embeddings | [sentence-transformers](https://www.sbert.net/) `all-MiniLM-L6-v2` (local, 384-d) |
 | LLM | [Anthropic](https://docs.anthropic.com/) `claude-sonnet-4-6` (prompt-cached) |
