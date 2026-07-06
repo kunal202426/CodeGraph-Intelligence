@@ -1,13 +1,13 @@
-# Kortex (A CodeGraph local first tool)
+# Kortex — a local-first CodeGraph tool
 
 **A local-first AI memory layer for your codebase.** Index a repo (22 languages) into a
 queryable graph, search it by meaning, ask grounded questions over a local + Anthropic
 GraphRAG pipeline, explore it in a browser, and expose it all to your coding agent over
-MCP so the agent queries the graph instead of re-reading your files every message.
-Solving high token consumption and context break during window overload.
+MCP — so the agent queries the graph instead of re-reading your files every message,
+cutting the token cost and context-window pressure that come with that.
 
 > **Status: active development.** Core indexing, search, and MCP tools are stable.
-> 1102 tests passing. Every user-facing surface manually tested: 21/21 passed, 6 issues
+> 1114 tests passing. Every user-facing surface manually tested: 21/21 passed, 6 issues
 > fixed. [Manual test →](docs/MANUAL_TEST_REPORT.md) | [Bench notes →](docs/QUALITY_REPORT_2026-07-01.md).
 > MCP server works but still preview, not production-ready.
 
@@ -41,7 +41,7 @@ Solving high token consumption and context break during window overload.
   `self.attr`/`this.attr`/`@attr` — so two unrelated classes sharing a method name no longer
   risk a call edge pointing at the wrong one. Falls back to the old name-only resolution
   whenever the type can't be confidently inferred, so this never makes a result worse.
-- 1102 tests passing (up from 1001), zero regressions across the pass — verified on both
+- 1114 tests passing (up from 1001), zero regressions across the pass — verified on both
   local runs and GitHub Actions (Linux), which caught and led to a fix for a genuine
   cross-platform ordering bug in multi-base inheritance resolution.
 - Framework-aware call resolution: a route handler invoked only through Flask, FastAPI,
@@ -96,7 +96,7 @@ header. Please keep it intact in copies and forks.
 
 ---
 
-## In plain words 
+## In plain words
 
 This codebase is like a **huge library full of books** (each file is a book).
 
@@ -568,7 +568,7 @@ more queries: **101x average** (12x on small files at worst, 190x best).
 **Search:** Hit@1 = 7/7 on symbol queries where the function name doesn't appear in
 the query string at all. Warm query ~15ms.
 
-**Tests:** 1102 passing, 0 failures, 1 live-skip (needs an API key). Covers MCP tools,
+**Tests:** 1114 passing, 0 failures, 1 live-skip (needs an API key). Covers MCP tools,
 all 22 parsers, framework route resolution, receiver-type and inheritance-aware resolution,
 graph queries, CLI, and all 8 installer targets.
 
@@ -677,11 +677,14 @@ Built on [tree-sitter](https://tree-sitter.github.io/), [DuckDB](https://duckdb.
 [sentence-transformers](https://www.sbert.net/), and the
 [Anthropic API](https://docs.anthropic.com/). Progress tracked in [STATUS.md](STATUS.md).
 
-
 ## Research
-Other Github repos that share similar functionalities are not consistant with the architecture graphs and they do not contain the semantic meaning layer
-increasing their effeciency but not solving the context or re-reading codebase problem for models. Sharing shallow context and semantic meaning to a 
-component can break the code. This tool provides you with both problems solved , with moderate token reduction compared to other graph tools.
 
-Existing research papers do not cover the scope of solving a problem by giving semantic layer and reduction in tokenization for a codebase graph 
-which again puts the performance and code generation at risk.
+Comparable open-source tools tend to build a structural call graph without a semantic
+layer, which caps how much re-reading and re-explaining they can actually save — and
+handing a component shallow context with no surrounding meaning can lead a model to make
+an incorrect edit. Kortex pairs a real dependency graph with embeddings-based semantic
+search, aiming for a larger, more reliable token reduction than graph-only tools offer.
+
+This specific combination — a codebase graph plus a semantic layer, evaluated on token
+reduction — isn't something existing research covers directly, which is part of the
+motivation for building it as a standalone tool.
