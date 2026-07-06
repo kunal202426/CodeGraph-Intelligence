@@ -155,3 +155,21 @@ def test_cli_deadcode_missing_db(runner: CliRunner, tmp_path: Path) -> None:
     result = runner.invoke(app, ["deadcode", "--db", str(tmp_path / "nope.duckdb")])
     assert result.exit_code == 1
     assert "No graph database" in result.stdout
+
+
+def test_css_selectors_excluded(runner: CliRunner, tmp_path: Path) -> None:
+    """Found stress-testing a real production frontend: CSS rules are parsed
+    as EntityType.FUNCTION (the closest existing category), so without an
+    explicit exclusion every CSS selector in a real stylesheet -- which is
+    never a calls/imports edge destination, since it's referenced by a
+    class/id name matched as a string in markup, not called -- was flagged
+    as dead code. This was the single largest false-positive source found."""
+    repo = tmp_path / "repo"
+    _make_repo(
+        repo,
+        {
+            "styles.css": ".widget {\n  color: red;\n}\n.panel {\n  color: blue;\n}\n",
+        },
+    )
+    names = _names(repo, tmp_path / "g.duckdb", runner)
+    assert names == set()

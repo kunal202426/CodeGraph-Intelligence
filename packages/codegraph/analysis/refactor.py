@@ -20,6 +20,12 @@ Excluded by design:
   * Methods (by default) — `self.x()` call resolution is lossy in a static graph
     and produces far too many false positives. Pass `include_methods=True` to
     opt in when you understand the trade-off.
+  * CSS/HTML entities — a CSS rule or HTML element isn't "called" the way a
+    function is; it's referenced by a class/id name matched as a string in
+    markup, a fundamentally different reachability model the calls/imports
+    graph doesn't capture at all. Without this, every CSS selector in a real
+    stylesheet was flagged as dead code (confirmed against a real production
+    frontend, where this was the single largest source of false positives).
 
 Public API
 ----------
@@ -127,6 +133,7 @@ def find_dead_code(
         SELECT e.entity_id, e.type, e.name, e.file, e.start_line, e.raw_source
         FROM entities e
         WHERE e.type IN ({type_placeholders})
+          AND e.language NOT IN ('css', 'html')
           AND NOT EXISTS (
             SELECT 1 FROM edges g
             WHERE g.dst_id = e.entity_id AND g.type IN ('calls', 'imports')
