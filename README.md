@@ -367,8 +367,8 @@ uv run codegraph init            # index + install MCP + CLAUDE.md, then restart
 ```
 
 After that, ask Claude *"use codegraph to explain how X works"* and it will query the
-graph instead of re-reading your files. `init --target cursor|codex|gemini` wires a
-different agent.
+graph instead of re-reading your files. `init --target cursor|codex|gemini|kiro|opencode|
+hermes|antigravity` wires a different agent.
 
 Prefer the pieces individually:
 
