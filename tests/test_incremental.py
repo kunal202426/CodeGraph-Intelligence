@@ -229,3 +229,119 @@ def test_store_clear_file_removes_entities_and_edges(tmp_path: Path, runner: Cli
         assert store.get_file_hash("a.py") is not None
     finally:
         store.close()
+
+
+# ---------- regression (Phase 29): non-Python languages must clear stale
+# edges on re-index too, not just Python ----------
+
+
+def test_store_clear_file_removes_non_python_edges(tmp_path: Path, runner: CliRunner) -> None:
+    """clear_file's edge DELETE previously matched only the `py:` prefix, so
+    every other language's stale edges (removed calls/imports/inherits)
+    lingered in the graph forever after the first index. This locks in the
+    language-agnostic fix directly against the store."""
+    repo = tmp_path / "repo"
+    _make_repo(
+        repo,
+        {
+            "app.ts": "export function helper() { return 1; }\nexport function caller() { return helper(); }\n"
+        },
+    )
+    db = tmp_path / "graph.duckdb"
+    runner.invoke(app, ["index", str(repo), "--db", str(db)])
+
+    store = GraphStore(db)
+    try:
+        assert (
+            store.conn.execute("SELECT count(*) FROM edges WHERE type = 'calls'").fetchone()[0] == 1
+        )
+        store.clear_file("app.ts")
+        assert store.conn.execute("SELECT count(*) FROM edges").fetchone()[0] == 0
+        assert store.conn.execute("SELECT count(*) FROM entities").fetchone()[0] == 0
+    finally:
+        store.close()
+
+
+def test_removed_call_does_not_linger_as_a_stale_edge_after_reindex(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """End-to-end regression for the same bug: index a TS file with a call,
+    remove the call, re-index, and confirm the stale edge is actually gone
+    -- not just that clear_file's SQL pattern looks right in isolation."""
+    repo = tmp_path / "repo"
+    _make_repo(
+        repo,
+        {
+            "app.ts": "export function helper() { return 1; }\nexport function caller() { return helper(); }\n"
+        },
+    )
+    db = tmp_path / "graph.duckdb"
+    result = runner.invoke(app, ["index", str(repo), "--db", str(db)])
+    assert result.exit_code == 0
+
+    store = GraphStore(db)
+    try:
+        assert store.conn.execute("SELECT count(*) FROM edges").fetchone()[0] == 1
+    finally:
+        store.close()
+
+    _make_repo(
+        repo,
+        {
+            "app.ts": "export function helper() { return 1; }\nexport function caller() { return 99; }\n"
+        },
+    )
+    result = runner.invoke(app, ["index", str(repo), "--db", str(db)])
+    assert result.exit_code == 0
+
+    store = GraphStore(db)
+    try:
+        assert store.conn.execute("SELECT count(*) FROM edges").fetchone()[0] == 0
+    finally:
+        store.close()
+
+
+# ---------- bulk store helpers (Phase 29 batching) ----------
+
+
+def test_upsert_files_bulk_matches_single_file_semantics(tmp_path: Path) -> None:
+    from codegraph.uir import Language
+
+    store = GraphStore(tmp_path / "g.duckdb")
+    store.init_schema()
+    try:
+        store.upsert_files(
+            [
+                ("a.py", Language.PYTHON, "hash-a", 10),
+                ("b.py", Language.PYTHON, "hash-b", 20),
+            ]
+        )
+        assert store.get_file_hash("a.py") == "hash-a"
+        assert store.get_file_hash("b.py") == "hash-b"
+        # Re-upserting with a new hash replaces in place (same semantics as upsert_file).
+        store.upsert_files([("a.py", Language.PYTHON, "hash-a2", 11)])
+        assert store.get_file_hash("a.py") == "hash-a2"
+    finally:
+        store.close()
+
+
+def test_clear_files_bulk_clears_multiple_paths_language_agnostically(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _make_repo(
+        repo,
+        {
+            "a.py": "def f(): return g()\ndef g(): return 1\n",
+            "b.ts": "export function h() { return k(); }\nexport function k() { return 2; }\n",
+        },
+    )
+    db = tmp_path / "graph.duckdb"
+    CliRunner().invoke(app, ["index", str(repo), "--db", str(db)])
+
+    store = GraphStore(db)
+    try:
+        assert store.conn.execute("SELECT count(*) FROM edges").fetchone()[0] == 2
+        store.clear_files(["a.py", "b.ts"])
+        assert store.conn.execute("SELECT count(*) FROM edges").fetchone()[0] == 0
+        assert store.conn.execute("SELECT count(*) FROM entities").fetchone()[0] == 0
+    finally:
+        store.close()

@@ -116,6 +116,35 @@ class GraphStore:
             [path, language.value, hash_, loc],
         )
 
+    def upsert_files(self, rows: list[tuple[str, Language, str, int | None]]) -> None:
+        """Bulk insert-or-replace file rows: `(path, language, hash, loc)` each.
+
+        Same semantics/columns as `upsert_file`, batched -- a real-repo index
+        that called `upsert_file` once per file (alongside `upsert_entities`/
+        `upsert_edges`, one DataFrame-register round-trip each) spent most of
+        its wall time on that per-file overhead rather than parsing: DuckDB's
+        register/execute/unregister cycle costs low-tens-of-ms even for a
+        handful of rows, and a real repo has thousands of files. Callers
+        should accumulate rows across many files and flush in one batch.
+        """
+        if not rows:
+            return
+        data = [(path, language.value, hash_, loc) for path, language, hash_, loc in rows]
+        df = pd.DataFrame(  # noqa: F841 — referenced by name in SQL
+            data, columns=["path", "language", "hash", "loc"]
+        )
+        staging = f"_staging_files_{next(_stage_counter)}"
+        self.conn.register(staging, df)
+        try:
+            self.conn.execute(
+                f"""
+                INSERT OR REPLACE INTO files (path, language, hash, loc, indexed_at)
+                SELECT path, language, hash, loc, CURRENT_TIMESTAMP FROM {staging}
+                """
+            )
+        finally:
+            self.conn.unregister(staging)
+
     def upsert_entities(self, entities: list[UIREntity]) -> None:
         """Bulk insert-or-replace entities. Idempotent on entity_id.
 
@@ -280,11 +309,33 @@ class GraphStore:
         stale rows before writing the fresh parse, so deleted functions / removed
         imports don't linger in the graph.
         """
-        # Outbound edges (anything whose src_id includes this file).
-        self.conn.execute("DELETE FROM edges WHERE src_id LIKE ?", [f"py:{path}:%"])
+        # Outbound edges (anything whose src_id includes this file). Matches
+        # any language's entity_id shape (`<lang>:<path>:<qualified_name>`),
+        # not just Python's -- a `py:`-only pattern here previously left
+        # every non-Python language's stale edges (removed calls, imports,
+        # inherits) in the graph forever on every re-index after the first.
+        self.conn.execute("DELETE FROM edges WHERE src_id LIKE ?", [f"%:{path}:%"])
         # Entities for this file. FK constraint cascades nothing automatically,
         # but the file row stays so the upsert can update its hash.
         self.conn.execute("DELETE FROM entities WHERE file = ?", [path])
+
+    def clear_files(self, paths: list[str]) -> None:
+        """Bulk version of `clear_file` -- two DELETEs total instead of two
+        per path, for the same per-statement-overhead reason `upsert_files`/
+        `upsert_entities`/`upsert_edges` batch across files."""
+        if not paths:
+            return
+        df = pd.DataFrame({"path": paths})  # noqa: F841 — referenced by name in SQL
+        staging = f"_staging_clear_{next(_stage_counter)}"
+        self.conn.register(staging, df)
+        try:
+            self.conn.execute(
+                f"DELETE FROM edges WHERE EXISTS "
+                f"(SELECT 1 FROM {staging} s WHERE edges.src_id LIKE '%:' || s.path || ':%')"
+            )
+            self.conn.execute(f"DELETE FROM entities WHERE file IN (SELECT path FROM {staging})")
+        finally:
+            self.conn.unregister(staging)
 
     # ------------------------------------------------------------------
     # Counts (useful for CLI summaries + tests)

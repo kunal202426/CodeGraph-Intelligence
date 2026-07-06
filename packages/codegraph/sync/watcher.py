@@ -210,9 +210,7 @@ def index_one_file(
 
         # Drop stale rows when re-indexing an already-indexed file.
         if prev_hash is not None:
-            # Use a language-agnostic edge pattern (store.clear_file uses py:-only).
-            store.conn.execute("DELETE FROM edges WHERE src_id LIKE ?", [f"%:{rel_path}:%"])
-            store.conn.execute("DELETE FROM entities WHERE file = ?", [rel_path])
+            store.clear_file(rel_path)
 
         try:
             result = parser.parse(Path(rel_path), source)
