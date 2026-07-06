@@ -208,6 +208,35 @@ def index(
     parsed_files = 0
     unchanged_files = 0  # T2.3: hash matched, skipped re-parse
 
+    # Batched across files rather than upserted per-file: DuckDB's
+    # register/execute/unregister cycle for a bulk insert costs low-tens-of-ms
+    # per call even for a handful of rows, so calling it once per file (as
+    # this loop used to) spent most of a real repo's index time on that fixed
+    # overhead rather than parsing -- confirmed by profiling a ~1100-file
+    # real-world Python codebase: parsing took 1.5s, but per-file upserts took
+    # over a minute for the same files. Flushing every _FLUSH_CHUNK_SIZE files
+    # keeps peak memory bounded on very large repos while cutting the number
+    # of DB round-trips by ~500x.
+    _FLUSH_CHUNK_SIZE = 500
+    pending_stale_paths: list[str] = []
+    pending_file_rows: list[tuple[str, Language, str, int]] = []
+    pending_entities: list = []
+    pending_edges: list = []
+
+    def _flush() -> None:
+        if pending_stale_paths:
+            store.clear_files(pending_stale_paths)
+            pending_stale_paths.clear()
+        if pending_file_rows:
+            store.upsert_files(pending_file_rows)
+            pending_file_rows.clear()
+        if pending_entities:
+            store.upsert_entities(pending_entities)
+            pending_entities.clear()
+        if pending_edges:
+            store.upsert_edges(pending_edges)
+            pending_edges.clear()
+
     progress_cols = (
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
@@ -258,17 +287,17 @@ def index(
             # content). On first index there is nothing to clear — skipping the
             # DELETE scans avoids O(files * edges) work on a cold index.
             if prev_hash is not None:
-                store.clear_file(rel_path)
-            store.upsert_file(
-                path=rel_path,
-                language=lang,
-                hash_=current_hash,
-                loc=source.count("\n") + 1,
-            )
-            store.upsert_entities(result.entities)
-            store.upsert_edges(result.edges)
+                pending_stale_paths.append(rel_path)
+            pending_file_rows.append((rel_path, lang, current_hash, source.count("\n") + 1))
+            pending_entities.extend(result.entities)
+            pending_edges.extend(result.edges)
             parsed_files += 1
             progress.advance(task)
+
+            if len(pending_file_rows) >= _FLUSH_CHUNK_SIZE:
+                _flush()
+
+        _flush()
 
     # Cross-file symbol resolution: rewrites `py:?:...` edges in place.
     stats = resolve_symbols(store)
