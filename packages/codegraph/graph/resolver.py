@@ -279,7 +279,12 @@ def resolve_symbols(store: GraphStore) -> ResolutionStats:
     # Phase 1 — imports.
     for src_id, dst_id, edge_type, line in import_rows:
         new_dst, new_conf = _resolve_one(
-            dst_id, src_id, idx.by_file_name, idx.by_module_qname, idx.known_files
+            dst_id,
+            src_id,
+            idx.by_file_name,
+            idx.by_module_qname,
+            idx.known_files,
+            idx.by_qname_suffix,
         )
         resolved_edges.append(
             Edge(src_id=src_id, dst_id=new_dst, type=edge_type, line=line, confidence=new_conf)
@@ -424,6 +429,7 @@ def resolve_symbols(store: GraphStore) -> ResolutionStats:
 class _Indexes:
     by_file_name: dict[tuple[str, str], str]  # (file, name) → entity_id
     by_module_qname: dict[str, str]  # module qname → file path
+    by_qname_suffix: dict[str, list[str]]  # any dotted suffix of a module qname → matching paths
     known_files: set[str]  # all indexed file paths (TS module probing)
     name_by_id: dict[str, str]  # entity_id → name (import-target naming)
     entities_by_file: dict[str, dict[str, str]]  # file → {name: entity_id}
@@ -454,12 +460,22 @@ def _build_indexes(store: GraphStore) -> _Indexes:
             fmap[name] = entity_id
 
     by_module_qname: dict[str, str] = {}
+    by_qname_suffix: dict[str, list[str]] = {}
     known_files: set[str] = set()
     aliases: list[tuple[str, str]] = []  # (src-root-stripped qname, path)
     for (path,) in store.conn.execute("SELECT path FROM files").fetchall():
         known_files.add(path)
         qname = _path_to_module_qname(path)
         by_module_qname[qname] = path
+        # Every dotted suffix, not just the last segment: a repo with a
+        # nested root the caller doesn't know about (`cold/backend/` added
+        # to sys.path, so `services/leads_service.py` is imported as bare
+        # `from services import leads_service`, not the full
+        # `cold.backend.services.leads_service`) needs the multi-segment
+        # suffix `services.leads_service` to match, not just `leads_service`.
+        segments = qname.split(".")
+        for i in range(len(segments)):
+            by_qname_suffix.setdefault(".".join(segments[i:]), []).append(path)
         stripped = _strip_source_roots(qname)
         if stripped:
             aliases.append((stripped, path))
@@ -472,6 +488,7 @@ def _build_indexes(store: GraphStore) -> _Indexes:
     return _Indexes(
         by_file_name=by_file_name,
         by_module_qname=by_module_qname,
+        by_qname_suffix=by_qname_suffix,
         known_files=known_files,
         name_by_id=name_by_id,
         entities_by_file=entities_by_file,
@@ -650,6 +667,7 @@ def _resolve_one(
     by_file_name: dict[tuple[str, str], str],
     by_module_qname: dict[str, str],
     known_files: set[str],
+    by_qname_suffix: dict[str, list[str]] | None = None,
 ) -> tuple[str, float]:
     rel_match = _REL_RE.match(dst_id)
     if rel_match:
@@ -658,7 +676,9 @@ def _resolve_one(
         return _resolve_relative(rest, depth, src_id, by_file_name, by_module_qname)
 
     if dst_id.startswith("py:?:"):
-        return _resolve_absolute(dst_id[len("py:?:") :], by_file_name, by_module_qname)
+        return _resolve_absolute(
+            dst_id[len("py:?:") :], by_file_name, by_module_qname, by_qname_suffix or {}
+        )
 
     if dst_id.startswith("ts:?:"):
         return _resolve_typescript(dst_id[len("ts:?:") :], src_id, by_file_name, known_files)
@@ -692,7 +712,10 @@ def _resolve_absolute(
     qname: str,
     by_file_name: dict[tuple[str, str], str],
     by_module_qname: dict[str, str],
+    by_qname_suffix: dict[str, list[str]] | None = None,
 ) -> tuple[str, float]:
+    by_qname_suffix = by_qname_suffix or {}
+
     # Wildcard: `from X import *`
     if qname.endswith(".*"):
         module = qname[:-2]
@@ -709,14 +732,47 @@ def _resolve_absolute(
         # entity's actual qname (`packages.codegraph.graph.queries`).
         return f"py:{file}:{_path_to_module_qname(file)}", 1.0
 
+    # `import auth` (or `from services import leads_service`, a submodule
+    # import -- this encoding can't tell the two shapes apart, but both
+    # resolve to the same target either way) where the real file lives at
+    # some nested path the caller's sys.path setup hides (`backend/auth.py`
+    # run with `backend/` itself on sys.path, or `services/leads_service.py`
+    # imported as a bare submodule) is common in repos that don't use
+    # package-relative imports throughout -- src-root stripping only covers a
+    # fixed allowlist of directory names (src, packages, lib, app, source),
+    # not an arbitrary one like `backend`. Only resolve when the suffix is
+    # unambiguous repo-wide; two files whose qname ends the same way (e.g.
+    # two subsystems each with their own auth.py) must not guess which one
+    # a bare import meant.
+    suffix_candidates = by_qname_suffix.get(qname, [])
+    if len(suffix_candidates) == 1:
+        file = suffix_candidates[0]
+        return f"py:{file}:{_path_to_module_qname(file)}", 0.8
+
     # Try splitting `module.name`.
     if "." in qname:
         module, name = qname.rsplit(".", 1)
         file = by_module_qname.get(module)
+        via_fallback = False
+        if file is None:
+            candidates = by_qname_suffix.get(module, [])
+            if len(candidates) == 1:
+                file = candidates[0]
+                via_fallback = True
+            elif len(candidates) > 1:
+                # Two files share a qname suffix (e.g. `auth.py` and
+                # `routers/auth.py`) -- path alone can't disambiguate, but
+                # *which one actually defines the imported name* usually can:
+                # a router file sharing the name coincidentally won't also
+                # happen to define the same function the real module does.
+                defining = [c for c in candidates if (c, name) in by_file_name]
+                if len(defining) == 1:
+                    file = defining[0]
+                    via_fallback = True
         if file is not None:
             hit = by_file_name.get((file, name))
             if hit is not None:
-                return hit, 1.0
+                return hit, 0.8 if via_fallback else 1.0
             # File exists in repo but the imported name isn't an indexed entity:
             # could be a constant, an `__all__` re-export, etc. Treat as external
             # with a slightly higher confidence than pure stdlib.

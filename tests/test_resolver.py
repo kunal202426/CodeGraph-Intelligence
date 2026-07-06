@@ -509,3 +509,92 @@ def test_src_layout_module_import_resolves_to_real_module_id(tmp_path: Path) -> 
     finally:
         store.close()
     assert exists is not None, "module import must resolve to an entity that actually exists"
+
+
+# ---------- bare/flattened sys.path imports (found stress-testing a real
+# production FastAPI backend that runs with its backend/ dir on sys.path) ----------
+
+
+def test_bare_import_resolves_via_unambiguous_basename(tmp_path: Path) -> None:
+    """`from auth import get_current_user` where the real file lives at
+    `backend/auth.py`, not top-level `auth.py` -- common when a repo runs
+    with a subdirectory on sys.path instead of package-relative imports
+    throughout. Must resolve when the basename is unambiguous repo-wide."""
+    db = _index(
+        tmp_path,
+        {
+            "backend/auth.py": "def get_current_user():\n    pass\n",
+            "backend/routers/users.py": "from auth import get_current_user\n\ndef me():\n    return get_current_user()\n",
+        },
+    )
+    store = GraphStore(db)
+    try:
+        dsts = {dst for _, dst, _ in _edges(store)}
+    finally:
+        store.close()
+    assert "py:backend/auth.py:get_current_user" in dsts
+    assert not any(d.startswith("external:") and "get_current_user" in d for d in dsts)
+
+
+def test_ambiguous_basename_falls_back_to_the_file_that_defines_the_name(
+    tmp_path: Path,
+) -> None:
+    """Two files share a basename (`backend/auth.py` and
+    `backend/routers/auth.py`, a real shape found in production) -- path
+    alone can't disambiguate `from auth import get_current_user`, but only
+    one of the two actually defines get_current_user, which does."""
+    db = _index(
+        tmp_path,
+        {
+            "backend/auth.py": "def get_current_user():\n    pass\n",
+            "backend/routers/auth.py": "def list_routes():\n    pass\n",
+            "backend/routers/users.py": "from auth import get_current_user\n\ndef me():\n    return get_current_user()\n",
+        },
+    )
+    store = GraphStore(db)
+    try:
+        dsts = {dst for _, dst, _ in _edges(store)}
+    finally:
+        store.close()
+    assert "py:backend/auth.py:get_current_user" in dsts
+    assert not any("routers/auth.py" in d and "get_current_user" in d for d in dsts)
+
+
+def test_genuinely_ambiguous_bare_import_stays_external(tmp_path: Path) -> None:
+    """Two files share a basename AND both define the imported name -- no
+    signal left to disambiguate, so this must stay external rather than
+    guess (matches this project's fail-safe-missing-not-wrong philosophy)."""
+    db = _index(
+        tmp_path,
+        {
+            "a/util.py": "def helper():\n    pass\n",
+            "b/util.py": "def helper():\n    pass\n",
+            "c/main.py": "from util import helper\n\ndef run():\n    return helper()\n",
+        },
+    )
+    store = GraphStore(db)
+    try:
+        dsts = {dst for _, dst, _ in _edges(store)}
+    finally:
+        store.close()
+    assert "external:util.helper" in dsts
+
+
+def test_bare_submodule_import_resolves_by_suffix(tmp_path: Path) -> None:
+    """`from services import leads_service` (importing a submodule, not a
+    name within a module) where the real path is nested deeper than the
+    caller's sys.path root suggests -- resolves via a multi-segment suffix
+    match, not just a single bare basename."""
+    db = _index(
+        tmp_path,
+        {
+            "backend/services/leads_service.py": "def check_duplicate():\n    pass\n",
+            "backend/routers/leads.py": "from services import leads_service\n",
+        },
+    )
+    store = GraphStore(db)
+    try:
+        dsts = {dst for _, dst, _ in _edges(store)}
+    finally:
+        store.close()
+    assert "py:backend/services/leads_service.py:backend.services.leads_service" in dsts
