@@ -2,13 +2,18 @@
 
 ## Current
 
-- **Status:** ACTIVE — roadmap complete; competitive hardening (Phases 19-22, 24, 26-28) done;
-  CI green, `main` fully pushed, working tree clean.
+- **Status:** ACTIVE — roadmap complete; competitive hardening (Phases 19-22, 24, 26-28) plus
+  a real-world stress test (Phase 29) done; CI green, `main` fully pushed, working tree clean.
 - **Phase:** Maintenance & hardening (post-audit fixes, usability, repo hygiene). No phase
   currently in progress — safe to start a new session cold from this file.
-- **Tests:** 1102 passing, 1 live-skip (needs `ANTHROPIC_API_KEY`), 0 failing. Verified both
+- **Tests:** 1114 passing, 1 live-skip (needs `ANTHROPIC_API_KEY`), 0 failing. Verified both
   locally and on GitHub Actions (`gh run list`) as of the last commit below.
 - **Next task (all optional, none blocking):**
+  - JSX/React component usage (`<Component />`) isn't a call edge — confirmed the
+    second-largest dead-code false-positive source on a real React frontend, see
+    [docs/REAL_WORLD_STRESS_TEST_2026-07-06.md](docs/REAL_WORLD_STRESS_TEST_2026-07-06.md)
+  - Calls through an imported module namespace (`module.func()`) don't resolve — same report
+  - Pydantic models used only as type annotations still flag as dead code — same report
   - Ruby `include`-mixin inheritance (only `< Base` superclass syntax is walked today)
   - Rust trait default methods (Rust has no inheritance walk at all — traits ≠ classes)
   - Persistent model service to kill per-CLI embedding-model reload (see manual test #3)
@@ -18,8 +23,29 @@
     rejected as higher-risk than its benefit, see "Competitive hardening" section below;
     the fork's liveness watchdog belongs to the same process-model territory and is
     deferred with it); Phase 25 (optional Vue/Svelte coverage — never prioritized, no ask)
-- **Last session:** 2026-07-03
+- **Last session:** 2026-07-06
 - **Repo:** https://github.com/kunal202426/CodeGraph-Intelligence
+
+### Session 2026-07-06 — real-world stress test against a live production project (Phase 29)
+Indexed and queried a real, in-production full-stack project (backend + two frontends + a
+browser extension; not included in this repo, gitignored while present, deleted after
+testing). Full findings: [docs/REAL_WORLD_STRESS_TEST_2026-07-06.md](docs/REAL_WORLD_STRESS_TEST_2026-07-06.md).
+
+Four real, previously-invisible bugs found and fixed, each confirmed against the real
+codebase before and after: FastAPI `Depends(...)` dependency injection wasn't recognized as
+a call (the single largest false-positive-dead-code source — every auth/DB/quota dependency
+looked unused); bare imports never resolved when the real file lived at a nested `sys.path`
+root the source-root-stripping allowlist didn't cover (`from auth import X` where the file
+is `backend/auth.py`); CSS selectors were flagged as dead code (400 of 550 original
+candidates — CSS parses as `EntityType.FUNCTION`, and "reachable via calls/imports" is a
+category error for a rule referenced by class-name string matching in markup). Dead-code
+false positives dropped 550 → 135 (−75.5%) on the real project from these fixes alone.
+
+Two more real gaps confirmed and deliberately **not** fixed this pass (documented with
+exact repro in the report): JSX/React component usage (`<Component />`) isn't a call edge
+(second-largest false-positive source after CSS); calls through an imported module
+namespace (`module.func()`, as opposed to `from module import func`) don't resolve. Both
+are scoped, parser/resolver-level features that deserve their own design pass.
 
 ### Session 2026-07-03 (night, cont.) — battle hardening from the fork's bug history (Phase 28)
 Mined the fork's changelog and source as a free list of "bugs you will hit at scale" — each
