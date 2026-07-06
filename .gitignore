@@ -76,3 +76,6 @@ logs/
 
 # Stray file from a Windows `> nul` redirect gone wrong
 /nul
+
+# Internal dev-only planning docs — kept locally, not published
+/.internal/
