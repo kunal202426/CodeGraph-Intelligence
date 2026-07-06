@@ -70,3 +70,6 @@ logs/
 *.orig
 *~
 *.swn
+
+# Local-only real-world stress-test project — never committed, never uploaded
+/Test Project/
