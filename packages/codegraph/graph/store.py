@@ -60,6 +60,21 @@ _EMBEDDING_DIM = 384
 _stage_counter = itertools.count()
 
 
+def escape_like(text: str) -> str:
+    """Neutralize SQL `LIKE` wildcards in a literal string.
+
+    A file path routinely contains `_` (and could contain `%`), both of which
+    are `LIKE` wildcards -- `_` matches any single character. Interpolating a
+    raw path into a `%:{path}:%` pattern therefore lets one file's cleanup
+    match a *different* file's edges (e.g. clearing `test_resolver.py` also
+    matches `testXresolver.py`), silently deleting real edges. Escape the
+    wildcards and the escape char itself, then pair with `ESCAPE '\\'` in the
+    query. The backslash must be escaped first so the escapes added for `%`/`_`
+    aren't themselves doubled.
+    """
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 class GraphStore:
     """DuckDB-backed graph storage."""
 
@@ -314,7 +329,10 @@ class GraphStore:
         # not just Python's -- a `py:`-only pattern here previously left
         # every non-Python language's stale edges (removed calls, imports,
         # inherits) in the graph forever on every re-index after the first.
-        self.conn.execute("DELETE FROM edges WHERE src_id LIKE ?", [f"%:{path}:%"])
+        # `escape_like` keeps the path's own `_`/`%` from acting as wildcards.
+        self.conn.execute(
+            "DELETE FROM edges WHERE src_id LIKE ? ESCAPE '\\'", [f"%:{escape_like(path)}:%"]
+        )
         # Entities for this file. FK constraint cascades nothing automatically,
         # but the file row stays so the upsert can update its hash.
         self.conn.execute("DELETE FROM entities WHERE file = ?", [path])
@@ -325,13 +343,17 @@ class GraphStore:
         `upsert_entities`/`upsert_edges` batch across files."""
         if not paths:
             return
-        df = pd.DataFrame({"path": paths})  # noqa: F841 — referenced by name in SQL
+        # `pat` carries the wildcard-escaped LIKE pattern (see `escape_like`);
+        # `path` stays raw for the exact-match entity delete.
+        df = pd.DataFrame(  # noqa: F841 — referenced by name in SQL
+            {"path": paths, "pat": [f"%:{escape_like(p)}:%" for p in paths]}
+        )
         staging = f"_staging_clear_{next(_stage_counter)}"
         self.conn.register(staging, df)
         try:
             self.conn.execute(
                 f"DELETE FROM edges WHERE EXISTS "
-                f"(SELECT 1 FROM {staging} s WHERE edges.src_id LIKE '%:' || s.path || ':%')"
+                f"(SELECT 1 FROM {staging} s WHERE edges.src_id LIKE s.pat ESCAPE '\\')"
             )
             self.conn.execute(f"DELETE FROM entities WHERE file IN (SELECT path FROM {staging})")
         finally:

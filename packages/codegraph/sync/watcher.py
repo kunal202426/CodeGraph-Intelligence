@@ -41,7 +41,7 @@ import duckdb
 import pathspec
 
 from codegraph.graph.resolver import resolve_symbols
-from codegraph.graph.store import GraphStore
+from codegraph.graph.store import GraphStore, escape_like
 from codegraph.uir import hash_source
 from codegraph.walker import ALWAYS_EXCLUDE, detect_language, looks_generated, walk
 
@@ -275,7 +275,11 @@ def delete_one_file(rel_path: str, db: Path) -> None:
     try:
         store.init_schema()
         # Outbound edges from any entity in this file (language-agnostic pattern).
-        store.conn.execute("DELETE FROM edges WHERE src_id LIKE ?", [f"%:{rel_path}:%"])
+        # `escape_like` keeps the path's own `_`/`%` from acting as wildcards and
+        # matching a different file's edges.
+        store.conn.execute(
+            "DELETE FROM edges WHERE src_id LIKE ? ESCAPE '\\'", [f"%:{escape_like(rel_path)}:%"]
+        )
         store.conn.execute("DELETE FROM entities WHERE file = ?", [rel_path])
         store.conn.execute("DELETE FROM files WHERE path = ?", [rel_path])
     finally:

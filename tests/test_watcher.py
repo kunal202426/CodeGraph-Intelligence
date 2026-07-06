@@ -244,6 +244,30 @@ def test_delete_one_file_removes_entities_and_file_record(tmp_path: Path) -> Non
     assert n_file == 0
 
 
+def test_delete_one_file_does_not_delete_a_sibling_files_edges(tmp_path: Path) -> None:
+    """`delete_one_file`'s edge cleanup uses a `LIKE` pattern; a `_` in the
+    deleted path must not wildcard-match and delete an unrelated sibling
+    file's edges (`user_repo.py` vs `userXrepo.py`)."""
+    from codegraph.uir import Edge
+
+    db = tmp_path / "graph.duckdb"
+    with GraphStore(db) as store:
+        store.init_schema()
+        store.upsert_edges(
+            [
+                Edge(src_id="py:user_repo.py:foo", dst_id="py:x:1", type="calls", line=1),
+                Edge(src_id="py:userXrepo.py:bar", dst_id="py:y:1", type="calls", line=1),
+            ]
+        )
+
+    delete_one_file("user_repo.py", db)
+
+    with GraphStore(db) as store:
+        store.init_schema()
+        remaining = {r[0] for r in store.conn.execute("SELECT src_id FROM edges").fetchall()}
+    assert remaining == {"py:userXrepo.py:bar"}
+
+
 # --------------------------------------------------------------------------- #
 # RepoWatcher interface
 # --------------------------------------------------------------------------- #

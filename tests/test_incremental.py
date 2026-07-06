@@ -345,3 +345,60 @@ def test_clear_files_bulk_clears_multiple_paths_language_agnostically(tmp_path: 
         assert store.conn.execute("SELECT count(*) FROM entities").fetchone()[0] == 0
     finally:
         store.close()
+
+
+# ---------- LIKE-wildcard escaping in edge cleanup ----------
+
+
+def test_clear_file_does_not_delete_a_sibling_files_edges(tmp_path: Path) -> None:
+    """A file path routinely contains `_`, which is a SQL LIKE wildcard. The
+    edge-cleanup pattern `%:{path}:%` must not let clearing `test_resolver.py`
+    also match (and delete) `testXresolver.py`'s edges -- that would silently
+    drop real edges from an unrelated file on every incremental re-index."""
+    from codegraph.uir import Edge
+
+    store = GraphStore(tmp_path / "g.duckdb")
+    store.init_schema()
+    try:
+        store.upsert_edges(
+            [
+                Edge(src_id="py:tests/test_resolver.py:foo", dst_id="py:x:1", type="calls", line=1),
+                Edge(src_id="py:tests/testXresolver.py:bar", dst_id="py:y:1", type="calls", line=1),
+            ]
+        )
+        store.clear_file("tests/test_resolver.py")
+        remaining = {r[0] for r in store.conn.execute("SELECT src_id FROM edges").fetchall()}
+        assert remaining == {"py:tests/testXresolver.py:bar"}
+    finally:
+        store.close()
+
+
+def test_clear_files_does_not_delete_a_sibling_files_edges(tmp_path: Path) -> None:
+    """Bulk `clear_files` shares the same LIKE-wildcard hazard as `clear_file`;
+    the escaped pattern must isolate `data_v1.py` from `dataXv1.py`."""
+    from codegraph.uir import Edge
+
+    store = GraphStore(tmp_path / "g.duckdb")
+    store.init_schema()
+    try:
+        store.upsert_edges(
+            [
+                Edge(src_id="py:a/data_v1.py:foo", dst_id="py:x:1", type="calls", line=1),
+                Edge(src_id="py:a/dataXv1.py:bar", dst_id="py:y:1", type="calls", line=1),
+            ]
+        )
+        store.clear_files(["a/data_v1.py"])
+        remaining = {r[0] for r in store.conn.execute("SELECT src_id FROM edges").fetchall()}
+        assert remaining == {"py:a/dataXv1.py:bar"}
+    finally:
+        store.close()
+
+
+def test_escape_like_neutralizes_wildcards() -> None:
+    from codegraph.graph.store import escape_like
+
+    # `_`, `%`, and the escape char itself are all neutralized; other chars pass through.
+    assert escape_like("a_b") == "a\\_b"
+    assert escape_like("50%") == "50\\%"
+    assert escape_like("a\\b") == "a\\\\b"
+    assert escape_like("plain/path.py") == "plain/path.py"
