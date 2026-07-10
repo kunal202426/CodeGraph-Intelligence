@@ -29,6 +29,8 @@ _LAYER_KEYWORDS: dict[str, frozenset[str]] = {
             "apis",
             "routes",
             "route",
+            "routers",
+            "router",
             "controllers",
             "controller",
             "views",
@@ -89,9 +91,23 @@ def classify_layer(top_dir: str) -> str:
     return "other"
 
 
-def _top_dir(file: str) -> str:
-    head, sep, _ = file.partition("/")
-    return head if sep else "."
+def _layer_dir(file: str) -> tuple[str, str]:
+    """Return (matched_dir, layer) for a file path.
+
+    Walks every directory segment from the root down and classifies by the
+    first one that matches a known layer keyword -- so a layer dir nested
+    under a project/workspace folder (`cold/backend/routers/auth.py` in a
+    monorepo with several sub-apps, each with its own `backend/routers`
+    /`services`/...) is found just as reliably as one sitting at the repo
+    root. Falls back to the top-level directory, classified as "other", when
+    no segment matches anything.
+    """
+    parts = file.split("/")[:-1]  # directory components, excluding the filename
+    for i, part in enumerate(parts):
+        layer = classify_layer(part)
+        if layer != "other":
+            return "/".join(parts[: i + 1]), layer
+    return (parts[0] if parts else "."), "other"
 
 
 @dataclass
@@ -115,8 +131,8 @@ def analyze_layers(conn: duckdb.DuckDBPyConnection) -> LayerReport:
     dir_rows = conn.execute("SELECT DISTINCT file FROM entities").fetchall()
     layers_present: dict[str, set[str]] = {}
     for (file,) in dir_rows:
-        d = _top_dir(file)
-        layers_present.setdefault(classify_layer(d), set()).add(d)
+        d, layer = _layer_dir(file)
+        layers_present.setdefault(layer, set()).add(d)
 
     # Cross-file import edges (same shape as the cycle detector).
     edge_rows = conn.execute(
@@ -132,8 +148,8 @@ def analyze_layers(conn: duckdb.DuckDBPyConnection) -> LayerReport:
     flows: dict[tuple[str, str], int] = {}
     violations: list[LayerViolation] = []
     for src_file, dst_file in edge_rows:
-        src_layer = classify_layer(_top_dir(src_file))
-        dst_layer = classify_layer(_top_dir(dst_file))
+        _, src_layer = _layer_dir(src_file)
+        _, dst_layer = _layer_dir(dst_file)
         if src_layer == dst_layer:
             continue
         flows[(src_layer, dst_layer)] = flows.get((src_layer, dst_layer), 0) + 1

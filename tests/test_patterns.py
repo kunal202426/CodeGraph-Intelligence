@@ -45,6 +45,7 @@ _LAYERED = {
 def test_classify_layer_keywords() -> None:
     assert classify_layer("api") == "presentation"
     assert classify_layer("controllers") == "presentation"
+    assert classify_layer("routers") == "presentation"  # FastAPI convention
     assert classify_layer("services") == "service"
     assert classify_layer("models") == "data"
     assert classify_layer("repository") == "data"
@@ -68,6 +69,34 @@ def test_layers_detected(runner: CliRunner, tmp_path: Path) -> None:
     assert "api" in report.layers_present["presentation"]
     assert "services" in report.layers_present["service"]
     assert "models" in report.layers_present["data"]
+
+
+def test_layers_detected_when_nested_under_app_dir(runner: CliRunner, tmp_path: Path) -> None:
+    """Regression test: layer dirs nested under a project/workspace folder
+    (`app/backend/routers/...`) must be found, not just ones at the repo
+    root -- the common case for a monorepo with multiple sub-apps."""
+    repo = tmp_path / "repo"
+    _make_repo(
+        repo,
+        {
+            "app/backend/routers/__init__.py": "",
+            "app/backend/services/__init__.py": "",
+            "app/backend/routers/auth.py": (
+                "from app.backend.services.logic import handle\n\n\n"
+                "def route():\n    return handle()\n"
+            ),
+            "app/backend/services/logic.py": "def handle():\n    return 1\n",
+        },
+    )
+    db = tmp_path / "g.duckdb"
+    _index(runner, repo, db)
+    store = GraphStore(db)
+    try:
+        report = analyze_layers(store.conn)
+    finally:
+        store.close()
+    assert "app/backend/routers" in report.layers_present["presentation"]
+    assert "app/backend/services" in report.layers_present["service"]
 
 
 def test_violation_flagged(runner: CliRunner, tmp_path: Path) -> None:
