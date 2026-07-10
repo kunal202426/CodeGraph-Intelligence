@@ -33,17 +33,16 @@ This repo is indexed by CodeGraph. Its tools return ~10x fewer tokens than readi
 and capture cross-file call/import edges single files miss. Use them by default.
 
 **Rules (every task):**
-1. Call `index_status` once. If `stale: true`, call `reindex`.
-2. Do NOT open a source file to understand code until you have called
-   `get_context("<concept>")`. Read a raw file only for the exact full body of an entity
-   `get_context` surfaced.
+1. Do NOT open a source file before calling `get_context("<concept>")`. Skip `index_status`
+   -- `get_context` reports staleness itself via `warnings`; call `reindex` only if it appears.
+2. Know the small, specific edit target already? Call `get_context(..., detail="full")`
+   directly -- skip a summary-then-full two-step. Every round-trip costs real tokens.
 3. After a `get_context` call, report the savings: `CodeGraph: ~<tokens_estimated> vs
    ~<tokens_if_read> tokens (<savings_ratio>x less)`.
 
 **Which tool:**
-- `get_context(query)` -- START HERE. Search + signatures + callers/callees, plus
-  `tokens_estimated` / `tokens_if_read` / `savings_ratio`. `detail="full"` = complete
-  source (1-2 entities max).
+- `get_context(query)` -- START HERE. Search + signatures + callers/callees, token
+  savings, staleness. `detail="full"` = complete source (1-2 max).
 - `get_entity_context(entity_id)` -- full source + neighbours for ONE entity.
 - `impact_analysis(entity_id)` -- what breaks if I change this (reverse callers).
 - `trace_path(from_id, to_id)` -- shortest call chain A to B.

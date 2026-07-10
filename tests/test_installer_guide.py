@@ -47,6 +47,21 @@ def test_guide_is_strong_mandate_with_savings_instruction(tmp_path: Path) -> Non
     assert "tokens_if_read" in text
 
 
+def test_guide_does_not_mandate_a_separate_index_status_call(tmp_path: Path) -> None:
+    """Regression test: the guide used to mandate a separate `index_status` call
+    before every task, even though `get_context` already checks staleness itself
+    and surfaces it via a `warnings` field -- a guaranteed extra round-trip with
+    zero new information. Found via a real A/B cost measurement (a full session
+    cost 34% more with codegraph than without it, on identical questions/quality;
+    this redundant call was the clearest concrete contributor). The guide must
+    still tell the agent to skip straight to `get_context` and only call
+    `reindex` in response to its `warnings` field, not call `index_status` as an
+    unconditional first step."""
+    text = write_agent_guide(tmp_path).read_text(encoding="utf-8")
+    assert "Skip `index_status`" in text
+    assert "get_context` reports staleness itself via `warnings`" in text
+
+
 def test_write_is_idempotent(tmp_path: Path) -> None:
     write_agent_guide(tmp_path)
     first = (tmp_path / GUIDE_FILENAME).read_text(encoding="utf-8")
