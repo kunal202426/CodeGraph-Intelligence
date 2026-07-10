@@ -63,6 +63,22 @@ _REGISTRATION_DECORATORS = frozenset(
         "head",
         "options",
         "task",  # Celery / task queues
+        # Java `@Annotation` is the exact same leading-decorator text shape as
+        # a Python `@decorator`, so the same scan catches it -- these are
+        # Spring's dependency-injection stereotypes: a bean the container
+        # instantiates via classpath scanning + reflection, never a `new
+        # ClassName()` the static call graph could see. Without these, every
+        # @Component/@Service/@Configuration/... class in a real Spring
+        # codebase showed up as dead code -- confirmed the dominant false
+        # positive there (roughly two-thirds of all candidates).
+        "Component",
+        "Service",
+        "Repository",
+        "Controller",
+        "RestController",
+        "Configuration",
+        "SpringBootApplication",
+        "Bean",
     }
 )
 

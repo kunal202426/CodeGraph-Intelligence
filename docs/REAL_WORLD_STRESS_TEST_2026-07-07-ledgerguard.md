@@ -198,3 +198,45 @@ lower-priority polish item did fall out of that detour though: `index` reports c
 "skipped as unsupported language" and "skipped as generated/minified" but not "skipped as
 binary," so a real file that ends up looking binary (a bad encoding, a partial write) currently
 disappears from the index with zero explanation. Not fixed this pass — logged for later.
+
+## Bug found and fixed: Spring's dependency-injection stereotypes weren't recognized as framework registration
+
+Continuing the checklist on LedgerGuard: `codegraph deadcode` flagged 31 candidates.
+Spot-checking a handful: nearly every `@Configuration`/`@Service`/`@RestController`/
+`@SpringBootApplication`-annotated class was flagged — Spring's IoC container instantiates
+these via classpath scanning + reflection, never a `new ClassName()` the static call graph
+could see, exactly the same shape as the already-handled "Typer command / Flask route /
+pytest fixture" framework-registration category, just never extended to Java's DI
+annotations.
+
+**Fix:** [`refactor.py`](../packages/codegraph/analysis/refactor.py)'s
+`_is_framework_registered` already generically scans "lines before a def/class that start
+with `@`" against a registration-decorator allowlist — Java's `@Annotation` syntax is the
+exact same text shape as a Python `@decorator`, so no new parsing was needed, just added
+`Component`/`Service`/`Repository`/`Controller`/`RestController`/`Configuration`/
+`SpringBootApplication`/`Bean` to the existing allowlist. Verified live: LedgerGuard's
+candidate count dropped **31 → 16**, all annotated classes correctly excluded, remaining 16
+are plausible already-known categories (model classes used only as type references, SQL
+migration table names, JUnit test classes). 1 new test in `test_refactor.py`.
+
+## Real, deep bug found — confirmed, not fixed this pass: module and top-level entities can collide on the same entity_id
+
+While building the regression test above, an unrelated single-class file at the repo root
+(`ReallyDead.java`, no package-directory nesting) produced **zero** dead-code candidates
+where one was expected. Root cause: `make_entity_id(language, file, qualified_name)`
+produces the exact same id for a file's module entity and its sole top-level class/function
+whenever their qualified names coincide (a file with no directory prefix distinguishing the
+module's computed qualified name from the class's own name) — confirmed the second entity
+silently clobbers the first in the DB (`INSERT OR REPLACE` on a shared primary key).
+**Confirmed cross-language, not Java-specific**: reproduced the identical collision in
+TypeScript (`export class Foo` in a root-level `Foo.ts` → both entities get `ts:Foo.ts:Foo`).
+
+Not fixed this pass: a proper fix means making module entity_ids always distinguishable
+from ordinary entities, which the resolver's `by_file_name[(file, module_qname)]`-style
+lookups (used throughout import/default-export resolution, including two of today's own
+fixes) depend on in their current form — real architectural surgery across a lot of
+call sites, not a quick patch, and not worth rushing given real-world impact is narrow:
+Maven/Gradle (and most build tooling) requires Java's directory layout to mirror its package
+declaration, so a genuinely flat single-class file at a repo root is rare outside tiny
+demos/scripts. Recorded here with a clear, reproducible repro for whenever it's tackled
+properly.

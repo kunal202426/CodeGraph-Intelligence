@@ -126,6 +126,43 @@ def test_framework_registered_excluded(runner: CliRunner, tmp_path: Path) -> Non
     assert "really_dead" in names  # genuinely unreferenced, no decorator
 
 
+def test_spring_annotated_classes_excluded(runner: CliRunner, tmp_path: Path) -> None:
+    """Regression test: Spring's dependency-injection stereotypes
+    (@Component/@Service/@Configuration/...) instantiate a bean via classpath
+    scanning + reflection, never a `new ClassName()` the static call graph
+    can see -- found live against a real Spring codebase, where this was the
+    dominant false-positive source (roughly two-thirds of all candidates)."""
+    # Nested under a package directory, like every real Maven/Gradle Java
+    # project -- a bare-root single-class file hits an unrelated, separate
+    # entity_id collision bug (module vs. class share an id when their
+    # qualified names coincide), not what this test is about.
+    repo = tmp_path / "repo"
+    _make_repo(
+        repo,
+        {
+            "com/example/WebConfig.java": (
+                "package com.example;\n\n"
+                "@org.springframework.context.annotation.Configuration\n"
+                "public class WebConfig {\n"
+                "    public void setup() {}\n"
+                "}\n"
+            ),
+            "com/example/GreetingService.java": (
+                "package com.example;\n\n@Service\npublic class GreetingService {\n"
+                '    public String greet() { return "hi"; }\n}\n'
+            ),
+            "com/example/ReallyDead.java": (
+                "package com.example;\n\npublic class ReallyDead {\n"
+                "    public void unused() {}\n}\n"
+            ),
+        },
+    )
+    names = _names(repo, tmp_path / "g.duckdb", runner)
+    assert "WebConfig" not in names  # @Configuration
+    assert "GreetingService" not in names  # @Service
+    assert "ReallyDead" in names  # genuinely unreferenced, no annotation
+
+
 # ---------- CLI ----------
 
 
