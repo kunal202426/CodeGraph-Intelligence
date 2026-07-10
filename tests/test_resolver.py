@@ -532,7 +532,9 @@ def test_backend_rooted_absolute_import_resolves(tmp_path: Path) -> None:
         ).fetchall()
     finally:
         store.close()
-    assert any("route" in c[0] for c in callers), f"expected route->get_current_user edge: {callers}"
+    assert any("route" in c[0] for c in callers), (
+        f"expected route->get_current_user edge: {callers}"
+    )
 
 
 def test_src_layout_absolute_import_resolves(tmp_path: Path) -> None:

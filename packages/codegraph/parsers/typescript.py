@@ -591,9 +591,7 @@ class TypeScriptParser:
                 named = [c for c in name.children if c.is_named]
                 if named:
                     prop = named[-1]
-                    return source[prop.start_byte : prop.end_byte].decode(
-                        "utf-8", errors="replace"
-                    )
+                    return source[prop.start_byte : prop.end_byte].decode("utf-8", errors="replace")
             return None
 
         fn = call_node.child_by_field_name("function")

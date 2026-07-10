@@ -187,9 +187,7 @@ def test_java_same_package_call_resolves_without_import(tmp_path: Path) -> None:
         },
     )
     conn = duckdb.connect(str(db), read_only=True)
-    calls = conn.execute(
-        "SELECT src_id, dst_id FROM edges WHERE type = 'calls'"
-    ).fetchall()
+    calls = conn.execute("SELECT src_id, dst_id FROM edges WHERE type = 'calls'").fetchall()
     conn.close()
     assert (
         "java:com/example/AnomalyScorer.java:AnomalyScorer",

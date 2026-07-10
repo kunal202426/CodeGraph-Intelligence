@@ -161,8 +161,7 @@ def test_index_purges_entities_for_files_no_longer_walked(
     try:
         assert store.count_files() == 2
         assert any(
-            r[0] == "gone.py"
-            for r in store.conn.execute("SELECT path FROM files").fetchall()
+            r[0] == "gone.py" for r in store.conn.execute("SELECT path FROM files").fetchall()
         )
     finally:
         store.close()

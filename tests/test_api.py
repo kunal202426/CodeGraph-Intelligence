@@ -93,9 +93,7 @@ def test_module_graph_includes_import_free_cross_file_calls(tmp_path: Path) -> N
     )
     db = tmp_path / "g.duckdb"
     assert (
-        CliRunner()
-        .invoke(cli_app, ["index", str(repo), "--db", str(db), "--no-embed"])
-        .exit_code
+        CliRunner().invoke(cli_app, ["index", str(repo), "--db", str(db), "--no-embed"]).exit_code
         == 0
     )
     data = TestClient(create_app(db)).get("/api/graph?type=module").json()

@@ -280,7 +280,8 @@ def test_field_initializer_call_attributed_to_class(parser: JavaParser) -> None:
     result = parser.parse(Path("AnomalyScorer.java"), src)
     edges = _call_edges(result)
     assert any(
-        e.dst_id == "java:?call:WelfordStats" and e.src_id == "java:AnomalyScorer.java:AnomalyScorer"
+        e.dst_id == "java:?call:WelfordStats"
+        and e.src_id == "java:AnomalyScorer.java:AnomalyScorer"
         for e in edges
     )
 
