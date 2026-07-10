@@ -291,3 +291,41 @@ def test_serve_singular_noun_for_one_file(tmp_path: Path) -> None:
 
     flat = result.output.replace("\n", "")
     assert "1 file changed" in flat or "1 file" in flat
+
+
+def test_serve_warms_embedding_model_when_embeddings_present(tmp_path: Path) -> None:
+    """Regression test: `serve` used to have no warm-up at all, so the first
+    semantic-search/ask request silently paid the full model-load cost --
+    the same bug `watch` had, fixed the same way."""
+    repo, db = tmp_path / "repo", tmp_path / "graph.duckdb"
+    _index_repo(repo, db, {"a.py": "def f():\n    pass\n"})
+
+    with (
+        patch(_STALE_PATCH, return_value=0),
+        patch(_APP_PATCH, return_value=MagicMock()),
+        patch(_UVICORN_PATCH),
+        patch("codegraph.graph.store.GraphStore.count_embedded", return_value=5),
+        patch("codegraph.embeddings.pipeline.embed_one") as embed_one_mock,
+    ):
+        result = _RUNNER.invoke(app, ["serve", "--db", str(db), *_SERVE_FLAGS])
+
+    embed_one_mock.assert_called_once()
+    assert "Loading embedding model" in result.output
+
+
+def test_serve_skips_warm_up_when_no_embeddings(tmp_path: Path) -> None:
+    """No embeddings in the index (e.g. indexed with --no-embed) -- nothing
+    to warm up, so don't pay the model-load cost for no reason."""
+    repo, db = tmp_path / "repo", tmp_path / "graph.duckdb"
+    _index_repo(repo, db, {"a.py": "def f():\n    pass\n"})
+
+    with (
+        patch(_STALE_PATCH, return_value=0),
+        patch(_APP_PATCH, return_value=MagicMock()),
+        patch(_UVICORN_PATCH),
+        patch("codegraph.embeddings.pipeline.embed_one") as embed_one_mock,
+    ):
+        result = _RUNNER.invoke(app, ["serve", "--db", str(db), *_SERVE_FLAGS])
+
+    embed_one_mock.assert_not_called()
+    assert "Loading embedding model" not in result.output

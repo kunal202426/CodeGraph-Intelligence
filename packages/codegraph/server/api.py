@@ -234,11 +234,16 @@ def _maybe_embed(query: str) -> list[float] | None:
 
 
 def _module_graph(conn: duckdb.DuckDBPyConnection) -> dict[str, list[dict]]:
-    """File-level import graph keyed by each file's module entity_id.
+    """File-level dependency graph keyed by each file's module entity_id.
 
     Nodes are module entities (id = entity_id, label = file path) so the UI can
-    fetch a clicked node's full record from /api/entity. Edges map file→file
-    imports onto the corresponding module entity_ids.
+    fetch a clicked node's full record from /api/entity. An edge means "this
+    file depends on that file" via either an `imports` or a cross-file `calls`
+    edge -- the latter matters because some languages (Java's same-package
+    visibility, a JS default import) create a real cross-file call with no
+    `imports` edge at all, which would otherwise make two clearly-related
+    files look completely disconnected in the graph. `type` is "imports" when
+    at least one import edge exists between the pair, else "calls".
     """
     nodes = [
         {"id": eid, "label": file, "language": language}
@@ -253,16 +258,17 @@ def _module_graph(conn: duckdb.DuckDBPyConnection) -> dict[str, list[dict]]:
         ).fetchall()
     ]
     edges = [
-        {"source": src, "target": dst, "type": "imports"}
-        for src, dst in conn.execute(
+        {"source": src, "target": dst, "type": "imports" if has_import else "calls"}
+        for src, dst, has_import in conn.execute(
             """
-            SELECT DISTINCT sm.entity_id, dm.entity_id
+            SELECT sm.entity_id, dm.entity_id, MAX(e.type = 'imports') AS has_import
             FROM edges e
             JOIN entities s ON s.entity_id = e.src_id
             JOIN entities d ON d.entity_id = e.dst_id
             JOIN entities sm ON sm.file = s.file AND sm.type = 'module'
             JOIN entities dm ON dm.file = d.file AND dm.type = 'module'
-            WHERE e.type = 'imports' AND s.file <> d.file
+            WHERE e.type IN ('imports', 'calls') AND s.file <> d.file
+            GROUP BY sm.entity_id, dm.entity_id
             """
         ).fetchall()
     ]

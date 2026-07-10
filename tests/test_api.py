@@ -74,6 +74,42 @@ def test_module_graph(client: TestClient) -> None:
     assert all(e["source"] in node_ids and e["target"] in node_ids for e in data["edges"])
 
 
+def test_module_graph_includes_import_free_cross_file_calls(tmp_path: Path) -> None:
+    """Regression test: the module graph used to only draw `imports` edges,
+    so two files connected only by a cross-file `calls` edge (no `imports`
+    edge at all -- e.g. Java's same-package visibility, a JS default import)
+    looked completely disconnected even though they clearly depend on each
+    other. Found live: a real repo's module graph showed 47 nodes / 7 edges
+    when 14 real file-to-file relationships existed."""
+    repo = tmp_path / "repo"
+    (repo / "com/example").mkdir(parents=True)
+    (repo / "com/example/WelfordStats.java").write_text(
+        "package com.example;\npublic class WelfordStats {\n    public WelfordStats() {}\n}\n"
+    )
+    (repo / "com/example/AnomalyScorer.java").write_text(
+        "package com.example;\npublic class AnomalyScorer {\n"
+        "    private final WelfordStats baseline = new WelfordStats();\n"
+        "}\n"
+    )
+    db = tmp_path / "g.duckdb"
+    assert (
+        CliRunner()
+        .invoke(cli_app, ["index", str(repo), "--db", str(db), "--no-embed"])
+        .exit_code
+        == 0
+    )
+    data = TestClient(create_app(db)).get("/api/graph?type=module").json()
+    labels_by_id = {n["id"]: n["label"] for n in data["nodes"]}
+    matches = [
+        e
+        for e in data["edges"]
+        if labels_by_id.get(e["source"], "").endswith("AnomalyScorer.java")
+        and labels_by_id.get(e["target"], "").endswith("WelfordStats.java")
+    ]
+    assert len(matches) == 1
+    assert matches[0]["type"] == "calls"  # no import statement exists between them
+
+
 def test_entity_graph_for_file(client: TestClient) -> None:
     data = client.get("/api/graph?type=entity&file=auth/login.py").json()
     labels = {n["label"] for n in data["nodes"]}
