@@ -285,6 +285,7 @@ def resolve_symbols(store: GraphStore) -> ResolutionStats:
             idx.by_module_qname,
             idx.known_files,
             idx.by_qname_suffix,
+            idx.default_export_by_file,
         )
         resolved_edges.append(
             Edge(src_id=src_id, dst_id=new_dst, type=edge_type, line=line, confidence=new_conf)
@@ -314,7 +315,9 @@ def resolve_symbols(store: GraphStore) -> ResolutionStats:
                 idx.name_by_id,
             )
         else:
-            new_dst, new_conf = _resolve_call(dst_id, src_id, idx.entities_by_file, imports_by_file)
+            new_dst, new_conf = _resolve_call(
+                dst_id, src_id, idx.entities_by_file, imports_by_file, idx.entities_by_dir
+            )
         resolved_edges.append(
             Edge(src_id=src_id, dst_id=new_dst, type=edge_type, line=line, confidence=new_conf)
         )
@@ -433,20 +436,24 @@ class _Indexes:
     known_files: set[str]  # all indexed file paths (TS module probing)
     name_by_id: dict[str, str]  # entity_id → name (import-target naming)
     entities_by_file: dict[str, dict[str, str]]  # file → {name: entity_id}
+    entities_by_dir: dict[str, dict[str, str]]  # dir → {name: exported entity_id} (same-package)
     entity_ids_by_name: dict[str, list[str]]  # name → every entity_id repo-wide (route handlers)
     entity_ids_by_qname: dict[
         str, list[str]
     ]  # qualified_name → every entity_id (receiver-typed calls)
+    default_export_by_file: dict[str, str]  # file → sole exported non-module entity, if unambiguous
 
 
 def _build_indexes(store: GraphStore) -> _Indexes:
     by_file_name: dict[tuple[str, str], str] = {}
     name_by_id: dict[str, str] = {}
     entities_by_file: dict[str, dict[str, str]] = {}
+    entities_by_dir: dict[str, dict[str, str]] = {}
     entity_ids_by_name: dict[str, list[str]] = {}
     entity_ids_by_qname: dict[str, list[str]] = {}
-    for entity_id, file, name, qname in store.conn.execute(
-        "SELECT entity_id, file, name, qualified_name FROM entities"
+    exported_non_module_by_file: dict[str, list[str]] = {}
+    for entity_id, file, name, qname, etype, is_exported in store.conn.execute(
+        "SELECT entity_id, file, name, qualified_name, type, is_exported FROM entities"
     ).fetchall():
         by_file_name[(file, name)] = entity_id
         name_by_id[entity_id] = name
@@ -458,6 +465,26 @@ def _build_indexes(store: GraphStore) -> _Indexes:
         # which is what a bare `validate()` call most likely targets.
         if name not in fmap or qname == name:
             fmap[name] = entity_id
+        if is_exported and etype != "module":
+            # Aggregated per directory: Java (and other package-scoped
+            # languages) makes every type in the same directory visible to
+            # every other file in it with no `import` statement at all, so a
+            # call resolver that only checks "same file" or "an explicit
+            # import" can never find a same-package sibling class.
+            dmap = entities_by_dir.setdefault(posixpath.dirname(file), {})
+            if name not in dmap or qname == name:
+                dmap[name] = entity_id
+            exported_non_module_by_file.setdefault(file, []).append(entity_id)
+
+    # A JS/TS `export default` target isn't tracked explicitly by the parser,
+    # so guess it: a file with exactly one exported (non-module) entity almost
+    # certainly default-exports that one -- the extremely common
+    # `export default function Foo() {}` / `export default class Foo {}`
+    # single-component-per-file pattern. Ambiguous files (multiple exports)
+    # are left out entirely; the caller falls back to the module entity.
+    default_export_by_file = {
+        file: ids[0] for file, ids in exported_non_module_by_file.items() if len(ids) == 1
+    }
 
     by_module_qname: dict[str, str] = {}
     by_qname_suffix: dict[str, list[str]] = {}
@@ -492,8 +519,10 @@ def _build_indexes(store: GraphStore) -> _Indexes:
         known_files=known_files,
         name_by_id=name_by_id,
         entities_by_file=entities_by_file,
+        entities_by_dir=entities_by_dir,
         entity_ids_by_name=entity_ids_by_name,
         entity_ids_by_qname=entity_ids_by_qname,
+        default_export_by_file=default_export_by_file,
     )
 
 
@@ -502,11 +531,13 @@ def _resolve_call(
     src_id: str,
     entities_by_file: dict[str, dict[str, str]],
     imports_by_file: dict[str, dict[str, str]],
+    entities_by_dir: dict[str, dict[str, str]] | None = None,
 ) -> tuple[str, float]:
     """Resolve a `<lang>:?call:<callee>` edge.
 
     Order: a same-file entity named `<callee>` (conf 1.0) → a name the caller's
-    file imports (conf 0.9) → external (conf 0.5). Method-call precision (typed
+    file imports (conf 0.9) → for Java, a same-package sibling that needs no
+    import (conf 0.85) → external (conf 0.5). Method-call precision (typed
     receivers) is out of MVP scope; we match on the simple callee name.
     """
     _, _, callee = dst_id.partition(":?call:")
@@ -520,6 +551,14 @@ def _resolve_call(
     imported = imports_by_file.get(file, {})
     if callee in imported:
         return imported[callee], 0.9
+
+    # Java (unlike Python/TS/JS) makes every type in the same directory
+    # visible to every other file in it with no `import` statement -- so a
+    # sibling class in the same package is otherwise unreachable here.
+    if entities_by_dir is not None and dst_id.startswith("java:"):
+        same_package = entities_by_dir.get(posixpath.dirname(file), {})
+        if callee in same_package:
+            return same_package[callee], 0.85
 
     return f"external:{callee}", 0.5
 
@@ -640,7 +679,26 @@ def _path_to_module_qname(path: str) -> str:
 # `codegraph...`). The file-derived module qname keeps the prefix, so without
 # stripping it, every internal absolute import — and therefore every cross-module
 # call — would fall through to `external:`, gutting impact/trace on real projects.
-_SOURCE_ROOT_SEGMENTS = frozenset({"src", "packages", "lib", "app", "source"})
+# Includes common monorepo/backend-app root names (`backend`, `server`, `apps`,
+# ...) alongside the original src-layout ones -- a repo laid out as
+# `backend/routers/auth.py` importing `from backend.routers import auth`
+# (absolute, not relative) needs this exactly like `packages/codegraph/...` does.
+_SOURCE_ROOT_SEGMENTS = frozenset(
+    {
+        "src",
+        "packages",
+        "lib",
+        "app",
+        "apps",
+        "source",
+        "backend",
+        "server",
+        "services",
+        "internal",
+        "pkg",
+        "cmd",
+    }
+)
 
 
 def _strip_source_roots(qname: str) -> str | None:
@@ -668,6 +726,7 @@ def _resolve_one(
     by_module_qname: dict[str, str],
     known_files: set[str],
     by_qname_suffix: dict[str, list[str]] | None = None,
+    default_export_by_file: dict[str, str] | None = None,
 ) -> tuple[str, float]:
     rel_match = _REL_RE.match(dst_id)
     if rel_match:
@@ -681,7 +740,13 @@ def _resolve_one(
         )
 
     if dst_id.startswith("ts:?:"):
-        return _resolve_typescript(dst_id[len("ts:?:") :], src_id, by_file_name, known_files)
+        return _resolve_typescript(
+            dst_id[len("ts:?:") :],
+            src_id,
+            by_file_name,
+            known_files,
+            default_export_by_file or {},
+        )
 
     if dst_id.startswith("go:?:"):
         return _resolve_go(dst_id[5:], src_id, by_file_name, by_module_qname, known_files)
@@ -847,6 +912,7 @@ def _resolve_typescript(
     src_id: str,
     by_file_name: dict[tuple[str, str], str],
     known_files: set[str],
+    default_export_by_file: dict[str, str] | None = None,
 ) -> tuple[str, float]:
     """Resolve a `ts:?:<specifier>(::<name>)?` edge against the file system.
 
@@ -854,8 +920,9 @@ def _resolve_typescript(
     - Bare specifier (no leading ./ or ../) → external.
     - Relative specifier → walk extensions + index files to find the real file.
       * `::<name>` named import → look up (file, name) in entities.
-      * `::default` → resolve to the module entity (we don't track default-export
-        targets explicitly), conf 0.7.
+      * `::default` → the target file's sole exported (non-module) entity when
+        unambiguous (conf 0.8, a heuristic guess — the parser doesn't track
+        `export default` targets explicitly), else the module entity (conf 0.7).
       * `::*` → wildcard, conf 0.7.
       * no `::` (side-effect-only import) → module entity, conf 0.7.
     - tsconfig `paths` aliases (`@/`, etc.) are deferred — they go through the
@@ -893,7 +960,12 @@ def _resolve_typescript(
             return hit, 1.0
         return f"external:{specifier}::{name}", 0.5
 
-    # default import OR side-effect import — point at the module entity.
+    if name == "default":
+        guess = (default_export_by_file or {}).get(target_file)
+        if guess is not None:
+            return guess, 0.8
+
+    # default import (unguessable) OR side-effect import — point at the module entity.
     module_qname = _path_to_module_qname(target_file)
     module_eid = by_file_name.get((target_file, module_qname))
     if module_eid is not None:

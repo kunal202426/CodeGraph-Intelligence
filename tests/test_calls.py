@@ -254,3 +254,129 @@ def test_ts_call_resolves_to_imported_symbol(runner: CliRunner, tmp_path: Path) 
     finally:
         store.close()
     assert ("ts:main.ts:run", "ts:lib.ts:compute", "calls") in calls
+
+
+# ---------- JSX component tags emit call edges to the component they name ----------
+
+
+def test_jsx_self_closing_component_emits_call_edge(ts_parser: TypeScriptParser) -> None:
+    src = "function App() {\n  return <ScoreBadge score={1} />;\n}\n"
+    edges = _call_edges(ts_parser.parse(Path("a.tsx"), src))
+    assert any(e.dst_id == "ts:?call:ScoreBadge" for e in edges)
+
+
+def test_jsx_paired_component_emits_call_edge(ts_parser: TypeScriptParser) -> None:
+    src = "function App() {\n  return <LoginPage></LoginPage>;\n}\n"
+    edges = _call_edges(ts_parser.parse(Path("a.tsx"), src))
+    assert any(e.dst_id == "ts:?call:LoginPage" for e in edges)
+
+
+def test_jsx_lowercase_host_element_is_not_a_call(ts_parser: TypeScriptParser) -> None:
+    src = "function App() {\n  return <div><span>hi</span></div>;\n}\n"
+    edges = _call_edges(ts_parser.parse(Path("a.tsx"), src))
+    assert edges == []
+
+
+def test_jsx_namespaced_component_uses_property_name(ts_parser: TypeScriptParser) -> None:
+    src = "function App() {\n  return <Foo.Bar />;\n}\n"
+    edges = _call_edges(ts_parser.parse(Path("a.tsx"), src))
+    assert any(e.dst_id == "ts:?call:Bar" for e in edges)
+
+
+def test_jsx_component_call_resolves_to_same_file_function(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """Regression test: a component only ever used via `<Foo />` (never called
+    as a plain function) used to show zero callers / look like dead code."""
+    repo = tmp_path / "repo"
+    _make_repo(
+        repo,
+        {
+            "App.jsx": (
+                "function ScoreBadge({ score }) {\n"
+                "  return score;\n"
+                "}\n"
+                "function App() {\n"
+                "  return <ScoreBadge score={1} />;\n"
+                "}\n"
+            ),
+        },
+    )
+    db = tmp_path / "g.duckdb"
+    assert runner.invoke(app, ["index", str(repo), "--db", str(db), "--no-embed"]).exit_code == 0
+    store = GraphStore(db)
+    try:
+        calls = _edges(store)
+    finally:
+        store.close()
+    assert ("js:App.jsx:App", "js:App.jsx:ScoreBadge", "calls") in calls
+
+
+def test_jsx_component_call_resolves_through_default_import(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """Real-world shape: a component in its own file, default-exported, used
+    only via JSX in a different file -- the exact pattern of a React app's
+    `components/ScoreBadge.jsx` + `import ScoreBadge from './ScoreBadge'`.
+    Regression test: default imports used to resolve to the module entity,
+    not the component, so this cross-file case stayed unresolved even after
+    the same-file JSX case (above) was fixed."""
+    repo = tmp_path / "repo"
+    _make_repo(
+        repo,
+        {
+            "shared/ScoreBadge.jsx": (
+                "export default function ScoreBadge({ score }) {\n  return score;\n}\n"
+            ),
+            "JobCard.jsx": (
+                'import ScoreBadge from "./shared/ScoreBadge";\n'
+                "function JobCard() {\n"
+                "  return <ScoreBadge score={1} />;\n"
+                "}\n"
+            ),
+        },
+    )
+    db = tmp_path / "g.duckdb"
+    assert runner.invoke(app, ["index", str(repo), "--db", str(db), "--no-embed"]).exit_code == 0
+    store = GraphStore(db)
+    try:
+        calls = _edges(store)
+    finally:
+        store.close()
+    assert ("js:JobCard.jsx:JobCard", "js:shared/ScoreBadge.jsx:ScoreBadge", "calls") in calls
+
+
+# ---------- Java `new Foo()` emits a call edge to the constructed class ----------
+
+
+def test_java_constructor_call_resolves_to_same_file_class(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """Regression test: a class only ever instantiated via `new Foo()` (never
+    called as a method) used to show zero callers / look like dead code —
+    found live against a real Java codebase (LedgerGuard)."""
+    repo = tmp_path / "repo"
+    _make_repo(
+        repo,
+        {
+            "App.java": (
+                "public class App {\n"
+                "    public void run() {\n"
+                "        WelfordStats s = new WelfordStats();\n"
+                "    }\n"
+                "}\n"
+                "\n"
+                "class WelfordStats {\n"
+                "    public WelfordStats() {}\n"
+                "}\n"
+            ),
+        },
+    )
+    db = tmp_path / "g.duckdb"
+    assert runner.invoke(app, ["index", str(repo), "--db", str(db), "--no-embed"]).exit_code == 0
+    store = GraphStore(db)
+    try:
+        calls = _edges(store)
+    finally:
+        store.close()
+    assert ("java:App.java:App.run", "java:App.java:WelfordStats", "calls") in calls

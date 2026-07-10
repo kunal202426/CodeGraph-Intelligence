@@ -193,6 +193,23 @@ class JavaParser:
                         base_path=base_path,
                         self_attr_types=self_attr_types,
                     )
+                elif child.type == "field_declaration":
+                    # A field initializer (`private final X x = new X();`) runs
+                    # as part of every instance's construction, but there's no
+                    # per-field entity to attribute a call to -- the class
+                    # itself is the natural owner. Without this, a class only
+                    # ever instantiated via a field initializer (a very common
+                    # Java pattern) is invisible to every caller, the same way
+                    # an unscanned method body would be.
+                    self._emit_calls(
+                        child,
+                        source,
+                        src_id=entity_id,
+                        edges=edges,
+                        class_name=name,
+                        local_types={},
+                        self_attr_types=self_attr_types,
+                    )
 
         return entity_id
 
@@ -381,12 +398,32 @@ class JavaParser:
 
     def _iter_call_nodes(self, node: Node):
         for child in node.children:
-            if child.type == "method_invocation":
+            # `new Foo(...)` constructs `Foo` -- a semantic call to its
+            # constructor -- but is a structurally different node from a
+            # `method_invocation`, so without this a class only ever
+            # instantiated via `new` (never called as a method) looks like
+            # dead code with zero callers.
+            if child.type in ("method_invocation", "object_creation_expression"):
                 yield child
             yield from self._iter_call_nodes(child)
 
     @staticmethod
     def _callee_name(call_node: Node, source: bytes) -> str | None:
+        if call_node.type == "object_creation_expression":
+            type_node = call_node.child_by_field_name("type")
+            if type_node is None:
+                return None
+            # A parameterized type (`new HashMap<>()`) is `generic_type`
+            # wrapping the real class name as its first (unnamed-field)
+            # child; a plain `new Foo()` is the identifier directly.
+            if type_node.type == "generic_type":
+                if not type_node.children:
+                    return None
+                type_node = type_node.children[0]
+            return source[type_node.start_byte : type_node.end_byte].decode(
+                "utf-8", errors="replace"
+            )
+
         name_node = call_node.child_by_field_name("name")
         if name_node is not None:
             return source[name_node.start_byte : name_node.end_byte].decode(

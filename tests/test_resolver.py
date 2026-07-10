@@ -324,6 +324,49 @@ def test_ts_default_import_resolves_to_module_entity(tmp_path: Path) -> None:
     assert "ts:src/auth.ts:src.auth" in dsts
 
 
+def test_ts_default_import_resolves_to_sole_export_when_unambiguous(tmp_path: Path) -> None:
+    """A file with exactly one exported (named) entity default-exports that one --
+    the common `export default function Foo() {}` single-component-per-file
+    pattern. Regression test: this used to resolve to the module entity
+    instead, so a call/JSX-tag through a default import never matched the
+    real function and looked like dead code with zero callers."""
+    db = _ts_repo(
+        tmp_path,
+        {
+            "src/index.ts": 'import ScoreBadge from "./ScoreBadge";\nScoreBadge();\n',
+            "src/ScoreBadge.ts": "export default function ScoreBadge() { return 1; }\n",
+        },
+    )
+    store = GraphStore(db)
+    try:
+        dsts = {dst for _src, dst, _conf in _edges(store)}
+    finally:
+        store.close()
+    assert "ts:src/ScoreBadge.ts:ScoreBadge" in dsts
+    assert "ts:src/ScoreBadge.ts:src.ScoreBadge" not in dsts  # not the module entity
+
+
+def test_ts_default_import_falls_back_to_module_when_ambiguous(tmp_path: Path) -> None:
+    """A file with more than one export can't be guessed -- stay on the
+    existing module-entity fallback rather than picking the wrong one."""
+    db = _ts_repo(
+        tmp_path,
+        {
+            "src/index.ts": 'import Widget from "./widget";\n',
+            "src/widget.ts": (
+                "export default function Widget() { return 1; }\n"
+                "export function helper() { return 2; }\n"
+            ),
+        },
+    )
+    store = GraphStore(db)
+    try:
+        dsts = {dst for _src, dst, _conf in _edges(store)}
+    finally:
+        store.close()
+    assert "ts:src/widget.ts:src.widget" in dsts  # module-entity fallback
+
+
 def test_ts_namespace_import_marked_wildcard(tmp_path: Path) -> None:
     db = _ts_repo(
         tmp_path,
@@ -452,9 +495,44 @@ def test_strip_source_roots_helper() -> None:
     assert _strip_source_roots("packages.codegraph.graph.queries") == "codegraph.graph.queries"
     assert _strip_source_roots("src.myapp.util") == "myapp.util"
     assert _strip_source_roots("app.handlers") == "handlers"
+    # Monorepo/backend-app root names, alongside the original src-layout ones.
+    assert _strip_source_roots("apps.myapp.util") == "myapp.util"
+    assert _strip_source_roots("backend.routers.auth") == "routers.auth"
+    assert _strip_source_roots("server.handlers") == "handlers"
     # No source root -> None (nothing stripped).
     assert _strip_source_roots("codegraph.graph.queries") is None
     assert _strip_source_roots("util") is None
+
+
+def test_backend_rooted_absolute_import_resolves(tmp_path: Path) -> None:
+    """Regression test: a repo laid out as `backend/routers/auth.py` importing
+    `from backend.routers import auth` (absolute, not relative) used to fall
+    through to `external:` -- `backend` wasn't in the source-root allowlist,
+    unlike `packages`/`src`/`app`. Same bug class as the src-layout fix
+    above, found auditing a real monorepo's layout (`cold/backend/routers/`)."""
+    db = _index(
+        tmp_path,
+        {
+            "backend/__init__.py": "",
+            "backend/routers/__init__.py": "",
+            "backend/routers/auth.py": "def get_current_user():\n    return 1\n",
+            "backend/main.py": (
+                "from backend.routers.auth import get_current_user\n\n\n"
+                "def route():\n    return get_current_user()\n"
+            ),
+        },
+    )
+    store = GraphStore(db)
+    try:
+        dsts = {dst for _, dst, _ in _edges(store)}
+        assert "py:backend/routers/auth.py:get_current_user" in dsts
+        callers = store.conn.execute(
+            "SELECT src_id FROM edges WHERE dst_id = ? AND type = 'calls'",
+            ["py:backend/routers/auth.py:get_current_user"],
+        ).fetchall()
+    finally:
+        store.close()
+    assert any("route" in c[0] for c in callers), f"expected route->get_current_user edge: {callers}"
 
 
 def test_src_layout_absolute_import_resolves(tmp_path: Path) -> None:

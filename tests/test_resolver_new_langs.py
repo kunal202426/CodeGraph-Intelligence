@@ -164,6 +164,39 @@ def test_java_inrepo_import_resolved(tmp_path: Path) -> None:
     assert any("Server" in d and not d.startswith("external:") for d in dsts)
 
 
+def test_java_same_package_call_resolves_without_import(tmp_path: Path) -> None:
+    """Java doesn't require an `import` for a sibling class in the same
+    package -- a call/constructor-call resolver that only checks "same
+    file" or "an explicit import" can never find it. Regression test: found
+    live against a real Java codebase, where this was the dominant cause of
+    an 819/889 external-import rate."""
+    import duckdb
+
+    db = _index(
+        tmp_path,
+        {
+            "com/example/WelfordStats.java": (
+                "package com.example;\npublic class WelfordStats {\n"
+                "    public WelfordStats() {}\n}\n"
+            ),
+            "com/example/AnomalyScorer.java": (
+                "package com.example;\npublic class AnomalyScorer {\n"
+                "    private final WelfordStats baseline = new WelfordStats();\n"
+                "}\n"
+            ),
+        },
+    )
+    conn = duckdb.connect(str(db), read_only=True)
+    calls = conn.execute(
+        "SELECT src_id, dst_id FROM edges WHERE type = 'calls'"
+    ).fetchall()
+    conn.close()
+    assert (
+        "java:com/example/AnomalyScorer.java:AnomalyScorer",
+        "java:com/example/WelfordStats.java:WelfordStats",
+    ) in calls
+
+
 # ---------- Ruby ----------
 
 

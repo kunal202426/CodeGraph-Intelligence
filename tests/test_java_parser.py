@@ -245,6 +245,54 @@ def test_static_call_extracts_method_name(parser: JavaParser) -> None:
     assert any(e.dst_id == "java:?call:create" for e in _call_edges(result))
 
 
+def test_constructor_call_emits_edge(parser: JavaParser) -> None:
+    """`new Foo()` constructs Foo -- a call to its constructor -- even though
+    it's a structurally different node from a method_invocation. Regression
+    test: a class only ever instantiated via `new` (never called as a
+    method) used to show zero callers / look like dead code."""
+    src = "public class T {\n    public void run() { WelfordStats s = new WelfordStats(); }\n}"
+    result = parser.parse(Path("T.java"), src)
+    assert any(e.dst_id == "java:?call:WelfordStats" for e in _call_edges(result))
+
+
+def test_constructor_call_with_generic_type_uses_base_name(parser: JavaParser) -> None:
+    src = "public class T {\n    public void run() { var m = new HashMap<String, Integer>(); }\n}"
+    result = parser.parse(Path("T.java"), src)
+    assert any(e.dst_id == "java:?call:HashMap" for e in _call_edges(result))
+
+
+def test_constructor_call_nested_in_arguments_captured(parser: JavaParser) -> None:
+    src = "public class T {\n    public void run() { foo(new Bar()); }\n}"
+    result = parser.parse(Path("T.java"), src)
+    dsts = {e.dst_id for e in _call_edges(result)}
+    assert "java:?call:foo" in dsts
+    assert "java:?call:Bar" in dsts
+
+
+def test_field_initializer_call_attributed_to_class(parser: JavaParser) -> None:
+    """A field initializer (`private final X x = new X();`) runs as part of
+    every instance's construction, but there's no per-field entity -- the
+    class itself is the natural owner. Regression test: field initializers
+    weren't scanned for calls at all, so a class only ever instantiated via
+    a field initializer (found live in a real Java codebase) was invisible
+    to every caller."""
+    src = "public class AnomalyScorer {\n    private final WelfordStats baseline = new WelfordStats();\n}\n"
+    result = parser.parse(Path("AnomalyScorer.java"), src)
+    edges = _call_edges(result)
+    assert any(
+        e.dst_id == "java:?call:WelfordStats" and e.src_id == "java:AnomalyScorer.java:AnomalyScorer"
+        for e in edges
+    )
+
+
+def test_field_declaration_without_initializer_is_fine(parser: JavaParser) -> None:
+    """A field with no initializer (`private int x;`) has no `value` node --
+    must not crash."""
+    src = "public class T {\n    private int x;\n}\n"
+    result = parser.parse(Path("T.java"), src)
+    assert _call_edges(result) == []
+
+
 # ---------- fixture end-to-end ----------
 
 

@@ -542,9 +542,20 @@ class TypeScriptParser:
             )
 
     def _iter_call_nodes(self, node: Node):
-        """Yield every `call_expression` at/under `node` (incl. nested in args)."""
+        """Yield every `call_expression` at/under `node` (incl. nested in args),
+        plus every JSX tag (`<Foo ... />` or `<Foo>...</Foo>`) -- a JSX tag is
+        effectively a call to the component function it names, so treating it
+        as one gives React/JSX components real caller edges instead of
+        looking like unreachable dead code just because they're never invoked
+        as a plain function."""
         if node.type == "call_expression":
             yield node
+        elif node.type == "jsx_self_closing_element":
+            yield node
+        elif node.type == "jsx_element":
+            opening = node.child_by_field_name("open_tag")
+            if opening is not None:
+                yield opening
         for child in node.children:
             yield from self._iter_call_nodes(child)
 
@@ -565,6 +576,28 @@ class TypeScriptParser:
 
     @staticmethod
     def _callee_name(call_node: Node, source: bytes) -> str | None:
+        if call_node.type in ("jsx_opening_element", "jsx_self_closing_element"):
+            name = call_node.child_by_field_name("name")
+            if name is None:
+                return None
+            if name.type == "identifier":
+                text = source[name.start_byte : name.end_byte].decode("utf-8", errors="replace")
+                # JSX convention: a capitalized tag is a component reference
+                # (`<ScoreBadge />`); lowercase is a host element (`<div>`),
+                # never a call to anything in the indexed codebase.
+                return text if text[:1].isupper() else None
+            if name.type == "member_expression":
+                # The `<Foo.Bar />` production doesn't carry the ordinary
+                # expression's "property" field binding, so fall back to the
+                # last named child (the `property_identifier`, e.g. `Bar`).
+                named = [c for c in name.children if c.is_named]
+                if named:
+                    prop = named[-1]
+                    return source[prop.start_byte : prop.end_byte].decode(
+                        "utf-8", errors="replace"
+                    )
+            return None
+
         fn = call_node.child_by_field_name("function")
         if fn is None:
             return None
