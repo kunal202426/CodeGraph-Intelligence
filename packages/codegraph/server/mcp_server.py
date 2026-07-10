@@ -1165,6 +1165,9 @@ def _warm_embedding_model() -> None:
 
     Skipped when the index has no embeddings. Non-fatal: any failure just falls
     back to lazy loading + literal-only search (handlers already handle that).
+
+    Called via `_warm_embedding_model_with_timeout` below, never directly from
+    `main()` -- see that function for why.
     """
     import sys
 
@@ -1181,6 +1184,45 @@ def _warm_embedding_model() -> None:
         print("CodeGraph: embedding model ready.", file=sys.stderr)
     except Exception:  # noqa: BLE001 — warmup is best-effort; lazy load still works
         pass
+
+
+# Generous but bounded: the dev-machine baseline for this import is well under
+# 1s, so this only ever engages on a genuinely slow environment (antivirus
+# scanning a freshly-written venv, a cold disk, a first-time model download).
+_WARM_UP_TIMEOUT_SEC = 8.0
+
+
+def _warm_embedding_model_with_timeout(timeout: float = _WARM_UP_TIMEOUT_SEC) -> None:
+    """Run `_warm_embedding_model` with a hard wall-clock budget.
+
+    `_warm_embedding_model` runs in the main thread deliberately (see its
+    docstring) -- but that means an unusually slow environment blocks not
+    just the first `get_context`, it blocks the MCP stdio handshake itself,
+    so the *whole server* looks stuck "connecting" to an agent that gives up
+    waiting. Found live: a freshly-reinstalled venv with active antivirus
+    scanning took ~12.5s to become ready vs. ~0.1s on a warm one.
+
+    Runs on a dedicated daemon thread (not the shared `anyio.to_thread` pool
+    real tool calls use, and not a `ThreadPoolExecutor`, whose non-daemon
+    workers would otherwise block process exit if still running) so it can
+    be walked away from cleanly. If it doesn't finish within `timeout`, the
+    server starts serving anyway: the import may still complete in the
+    background and be ready for a later call, or the first real embedding
+    call falls back to the model's own lazy-load path -- already non-fatal
+    by design, just no longer able to also stall the handshake.
+    """
+    import sys
+    import threading
+
+    thread = threading.Thread(target=_warm_embedding_model, daemon=True, name="codegraph-warmup")
+    thread.start()
+    thread.join(timeout=timeout)
+    if thread.is_alive():
+        print(
+            f"CodeGraph: embedding warm-up still running after {timeout:.0f}s -- "
+            "starting the server anyway (first semantic search may be slower).",
+            file=sys.stderr,
+        )
 
 
 async def _serve() -> None:
@@ -1218,7 +1260,8 @@ def main() -> None:
 
     # Warm the embedding model in the main thread BEFORE serving, so the first
     # get_context doesn't trigger a heavy off-main-thread import that can hang.
-    _warm_embedding_model()
+    # Bounded so a slow environment can't also stall the MCP handshake itself.
+    _warm_embedding_model_with_timeout()
 
     import anyio
 

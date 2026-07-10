@@ -92,3 +92,36 @@ the stray process, deleting the orphaned `~/.local/bin/codegraph.exe` shim direc
 reinstalling clean. Documented here as an operational gotcha for this dev workflow (running
 `uv tool install --force` while any MCP server / `watch` process from *any* session is still
 alive against the same global install), not a product defect.
+
+## Bug found and fixed: the MCP server's own startup could block indefinitely on a slow environment
+
+While verifying the fixes above via a real Claude Code session against LedgerGuard, the
+`codegraph` MCP server never finished "connecting" at all. Root cause: `_warm_embedding_model`
+(added specifically to make the *first* `get_context` call fast, by pre-loading torch/
+sentence-transformers in the main thread before serving starts) has no time bound — on this
+machine, with active Windows Defender real-time protection scanning a tool venv rewritten
+repeatedly by today's reinstall churn, that import took **~10.7s** (vs. ~0.1s on the
+long-lived dev venv), pushing total time-to-ready past ~12.5s. That's not a code defect on
+its own, but the architectural risk is real regardless of cause: a synchronous, unbounded
+warm-up blocks the MCP handshake itself, not just the first tool call, so *any* slow
+environment (antivirus, cold disk, first-time model download) can make the whole server look
+permanently stuck to an agent that gives up waiting.
+
+**Fix:** [`mcp_server.py`](../packages/codegraph/server/mcp_server.py) — the warm-up now runs
+on a dedicated daemon thread with an 8-second wall-clock budget (`_warm_embedding_model_with_timeout`).
+The fast/common case (proven: <1s on a normal venv) is unaffected byte-for-byte. On a slow
+environment, the server now starts serving at the budget ceiling regardless of how long the
+underlying import actually takes, falling back to the model's own already-documented
+lazy-load path for the first real call. Chose a plain daemon thread over
+`ThreadPoolExecutor` specifically because the latter's non-daemon workers would otherwise
+block process exit if still running. Deliberately did *not* touch the "runs in the main
+thread, not `anyio.to_thread`" design itself — that's guarding a real, previously-observed
+deadlock risk documented in the original code, and redesigning it blind wasn't worth the
+risk for what a bounded timeout already fixes. 3 new tests in `test_mcp.py`.
+
+**Verified live, in the exact environment that showed the problem:** the fallback message now
+fires at a bounded ~10.6s (2.6s staleness check + 8s budget) instead of the unbounded ~12.5s+.
+Confirmed end-to-end in a real Claude Code session immediately after: MCP connected cleanly,
+followed the required `index_status` → `get_context` workflow, reported real token savings
+(3.5x, 1.5x, 2.9x across 3 calls), and produced a correct, well-cited, non-hallucinated answer
+about the codebase's anomaly-detection pipeline.

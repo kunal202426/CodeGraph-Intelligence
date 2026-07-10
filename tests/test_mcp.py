@@ -646,6 +646,42 @@ def test_warm_embedding_model_is_noop_when_db_missing(
     mcp_server._warm_embedding_model()  # should return quietly
 
 
+def test_warm_embedding_model_with_timeout_waits_for_a_fast_warmup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The common case: warmup finishes well within budget, so the call
+    blocks until it's actually done (same behavior as calling it directly)."""
+    called = {"n": 0}
+    monkeypatch.setattr(mcp_server, "_warm_embedding_model", lambda: called.__setitem__("n", 1))
+    mcp_server._warm_embedding_model_with_timeout(timeout=5.0)
+    assert called["n"] == 1
+
+
+def test_warm_embedding_model_with_timeout_does_not_block_past_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression test: a slow environment (antivirus scanning a freshly
+    installed venv, a cold disk) used to block the MCP handshake itself for
+    however long the import took -- an agent that gives up waiting saw the
+    whole server as stuck "connecting". Found live: ~12.5s on a freshly
+    reinstalled venv vs. ~0.1s on a warm one. Must now return at the timeout
+    regardless of how long the underlying warmup actually takes."""
+    import threading
+    import time
+
+    release = threading.Event()
+
+    def _slow_warmup() -> None:
+        release.wait(timeout=5.0)  # would hang the test if not released
+
+    monkeypatch.setattr(mcp_server, "_warm_embedding_model", _slow_warmup)
+    start = time.monotonic()
+    mcp_server._warm_embedding_model_with_timeout(timeout=0.2)
+    elapsed = time.monotonic() - start
+    release.set()  # let the background thread finish so it doesn't linger
+    assert elapsed < 1.0, f"blocked for {elapsed:.2f}s, expected to return near the 0.2s timeout"
+
+
 def test_get_context_respects_token_budget(indexed_db: Path) -> None:
     """A tiny budget caps the entity count and flags truncation."""
     tiny = _call("get_context", {"query": "authenticate", "limit": 10, "max_tokens": 100})
