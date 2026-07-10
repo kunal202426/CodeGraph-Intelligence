@@ -548,9 +548,7 @@ class TypeScriptParser:
         as one gives React/JSX components real caller edges instead of
         looking like unreachable dead code just because they're never invoked
         as a plain function."""
-        if node.type == "call_expression":
-            yield node
-        elif node.type == "jsx_self_closing_element":
+        if node.type in ("call_expression", "jsx_self_closing_element"):
             yield node
         elif node.type == "jsx_element":
             opening = node.child_by_field_name("open_tag")
