@@ -43,8 +43,14 @@ DEFAULT_HIGH_COUPLING_IMPORTS = 20
 DEFAULT_COMPLEX_FUNCTION = 15
 
 # Decision-point keywords for an approximate cyclomatic complexity.
-# Complexity = 1 + (number of these branch points in the body).
-_DECISION_RE = re.compile(r"\b(?:if|elif|for|while|and|or|except|case)\b")
+# Complexity = 1 + (number of these branch points in the body). Word-boundary
+# keywords cover Python/Ruby-style branches; `&&`/`||` are matched separately
+# since they're symbols, not words, so `\b` can never match them -- without
+# this, every C-family language this tool supports (Java, C/C++, C#, Go,
+# Rust, JS/TS, PHP) has its boolean-operator branches silently uncounted.
+# `catch` covers those same languages' exception handling (Python's is
+# `except`, already listed).
+_DECISION_RE = re.compile(r"\b(?:if|elif|for|while|and|or|except|case|catch)\b|&&|\|\|")
 
 
 @dataclass(frozen=True)
@@ -78,9 +84,9 @@ class Smell:
 def cyclomatic_complexity(source: str) -> int:
     """Approximate cyclomatic complexity from decision-keyword counts.
 
-    Heuristic only: counts `if/elif/for/while/and/or/except/case` tokens in the
-    source text (comments/strings included — acceptable noise for a smell).
-    Returns 1 for straight-line code.
+    Heuristic only: counts `if/elif/for/while/and/or/except/case/catch` tokens
+    plus `&&`/`||` in the source text (comments/strings included — acceptable
+    noise for a smell). Returns 1 for straight-line code.
     """
     return 1 + len(_DECISION_RE.findall(source))
 

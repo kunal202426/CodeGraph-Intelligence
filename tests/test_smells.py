@@ -49,6 +49,22 @@ def test_complexity_counts_decision_points() -> None:
     assert cyclomatic_complexity(src) == 6
 
 
+def test_complexity_counts_c_family_boolean_operators() -> None:
+    """Regression test: `&&`/`||` are symbols, not words, so the old
+    word-boundary-only regex could never match them -- silently undercounting
+    complexity for every C-family language this tool supports (Java, C/C++,
+    C#, Go, Rust, JS/TS, PHP). Found live against a real Java codebase."""
+    src = "if (a && b || c) {\n    return 1;\n}\n"
+    # if, &&, || → 3 decision points → complexity 4
+    assert cyclomatic_complexity(src) == 4
+
+
+def test_complexity_counts_catch_blocks() -> None:
+    """Java/C++/C#/JS's exception keyword is `catch`, not Python's `except`."""
+    src = "try {\n    risky();\n} catch (Exception e) {\n    log(e);\n}\n"
+    assert cyclomatic_complexity(src) == 2
+
+
 # ---------- detect_smells over a real index ----------
 
 

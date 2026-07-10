@@ -78,7 +78,50 @@ file pair, labeling an edge `"imports"` when at least one import edge exists bet
 pair (preserving prior behavior exactly), else `"calls"`. Verified: LedgerGuard's graph
 edge count went from 7 → 14. 1 new end-to-end test in `test_api.py`.
 
-## Environment note, not a codegraph bug: a corrupted global `uv tool install` state
+## Checklist completion: hooks, no-key graceful behavior, and all 9 MCP tools (usable without an API key)
+
+Finished the remaining items from the original manual-test checklist against LedgerGuard,
+via a real Claude Code session (not synthetic):
+
+- `codegraph hooks install` / commit-trigger / `hooks uninstall` — PASS (see the
+  `.gitignore` bug section above, found while testing this).
+- `codegraph ask` / `codegraph summarize` with no `ANTHROPIC_API_KEY` set — both PASS,
+  clean error message, exit code 1, no crash or traceback.
+- All 9 no-API-key-needed MCP tools, exercised live end-to-end: `index_status`,
+  `search_code`, `get_context`, `get_entity_context`, `impact_analysis`, `trace_path`,
+  `list_files`, `reindex`, `get_unsummarized_entities` + `store_summaries` — all PASS.
+  Notably, `impact_analysis`/`trace_path`/`get_entity_context` on `WelfordStats` all
+  correctly reflect today's Java same-package + field-initializer fixes end-to-end
+  through the MCP layer, not just the CLI. `reindex` correctly picked up a live file
+  edit mid-session. `ask_codebase` (the one tool needing a key) not exercised, same
+  no-key limitation as `ask`/`summarize`.
+
+One side observation, not confirmed as a bug: the MCP connection dropped and had to
+reconnect once, mid-session, between two consecutive user turns. Self-healed
+immediately with no data loss. Logged as a watch-item since a stdio-based server
+dropping mid-session (as opposed to being slow to start, which was already fixed) is a
+different failure mode — worth a closer look if it recurs.
+
+## Bug found and fixed: complexity heuristic silently undercounted every non-Python language
+
+Running the rest of the checklist against LedgerGuard: `codegraph smells` reported **zero**
+smells on a real 47-file codebase. Digging into why: `cyclomatic_complexity`'s
+decision-keyword regex was `\b(?:if|elif|for|while|and|or|except|case)\b` -- a
+word-boundary pattern. `&&`/`||` are symbols, not words, so `\b` can never match them at
+all; `catch` (the non-Python exception keyword) wasn't in the list either, only `except`
+was. Confirmed live: 9 `&&`/`||` occurrences in LedgerGuard's main backend source, all
+silently worth zero toward complexity. This isn't Java-specific -- every C-family language
+this tool supports (Java, C/C++, C#, Go, Rust, JS/TS, PHP) has its boolean-operator
+branches and `catch` blocks invisible to this heuristic.
+
+**Fix:** [`smells.py`](../packages/codegraph/analysis/smells.py) — `_DECISION_RE` now also
+matches `&&`, `||` (as separate non-word alternatives, since `\b` doesn't apply to them),
+and `catch`. 2 new unit tests confirming the previously-unmatchable operators/keyword are
+now counted correctly. Re-ran `codegraph smells` on LedgerGuard after the fix: still zero
+smells, and that's plausible on its own terms (only 9 `&&`/`||` total across the whole
+backend, unlikely to concentrate 15+ decision points in any single method) -- the bug was
+real and confirmed regardless, this fix just happened not to change this particular
+repo's specific result. Matters more for a less disciplined C-family codebase.
 
 Separately, `codegraph` intermittently failed with `ModuleNotFoundError: No module named
 'codegraph'`, later `uv trampoline failed to canonicalize script path`, in the user's
