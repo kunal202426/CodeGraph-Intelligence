@@ -60,6 +60,47 @@ def test_init_indexes_installs_and_writes_guide(tmp_path: Path, patched_claude) 
     assert "<!-- BEGIN CODEGRAPH -->" in guide.read_text(encoding="utf-8")
 
 
+def test_init_creates_gitignore_with_codegraph_entry(tmp_path: Path, patched_claude) -> None:
+    """Regression test: `.codegraph/graph.duckdb` (a generated binary index)
+    used to have no .gitignore entry at all, so it silently ended up in a
+    user's first commit -- found happening live in a real test repo."""
+    repo = _make_repo(tmp_path)
+    assert not (repo / ".gitignore").exists()
+
+    result = runner.invoke(app, ["init", str(repo), "--no-embed"])
+    assert result.exit_code == 0, result.output
+
+    gitignore = (repo / ".gitignore").read_text(encoding="utf-8")
+    assert ".codegraph/" in gitignore
+
+
+def test_init_appends_to_existing_gitignore_without_clobbering_it(
+    tmp_path: Path, patched_claude
+) -> None:
+    repo = _make_repo(tmp_path)
+    (repo / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["init", str(repo), "--no-embed"])
+    assert result.exit_code == 0, result.output
+
+    gitignore = (repo / ".gitignore").read_text(encoding="utf-8")
+    assert "node_modules/" in gitignore
+    assert ".codegraph/" in gitignore
+
+
+def test_init_does_not_duplicate_existing_codegraph_entry(tmp_path: Path, patched_claude) -> None:
+    """A user (or a previous `init` run) may already have some `.codegraph`
+    pattern -- don't stack a redundant second entry."""
+    repo = _make_repo(tmp_path)
+    (repo / ".gitignore").write_text(".codegraph\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["init", str(repo), "--no-embed"])
+    assert result.exit_code == 0, result.output
+
+    gitignore = (repo / ".gitignore").read_text(encoding="utf-8")
+    assert gitignore.count(".codegraph") == 1
+
+
 def test_init_prints_three_steps_and_next_steps(tmp_path: Path, patched_claude) -> None:
     repo = _make_repo(tmp_path)
     result = runner.invoke(app, ["init", str(repo), "--no-embed"])

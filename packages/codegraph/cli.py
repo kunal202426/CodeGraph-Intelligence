@@ -1582,6 +1582,32 @@ def doctor(
     )
 
 
+def _ensure_codegraph_gitignored(repo: Path) -> None:
+    """Add `.codegraph/` to the repo's `.gitignore` if it isn't already covered.
+
+    `.codegraph/graph.duckdb` is a generated, local, potentially large binary
+    index -- nobody wants it in version control. `codegraph init` writes the
+    directory into the repo automatically, so it should keep it out of git the
+    same way it already writes `CLAUDE.md` and wires the MCP server; without
+    this, `.codegraph/` silently ends up in the first commit a user makes,
+    found happening live in a real test repo. Idempotent (a substring check
+    is enough here -- this isn't trying to be a full gitignore-pattern
+    matcher, just avoid stacking a duplicate entry on repeated `init` runs).
+    Best-effort: never blocks setup on a filesystem error.
+    """
+    gitignore = repo / ".gitignore"
+    try:
+        existing = gitignore.read_text(encoding="utf-8") if gitignore.is_file() else ""
+        if ".codegraph" in existing:
+            return
+        needs_leading_newline = bool(existing) and not existing.endswith("\n")
+        prefix = "\n" if needs_leading_newline else ""
+        gitignore.write_text(f"{existing}{prefix}.codegraph/\n", encoding="utf-8")
+        console.print("[dim]Added .codegraph/ to .gitignore.[/dim]")
+    except OSError:
+        pass
+
+
 @app.command()
 def init(
     repo: Path = typer.Argument(
@@ -1633,6 +1659,7 @@ def init(
     # Keep the DB inside the repo so walk-up discovery resolves it per project.
     db = repo / ".codegraph" / "graph.duckdb"
     db.parent.mkdir(parents=True, exist_ok=True)
+    _ensure_codegraph_gitignored(repo)
 
     console.print(f"[bold]Step 1/3[/bold] Indexing [bold]{repo}[/bold]...")
     index(repo=repo, db=db, no_embed=no_embed)

@@ -125,3 +125,33 @@ Confirmed end-to-end in a real Claude Code session immediately after: MCP connec
 followed the required `index_status` → `get_context` workflow, reported real token savings
 (3.5x, 1.5x, 2.9x across 3 calls), and produced a correct, well-cited, non-hallucinated answer
 about the codebase's anomaly-detection pipeline.
+
+## Bug found and fixed: `.codegraph/` was never added to `.gitignore`
+
+Testing `codegraph hooks install` end to end (a disposable throwaway repo, not JobHuntPro or
+LedgerGuard) surfaced this by accident: `git commit` after `codegraph init` picked up
+`.codegraph/graph.duckdb` (a generated binary index) and `CLAUDE.md` with a plain `git add -A`,
+because nothing had ever told git to ignore the former. Confirmed general, not specific to the
+throwaway repo: neither JobHuntPro's nor LedgerGuard's `.gitignore` mentions `.codegraph`
+either — `codegraph` never writes to `.gitignore` at all, anywhere, despite `init` already
+doing comparable one-time setup niceties (writing `CLAUDE.md`, wiring the MCP server).
+
+**Fix:** `codegraph init` (`cli.py`) now ensures `.codegraph/` is in the repo's `.gitignore`,
+appending to an existing file (without touching its other contents) or creating one if it
+doesn't exist. Idempotent — a simple substring check skips it if any `.codegraph` pattern
+already exists, so repeated `init` runs (or a user's own existing entry) never stack a
+duplicate. Best-effort: a filesystem error here never blocks the rest of setup. 3 new tests
+in `test_cli_init.py`.
+
+Separately, while investigating what first looked like a much more serious bug (a post-commit
+hook run that appeared to have *wiped* the index down to 0 entities): that was a red herring
+caused by the test setup, not codegraph — `echo "..." >> file` in PowerShell defaults to
+UTF-16LE, so appending to a UTF-8 `.py` file produced embedded NUL bytes, which the walker's
+existing binary-file detection correctly treated as binary and skipped, and the (already-shipped,
+this-session's) orphan-cleanup fix correctly purged its now-unseen entities in response.
+Confirmed correct behavior given a genuinely corrupted file, not a defect — recorded here so
+it doesn't get miscounted as a bug if this report is skimmed later. One small, real,
+lower-priority polish item did fall out of that detour though: `index` reports counts for
+"skipped as unsupported language" and "skipped as generated/minified" but not "skipped as
+binary," so a real file that ends up looking binary (a bad encoding, a partial write) currently
+disappears from the index with zero explanation. Not fixed this pass — logged for later.
