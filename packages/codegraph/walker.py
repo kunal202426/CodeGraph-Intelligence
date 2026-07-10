@@ -6,6 +6,7 @@
 `walk(root)` yields `(Path, Language)` tuples for each file that:
 - has a known source-language extension (see `LANGUAGE_BY_EXT`)
 - does NOT live under one of `ALWAYS_EXCLUDE` directories
+- does NOT live under a nested git repository (a subdirectory with its own `.git`)
 - is NOT matched by `<root>/.gitignore` (gitwildmatch patterns)
 - does NOT look binary (NUL byte in the first 8 KiB)
 
@@ -155,15 +156,22 @@ def walk(root: Path) -> Iterator[tuple[Path, Language]]:
     spec = _load_gitignore(root)
 
     for dirpath_str, dirnames, filenames in os.walk(root, followlinks=False):
+        dirpath = Path(dirpath_str)
+
         # Prune always-excluded directories in-place so os.walk doesn't descend.
         dirnames[:] = [d for d in dirnames if d not in ALWAYS_EXCLUDE]
+
+        # Don't descend into a nested git repository (e.g. a tool or vendored
+        # project checked out inside the repo being indexed). `.git` is a
+        # directory for a normal clone or a file for a worktree/submodule --
+        # either way its presence marks a separate repo, not part of this one.
+        dirnames[:] = [d for d in dirnames if not (dirpath / d / ".git").exists()]
 
         # Also honour .gitignore-matched directories. gitignore treats a
         # pattern like `build/` as matching the dir; pathspec needs a
         # trailing slash to test that.
         if spec is not None:
             pruned: list[str] = []
-            dirpath = Path(dirpath_str)
             for d in dirnames:
                 rel_dir = (dirpath / d).relative_to(root).as_posix() + "/"
                 if not spec.match_file(rel_dir):

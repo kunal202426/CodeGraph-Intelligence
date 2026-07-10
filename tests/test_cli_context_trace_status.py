@@ -121,10 +121,32 @@ def test_trace_same_entity_zero_hops(indexed_db: Path) -> None:
     assert "0 hop" in out or "Same entity" in out
 
 
-def test_trace_not_found_exits_1(indexed_db: Path) -> None:
+def test_trace_unknown_entity_id_reports_no_entity(indexed_db: Path) -> None:
+    """Neither side of the pair exists at all -- distinct from "no path"."""
     result = runner.invoke(
         app, ["trace", "py:nope.py:ghost", "py:nope.py:other", "--db", str(indexed_db)]
     )
+    assert result.exit_code == 1
+    assert "No entity matching" in _plain(result.output)
+
+
+def test_trace_by_name_finds_real_path(indexed_db: Path) -> None:
+    """Plain names must resolve like `deps`/`impact` do, not just raw entity_ids.
+
+    Regression test: `trace` used to pass its arguments straight to the BFS
+    without resolving them, so a name that every other lookup command accepts
+    silently produced "No call path" instead of an actual path.
+    """
+    result = runner.invoke(app, ["trace", "submit", "authenticate", "--db", str(indexed_db)])
+    assert result.exit_code == 0, result.output
+    out = _plain(result.output)
+    assert "authenticate" in out
+    assert "1 hop" in out
+
+
+def test_trace_by_name_no_path_between_real_entities(indexed_db: Path) -> None:
+    """Both names resolve to real entities, but there's genuinely no call path."""
+    result = runner.invoke(app, ["trace", "fetch_user", "authenticate", "--db", str(indexed_db)])
     assert result.exit_code == 1
     assert "No call path" in _plain(result.output)
 

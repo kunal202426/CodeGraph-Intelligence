@@ -21,6 +21,7 @@ from codegraph.graph.queries import (
     CallerNode,
     DepNode,
     DepTree,
+    EntityRow,
     ImpactTree,
     find_callers,
     find_dependencies,
@@ -195,6 +196,17 @@ def index(
         "--no-embed",
         help="Skip computing semantic embeddings (faster, literal search only).",
     ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help=(
+            "Re-parse every file even if its content hash is unchanged. Hash-based "
+            "skip only detects source edits -- upgrading codegraph itself (a parser "
+            "or resolver fix) doesn't change any file's hash, so a plain re-index "
+            "would keep serving results from the old parse. Use this after an "
+            "upgrade to pick up the new behavior."
+        ),
+    ),
 ) -> None:
     """Index a repository into the graph database. [T1.7]"""
     start = time.monotonic()
@@ -207,6 +219,20 @@ def index(
     parse_errors = 0
     parsed_files = 0
     unchanged_files = 0  # T2.3: hash matched, skipped re-parse
+
+    # Purge entities/edges for files the walk no longer sees at all (deleted,
+    # newly gitignored, or now excluded e.g. a nested repo boundary) -- the
+    # per-file loop below only clears rows for files it actually walks, so a
+    # file that drops out of the walk entirely would otherwise stay in the
+    # graph forever. Mirrors the MCP `reindex` tool's `find_deleted_files`
+    # cleanup, inlined here to reuse this command's already-open connection.
+    walked_paths = {p.relative_to(repo).as_posix() for p, _ in files}
+    existing_paths = {r[0] for r in store.conn.execute("SELECT path FROM files").fetchall()}
+    gone_paths = sorted(existing_paths - walked_paths)
+    if gone_paths:
+        store.clear_files(gone_paths)
+        for gone_path in gone_paths:
+            store.conn.execute("DELETE FROM files WHERE path = ?", [gone_path])
 
     # Batched across files rather than upserted per-file: DuckDB's
     # register/execute/unregister cycle for a bulk insert costs low-tens-of-ms
@@ -269,8 +295,8 @@ def index(
             current_hash = hash_source(source)
             prev_hash = store.get_file_hash(rel_path)
 
-            # T2.3: skip re-parse when hash hasn't changed.
-            if prev_hash == current_hash:
+            # T2.3: skip re-parse when hash hasn't changed (unless --force).
+            if prev_hash == current_hash and not force:
                 unchanged_files += 1
                 progress.advance(task)
                 continue
@@ -356,6 +382,11 @@ def index(
         )
     if parse_errors:
         console.print(f"[yellow]{parse_errors} files had errors (see above).[/yellow]")
+    if gone_paths:
+        noun = "file" if len(gone_paths) == 1 else "files"
+        console.print(
+            f"[dim]Removed {len(gone_paths)} {noun} no longer present from the index.[/dim]"
+        )
     if parsed_files == 0 and unchanged_files == 0 and skipped_lang == 0:
         console.print("[yellow]No indexable files found.[/yellow]")
 
@@ -498,6 +529,27 @@ def ask(
         _emit("\n")
 
 
+def _resolve_entity_or_exit(store: GraphStore, entity: str) -> EntityRow:
+    """Resolve `entity` (name, qualified_name, or entity_id) to a single row.
+
+    Prints a yellow message and exits (code 1) when there's no match, or when
+    the name is ambiguous -- in the ambiguous case it lists candidate
+    entity_ids so the caller can retry with one of those instead.
+    """
+    hits = find_entity_by_name_or_id(store.conn, entity)
+    if not hits:
+        console.print(f"[yellow]No entity matching {entity!r}.[/yellow]")
+        raise typer.Exit(code=1)
+    if len(hits) > 1:
+        console.print(
+            f"[yellow]{len(hits)} entities match {entity!r}. Pass an entity_id instead:[/yellow]"
+        )
+        for h in hits[:10]:
+            console.print(f"  [dim]{h.entity_id}[/dim]  ({h.type}, {h.file}:{h.start_line})")
+        raise typer.Exit(code=1)
+    return hits[0]
+
+
 @app.command()
 def deps(
     entity: str = typer.Argument(
@@ -514,19 +566,7 @@ def deps(
         raise typer.Exit(code=1)
 
     with GraphStore(db) as store:
-        hits = find_entity_by_name_or_id(store.conn, entity)
-        if not hits:
-            console.print(f"[yellow]No entity matching {entity!r}.[/yellow]")
-            raise typer.Exit(code=1)
-        if len(hits) > 1:
-            console.print(
-                f"[yellow]{len(hits)} entities match {entity!r}. Pass an entity_id instead:[/yellow]"
-            )
-            for h in hits[:10]:
-                console.print(f"  [dim]{h.entity_id}[/dim]  ({h.type}, {h.file}:{h.start_line})")
-            raise typer.Exit(code=1)
-
-        root_row = hits[0]
+        root_row = _resolve_entity_or_exit(store, entity)
         tree_data = find_dependencies(store.conn, root_row.entity_id, depth=depth)
 
     root_label = (
@@ -584,19 +624,7 @@ def impact(
         raise typer.Exit(code=1)
 
     with GraphStore(db) as store:
-        hits = find_entity_by_name_or_id(store.conn, entity)
-        if not hits:
-            console.print(f"[yellow]No entity matching {entity!r}.[/yellow]")
-            raise typer.Exit(code=1)
-        if len(hits) > 1:
-            console.print(
-                f"[yellow]{len(hits)} entities match {entity!r}. Pass an entity_id instead:[/yellow]"
-            )
-            for h in hits[:10]:
-                console.print(f"  [dim]{h.entity_id}[/dim]  ({h.type}, {h.file}:{h.start_line})")
-            raise typer.Exit(code=1)
-
-        root_row = hits[0]
+        root_row = _resolve_entity_or_exit(store, entity)
         impact_data = find_callers(store.conn, root_row.entity_id, depth=depth)
 
     root_label = (
@@ -771,18 +799,7 @@ def owner(
     from codegraph.analysis.ownership import entity_ownership
 
     with GraphStore(db) as store:
-        hits = find_entity_by_name_or_id(store.conn, entity)
-        if not hits:
-            console.print(f"[yellow]No entity matching {entity!r}.[/yellow]")
-            raise typer.Exit(code=1)
-        if len(hits) > 1:
-            console.print(
-                f"[yellow]{len(hits)} entities match {entity!r}. Pass an entity_id instead:[/yellow]"
-            )
-            for h in hits[:10]:
-                console.print(f"  [dim]{h.entity_id}[/dim]  ({h.type}, {h.file}:{h.start_line})")
-            raise typer.Exit(code=1)
-        row = hits[0]
+        row = _resolve_entity_or_exit(store, entity)
         span = store.conn.execute(
             "SELECT file, start_line, end_line FROM entities WHERE entity_id = ?",
             [row.entity_id],
@@ -973,6 +990,27 @@ def serve(
         _build_frontend()
         url = f"http://{host}:{port}"
 
+    # The embedding model (torch + sentence-transformers) loads lazily on
+    # first use. Without this, that one-time cost -- tens of seconds on a
+    # cold cache -- silently lands on whoever fires the first semantic
+    # search or `ask` request, making the server look frozen with zero
+    # explanation. `watch` and the MCP server both already warm it at
+    # startup; pay it here too, only when the index actually has vectors to
+    # search.
+    try:
+        with GraphStore(db, read_only=True) as store:
+            has_embeddings = store.count_embedded() > 0
+    except Exception:  # noqa: BLE001 — best-effort; a broken check must not block serving
+        has_embeddings = False
+    if has_embeddings:
+        console.print("[dim]Loading embedding model (one-time)...[/dim]")
+        try:
+            from codegraph.embeddings.pipeline import embed_one
+
+            embed_one("warm up")
+        except Exception:  # noqa: BLE001 — warm-up is best-effort; first real request still works
+            pass
+
     application = create_app(db)
     if open_browser:
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
@@ -1086,12 +1124,16 @@ def context(
 
 @app.command()
 def trace(
-    from_id: str = typer.Argument(..., help="Source entity_id (start of the call chain)."),
-    to_id: str = typer.Argument(..., help="Destination entity_id (end of the call chain)."),
+    from_entity: str = typer.Argument(
+        ..., help="Source entity name, qualified_name, or entity_id (start of the call chain)."
+    ),
+    to_entity: str = typer.Argument(
+        ..., help="Destination entity name, qualified_name, or entity_id (end of the call chain)."
+    ),
     max_hops: int = typer.Option(7, "--max-hops", help="BFS hop limit (default 7, max 20)."),
     db: Path = typer.Option(DEFAULT_DB, "--db", help="DuckDB graph file path."),
 ) -> None:
-    """Find the shortest call path between two entity_ids (BFS). [T12.4]"""
+    """Find the shortest call path between two entities (BFS). [T12.4]"""
     if not db.exists():
         console.print(
             f"[red]No graph database at {db}.[/red] Run [bold]codegraph index <repo>[/bold] first."
@@ -1101,11 +1143,16 @@ def trace(
     from codegraph.analysis.traversal import find_shortest_path
 
     with GraphStore(db) as store:
-        path = find_shortest_path(store.conn, from_id, to_id, max_hops=max(1, min(max_hops, 20)))
+        from_row = _resolve_entity_or_exit(store, from_entity)
+        to_row = _resolve_entity_or_exit(store, to_entity)
+        path = find_shortest_path(
+            store.conn, from_row.entity_id, to_row.entity_id, max_hops=max(1, min(max_hops, 20))
+        )
 
     if path is None:
         console.print(
-            f"[yellow]No call path from {from_id!r} to {to_id!r} within {max_hops} hop(s).[/yellow]"
+            f"[yellow]No call path from {from_row.entity_id!r} to {to_row.entity_id!r} "
+            f"within {max_hops} hop(s).[/yellow]"
         )
         raise typer.Exit(code=1)
 
@@ -1223,6 +1270,21 @@ def watch(
         on_change=_on_change,
     )
     watcher.start()
+
+    if not no_embed:
+        # The embedding model (torch + sentence-transformers) is loaded lazily
+        # on first use. Without this, that one-time cost -- tens of seconds on
+        # a cold cache -- silently lands on whichever file the user happens to
+        # save first, making an ordinary edit look like the watcher hung with
+        # zero explanation. Pay it once, up front, with a message that says why.
+        console.print("[dim]Loading embedding model (one-time)...[/dim]")
+        try:
+            from codegraph.embeddings.pipeline import embed_one
+
+            embed_one("warm up")
+        except Exception:  # noqa: BLE001 — warm-up is best-effort; first real save still works
+            pass
+
     console.print(
         f"Watching [bold]{repo}[/bold]  "
         f"[dim](db: {db}, debounce: {debounce:.2f}s, Ctrl-C to stop)[/dim]"

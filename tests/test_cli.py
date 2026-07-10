@@ -66,6 +66,36 @@ def test_index_is_idempotent(runner: CliRunner, tmp_path: Path) -> None:
         store.close()
 
 
+def test_index_force_reparses_unchanged_files(runner: CliRunner, tmp_path: Path) -> None:
+    """`--force` must re-parse every file even when its hash hasn't changed.
+
+    Regression test: hash-based incremental skip only detects source edits, so
+    a plain re-index after upgrading codegraph itself (a parser/resolver fix,
+    no source file touched) silently kept serving entities/edges from the old
+    parse. `--force` is the escape hatch.
+    """
+    db = tmp_path / "graph.duckdb"
+    runner.invoke(app, ["index", str(SAMPLE_REPO), "--db", str(db)])
+    store = GraphStore(db)
+    try:
+        first_entities = store.count_entities()
+        first_files = store.count_files()
+    finally:
+        store.close()
+
+    result = runner.invoke(app, ["index", str(SAMPLE_REPO), "--db", str(db), "--force"])
+    assert result.exit_code == 0, result.output
+    assert "unchanged" not in result.stdout
+    assert f"Parsed {first_files} files" in result.stdout
+    store = GraphStore(db)
+    try:
+        # Re-parsing unchanged source must not duplicate rows.
+        assert store.count_entities() == first_entities
+        assert store.count_files() == first_files
+    finally:
+        store.close()
+
+
 def test_index_indexes_python_and_typescript(runner: CliRunner, tmp_path: Path) -> None:
     """T2.4: TS files index alongside Python files in the same DB."""
     repo = tmp_path / "repo"
@@ -109,6 +139,48 @@ def test_index_missing_repo_errors(runner: CliRunner, tmp_path: Path) -> None:
         app, ["index", str(tmp_path / "nope"), "--db", str(tmp_path / "g.duckdb")]
     )
     assert result.exit_code != 0  # typer rejects missing path via exists=True
+
+
+def test_index_purges_entities_for_files_no_longer_walked(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """A file that drops out of the walk entirely (deleted, or newly excluded
+    e.g. a nested repo boundary) must have its entities/edges/file row
+    removed on the next plain `index`, not just files the walk still sees."""
+    repo = tmp_path / "repo"
+    _make_pyrepo(
+        repo,
+        {
+            "keep.py": "def keep(): pass\n",
+            "gone.py": "def gone(): pass\n",
+        },
+    )
+    db = tmp_path / "graph.duckdb"
+    runner.invoke(app, ["index", str(repo), "--db", str(db)])
+    store = GraphStore(db)
+    try:
+        assert store.count_files() == 2
+        assert any(
+            r[0] == "gone.py"
+            for r in store.conn.execute("SELECT path FROM files").fetchall()
+        )
+    finally:
+        store.close()
+
+    (repo / "gone.py").unlink()
+    result = runner.invoke(app, ["index", str(repo), "--db", str(db)])
+    assert result.exit_code == 0
+    assert "Removed 1 file no longer present" in result.stdout
+
+    store = GraphStore(db)
+    try:
+        paths = {r[0] for r in store.conn.execute("SELECT path FROM files").fetchall()}
+        assert paths == {"keep.py"}
+        names = {r[0] for r in store.conn.execute("SELECT name FROM entities").fetchall()}
+        assert "gone" not in names
+        assert "keep" in names
+    finally:
+        store.close()
 
 
 # ---------- search ----------

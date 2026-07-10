@@ -156,6 +156,34 @@ def test_walk_skips_always_excluded_dirs(tmp_path: Path) -> None:
     assert _relpaths(out) == {"keep.py"}
 
 
+def test_walk_skips_nested_git_repos(tmp_path: Path) -> None:
+    _make_repo(
+        tmp_path,
+        {
+            "keep.py": "x = 1\n",
+            "vendor/tool/.git/HEAD": "ref: refs/heads/main\n",
+            "vendor/tool/tool.py": "x = 1\n",
+            "vendor/tool/tests/fixtures/auth.py": "x = 1\n",
+        },
+    )
+    out = list(walk(tmp_path))
+    assert _relpaths(out) == {"keep.py"}
+
+
+def test_walk_skips_nested_repo_with_git_as_file(tmp_path: Path) -> None:
+    # A worktree/submodule checkout has `.git` as a file, not a directory.
+    _make_repo(
+        tmp_path,
+        {
+            "keep.py": "x = 1\n",
+            "vendor/tool/.git": "gitdir: ../../.git/modules/tool\n",
+            "vendor/tool/tool.py": "x = 1\n",
+        },
+    )
+    out = list(walk(tmp_path))
+    assert _relpaths(out) == {"keep.py"}
+
+
 def test_always_exclude_constants_present() -> None:
     # Smoke-check the set of always-excluded names. If we change one, this test
     # is the canary that the change was intentional.

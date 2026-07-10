@@ -152,6 +152,40 @@ def test_watch_no_embed_flag_passes_to_watcher(tmp_path: Path) -> None:
     assert kwargs.get("no_embed") is True
 
 
+def test_watch_warms_embedding_model_before_watching(tmp_path: Path) -> None:
+    """Regression test: the embedding model used to load lazily on whatever
+    file the user happened to save first, making an ordinary edit look like
+    the watcher hung for tens of seconds with no explanation. It must now be
+    warmed up eagerly, before the "Watching" banner prints."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    db = tmp_path / "graph.duckdb"
+
+    with (
+        patch("codegraph.sync.watcher.RepoWatcher", return_value=_mock_watcher()),
+        patch("codegraph.embeddings.pipeline.embed_one") as embed_one_mock,
+    ):
+        result = _RUNNER.invoke(app, ["watch", str(repo), "--db", str(db)])
+
+    embed_one_mock.assert_called_once()
+    assert "Loading embedding model" in _plain(result.output)
+
+
+def test_watch_no_embed_skips_model_warm_up(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    db = tmp_path / "graph.duckdb"
+
+    with (
+        patch("codegraph.sync.watcher.RepoWatcher", return_value=_mock_watcher()),
+        patch("codegraph.embeddings.pipeline.embed_one") as embed_one_mock,
+    ):
+        result = _RUNNER.invoke(app, ["watch", str(repo), "--db", str(db), "--no-embed"])
+
+    embed_one_mock.assert_not_called()
+    assert "Loading embedding model" not in _plain(result.output)
+
+
 def test_watch_debounce_option_passes_to_watcher(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
