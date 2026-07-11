@@ -1275,6 +1275,28 @@ def _warm_embedding_model_with_timeout(timeout: float = _WARM_UP_TIMEOUT_SEC) ->
         )
 
 
+def _breadcrumb(msg: str) -> None:
+    """Timestamped boot-phase line on stderr (stdout is reserved for MCP framing).
+
+    Claude Code captures an MCP server's stderr into its logs, so these lines
+    turn a "codegraph is stuck connecting" report into a one-glance diagnosis:
+    no lines at all = the process never spawned; lines that stop at a phase =
+    boot stalled there (with timings saying where the time went); a "serving"
+    line present = boot completed and the problem is the handshake or client.
+    Added after three real stuck-connection incidents, each with a different
+    root cause, that all began as guesswork over a silent process.
+    """
+    import os
+    import sys
+    from datetime import datetime
+
+    print(
+        f"CodeGraph[mcp pid={os.getpid()}] {datetime.now():%H:%M:%S} {msg}",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
 async def _serve() -> None:
     from mcp.server.stdio import stdio_server
 
@@ -1284,14 +1306,19 @@ async def _serve() -> None:
 
 def main() -> None:
     global _db_path
+    import time
+
+    boot_start = time.monotonic()
     parser = argparse.ArgumentParser(prog="codegraph-mcp", description="CodeGraph MCP server.")
     parser.add_argument("--db", type=Path, default=None, help="Path to the graph DuckDB file.")
     args = parser.parse_args()
     if args.db is not None:
         _db_path = args.db
+    _breadcrumb(f"starting (db: {get_db_path()})")
 
     # Staleness check: warn to stderr if source files changed since last index.
     # stdout is reserved for MCP framing; all diagnostics must go to stderr.
+    stale_start = time.monotonic()
     try:
         from codegraph.sync.watcher import count_stale_files
 
@@ -1307,11 +1334,19 @@ def main() -> None:
             )
     except Exception:  # noqa: BLE001 — staleness check is best-effort
         pass
+    stale_secs = time.monotonic() - stale_start
 
     # Warm the embedding model in the main thread BEFORE serving, so the first
     # get_context doesn't trigger a heavy off-main-thread import that can hang.
     # Bounded so a slow environment can't also stall the MCP handshake itself.
+    warm_start = time.monotonic()
     _warm_embedding_model_with_timeout()
+    warm_secs = time.monotonic() - warm_start
+
+    _breadcrumb(
+        f"serving (boot {time.monotonic() - boot_start:.1f}s: "
+        f"staleness {stale_secs:.1f}s, warmup {warm_secs:.1f}s)"
+    )
 
     import anyio
 

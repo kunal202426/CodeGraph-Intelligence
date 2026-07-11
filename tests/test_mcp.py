@@ -710,6 +710,39 @@ def test_warm_embedding_model_is_noop_when_db_missing(
     mcp_server._warm_embedding_model()  # should return quietly
 
 
+def test_breadcrumb_writes_to_stderr_never_stdout(capsys: pytest.CaptureFixture) -> None:
+    """stdout is reserved for MCP framing -- a single stray byte there corrupts
+    the protocol stream. Boot diagnostics must go to stderr only."""
+    mcp_server._breadcrumb("starting (db: x)")
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "CodeGraph[mcp pid=" in captured.err
+    assert "starting (db: x)" in captured.err
+
+
+def test_main_emits_starting_and_serving_breadcrumbs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """The boot path must leave a breadcrumb trail on stderr: 'starting' at
+    process start and 'serving' (with phase timings) once the handshake loop
+    is about to begin. Added after three real stuck-connection incidents that
+    each began as guesswork over a silent process -- with these lines, the
+    absence/last-line of the trail localizes the stall at a glance."""
+    import anyio
+
+    monkeypatch.setattr(mcp_server, "_db_path", tmp_path / "nope.duckdb")
+    monkeypatch.setattr("sys.argv", ["codegraph-mcp"])
+    monkeypatch.setattr(anyio, "run", lambda fn: None)
+
+    mcp_server.main()
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "starting (db:" in captured.err
+    assert "serving (boot" in captured.err
+    assert "warmup" in captured.err
+
+
 def test_warm_embedding_model_with_timeout_waits_for_a_fast_warmup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
