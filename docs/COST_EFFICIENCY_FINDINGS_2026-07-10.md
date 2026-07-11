@@ -72,6 +72,78 @@ re-measured empirically** — the honest next step is rerunning the same 5-quest
 the updated guide to see how much of the 34% gap it actually closes. Don't claim it's fixed
 until that's done.
 
+## Round 2 (same day): re-measured after the guide fix — still not worth it, so went deeper
+
+Re-ran a 4-question subset with the updated guide: with-codegraph hit **$1.09 by Q4 vs
+$0.97 without**. Better than the first round's gap, still net-negative. The guide fix was
+necessary but not sufficient — so this round attacked the actual cost structure instead of
+the instructions around it.
+
+**The economics, from first principles:** an agentic session's dollar cost is dominated by
+cache reads — every turn re-reads the entire accumulated context, and (per Claude Code's
+own UI tooltip) *"MCP tool results stay in context for the rest of the session."* So only
+two levers actually matter:
+
+1. **Round-trips.** Each eliminated tool call saves an entire context re-read (~150k+
+   tokens of cache read per turn in these sessions ≈ $0.05 each).
+2. **Permanent context growth per response.** Every byte a tool returns is re-paid on
+   *every subsequent turn* — response size has a compounding cost, not a one-time one.
+
+**Measured where the response bytes actually go** (real query, LedgerGuard index, 5-entity
+summary response = 4,822 chars ≈ 1,205 tokens): per entity, `name`, `qualified_name`,
+`language`, and `file` (~150 chars) are pure duplication — all derivable from `entity_id`,
+whose format is literally `{lang}:{file}:{qname}`. Null fields (`"docstring": null`) and an
+unused `via` retrieval-provenance tag added more. Worst of all: neighbor lists carried up
+to 16 *full entity_ids* per entity at ~75+ chars each on a Java repo (the file path
+repeated in every one), when the qualified name (~25 chars) is all an agent needs to
+understand a neighborhood.
+
+### Shipped: response payload slimming (`server/mcp_server.py`)
+
+- Dropped `name`/`qualified_name`/`language`/`file`/`via` from `get_context` entities
+  (derivable from `entity_id` or unused), plus all null/empty fields.
+- Summary-mode neighbor lists now carry qualified names, not full ids (full ids still
+  available via `detail="full"` or `impact_analysis`; the tool description explicitly
+  tells the agent this so it doesn't waste a round-trip misusing a name as an id).
+- Summary-mode docstrings truncate to their first line (the source preview already shows
+  the opening lines; `detail="full"` keeps everything).
+- Envelope: dropped the `query`/`detail` echo and the derivable `tokens_saved`.
+
+**Measured result: the same real query's response went 4,822 → 3,100 chars (−36%)**, with
+the informative content (preview, structure, neighbor names, savings fields) intact.
+8 new/updated tests.
+
+Same treatment applied to the other two hot-path tools: `get_entity_context` no longer
+echoes back the four fields derivable from the id the caller just passed in, and
+`impact_analysis` no longer repeats each caller's `name` and full `file` path alongside an
+`entity_id` that already contains both — on a deep impact tree that duplication roughly
+doubled every node.
+
+### Shipped: edit-workflow rule in the guide
+
+The Q4 transcripts showed the with-codegraph agent fetching full source over MCP and
+*then* Reading the same file again because Claude Code's Edit tool requires a fresh Read —
+paying for the source twice, plus an extra round-trip. The guide now says: for an edit,
+locate with ONE `get_context`, then go straight to Read + Edit; never pull full source
+over MCP first. This is the honest division of labor: **the graph's edge is locating and
+relating code, not delivering bodies the file tools will re-deliver anyway.**
+
+### Where this tool actually wins — the design direction that matters
+
+The A/B also showed *where* the tool is genuinely better, and it's not raw retrieval on a
+47-file repo (grep is nearly free there): Q1 understanding was already slightly cheaper
+with codegraph, and `impact_analysis`/`trace_path` answered structural questions in one
+call that grep needs several rounds to approximate. The value scales with codebase size
+and with **cross-file/structural** questions — and, critically, with **cross-session
+reuse**: Claude's context evaporates between sessions, but the index (and its stored
+summaries) persist. A single A/B session is close to the tool's worst case; the
+per-session re-exploration it can eliminate across dozens of sessions is its best. The
+biggest unbuilt lever from this analysis: a ~500-token pre-computed `project_brief`
+(architecture, layers, key entities, hot paths) served once at session start, replacing
+the multi-call re-orientation every fresh session currently performs — that's the
+persistent-index advantage made directly billable. Needs its own design pass; logged as
+the top candidate for the next improvement round, ahead of everything below.
+
 ## Not fixed this pass — prioritized ideas for real improvement
 
 Ranked by confidence × leverage, not implemented blind — each needs either more design

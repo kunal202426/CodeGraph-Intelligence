@@ -35,8 +35,10 @@ and capture cross-file call/import edges single files miss. Use them by default.
 **Rules (every task):**
 1. Do NOT open a source file before calling `get_context("<concept>")`. Skip `index_status`
    -- `get_context` reports staleness itself via `warnings`; call `reindex` only if it appears.
-2. Know the small, specific edit target already? Call `get_context(..., detail="full")`
-   directly -- skip a summary-then-full two-step. Every round-trip costs real tokens.
+2. Editing code? ONE `get_context` to locate it, then Read the file and edit -- never
+   pull full source over MCP first (Edit needs a fresh Read; fetching both pays twice).
+   Reading 1-2 entities only? `get_context(..., detail="full")` directly, not
+   summary-then-full.
 3. After a `get_context` call, report the savings: `CodeGraph: ~<tokens_estimated> vs
    ~<tokens_if_read> tokens (<savings_ratio>x less)`.
 

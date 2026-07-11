@@ -522,46 +522,106 @@ def test_get_context_returns_packed_result(indexed_db: Path) -> None:
     # Summary fields present
     assert "entity_id" in top
     assert "signature" in top or "docstring" in top
-    # Graph neighbourhood present
-    assert "depends_on" in top
-    assert "called_by" in top
-    assert isinstance(top["depends_on"], list)
-    assert isinstance(top["called_by"], list)
-    # Exact neighbour counts always reported
-    assert "depends_on_count" in top and "called_by_count" in top
-    # Retriever tags present
-    assert "via" in top and isinstance(top["via"], list)
+    # Graph neighbourhood present when non-empty (authenticate has callers)
+    auth = next(e for e in data["entities"] if e["entity_id"].endswith(":authenticate"))
+    assert isinstance(auth["called_by"], list) and auth["called_by"]
+    assert auth["called_by_count"] >= len(auth["called_by"])
+
+
+def test_get_context_strips_fields_derivable_from_entity_id(indexed_db: Path) -> None:
+    """entity_id is {lang}:{file}:{qname}, so name/qualified_name/language/file
+    are pure duplication. Every response byte stays in the agent's context for
+    the whole session and is re-read from cache each turn -- found via a real
+    A/B cost measurement where a codegraph session cost more than one without."""
+    data = _call("get_context", {"query": "authenticate"})
+    for ent in data["entities"]:
+        for redundant in ("name", "qualified_name", "language", "file", "via"):
+            assert redundant not in ent, f"{redundant} should be stripped (derivable/unused)"
+        # And nothing null/empty survives serialization.
+        for key, value in ent.items():
+            assert value not in (None, "", []), f"{key} is empty -- should have been dropped"
+
+
+def test_get_context_summary_neighbors_are_names_not_ids(indexed_db: Path) -> None:
+    """Summary-mode depends_on/called_by carry qualified names, not full ids --
+    a Java neighbour id repeats the whole file path; the qname is what an agent
+    needs to understand the neighbourhood. Ids on demand via impact_analysis."""
+    data = _call("get_context", {"query": "authenticate", "limit": 10})
+    for ent in data["entities"]:
+        for label in ent.get("called_by", []) + ent.get("depends_on", []):
+            if label.startswith(("external:", "wildcard:", "route:")):
+                continue  # pseudo-ids pass through unchanged
+            assert "/" not in label, f"{label} looks like a full entity_id, not a qname"
 
 
 def test_get_context_summary_caps_neighbor_lists(indexed_db: Path) -> None:
-    """Summary mode caps the id lists at _NEIGHBOR_CAP but reports the true count."""
+    """Summary mode caps the lists at _NEIGHBOR_CAP but reports the true count."""
     from codegraph.server.mcp_server import _NEIGHBOR_CAP
 
     data = _call("get_context", {"query": "authenticate", "limit": 10})
     for ent in data["entities"]:
-        assert len(ent["depends_on"]) <= _NEIGHBOR_CAP
-        assert len(ent["called_by"]) <= _NEIGHBOR_CAP
+        deps = ent.get("depends_on", [])
+        callers = ent.get("called_by", [])
+        assert len(deps) <= _NEIGHBOR_CAP
+        assert len(callers) <= _NEIGHBOR_CAP
         # Count is the source of truth and is >= the (possibly capped) list length.
-        assert ent["depends_on_count"] >= len(ent["depends_on"])
-        assert ent["called_by_count"] >= len(ent["called_by"])
+        if deps:
+            assert ent["depends_on_count"] >= len(deps)
+        if callers:
+            assert ent["called_by_count"] >= len(callers)
 
 
 def test_get_context_summary_omits_raw_source(indexed_db: Path) -> None:
     """Default (summary) mode must NOT include full raw_source -- token discipline."""
     data = _call("get_context", {"query": "authenticate"})
-    assert data["detail"] == "summary"
     for ent in data["entities"]:
         assert "raw_source" not in ent
         assert "source_preview" in ent
 
 
+def test_get_context_summary_truncates_docstring_to_first_line(indexed_db: Path) -> None:
+    """The preview already shows the body's opening lines; a multi-paragraph
+    docstring in summary mode is duplicated weight. detail='full' keeps it all."""
+    data = _call("get_context", {"query": "authenticate"})
+    auth = next(e for e in data["entities"] if e["entity_id"].endswith(":authenticate"))
+    assert "\n" not in auth.get("docstring", "")
+
+    full = _call("get_context", {"query": "authenticate", "detail": "full"})
+    auth_full = next(e for e in full["entities"] if e["entity_id"].endswith(":authenticate"))
+    # The fixture's authenticate docstring is multi-line; full mode keeps it whole.
+    assert "\n" in (auth_full.get("docstring") or "")
+
+
 def test_get_context_full_includes_raw_source(indexed_db: Path) -> None:
     """detail='full' includes complete bodies and omits the preview."""
     data = _call("get_context", {"query": "authenticate", "detail": "full"})
-    assert data["detail"] == "full"
     top = data["entities"][0]
     assert "raw_source" in top
     assert "source_preview" not in top
+
+
+def test_get_context_full_neighbors_are_full_ids(indexed_db: Path) -> None:
+    """Full mode keeps complete entity_ids in the neighbour lists -- that's the
+    mode for acting on the graph, so ids must be directly usable."""
+    data = _call("get_context", {"query": "authenticate", "detail": "full"})
+    auth = next(e for e in data["entities"] if e["entity_id"].endswith(":authenticate"))
+    assert auth["called_by"]
+    assert all(c.split(":", 1)[0] == "py" for c in auth["called_by"])
+
+
+def test_neighbor_label_compacts_real_ids_and_passes_pseudo_ids() -> None:
+    from codegraph.server.mcp_server import _neighbor_label
+
+    assert _neighbor_label("py:auth/login.py:LoginForm.submit") == "LoginForm.submit"
+    assert (
+        _neighbor_label(
+            "java:backend/src/main/java/com/x/AnomalyScorer.java:AnomalyScorer.closeBucket"
+        )
+        == "AnomalyScorer.closeBucket"
+    )
+    assert _neighbor_label("external:sqrt") == "external:sqrt"
+    assert _neighbor_label("route:GET /me") == "route:GET /me"
+    assert _neighbor_label("wildcard:ts:src/x.ts") == "wildcard:ts:src/x.ts"
 
 
 def test_get_context_warns_when_no_embeddings(indexed_db: Path) -> None:
@@ -604,13 +664,18 @@ def test_get_context_reports_token_estimate(indexed_db: Path) -> None:
 
 
 def test_get_context_reports_token_savings(indexed_db: Path) -> None:
-    """get_context surfaces a savings comparison vs reading the files in full."""
+    """get_context surfaces a savings comparison vs reading the files in full.
+
+    tokens_saved is deliberately NOT in the response -- it's derivable from the
+    other two fields, and every response byte is re-paid on every later turn."""
     data = _call("get_context", {"query": "authenticate"})
-    for key in ("tokens_if_read", "tokens_saved", "savings_ratio"):
+    for key in ("tokens_if_read", "savings_ratio"):
         assert key in data
+    assert "tokens_saved" not in data
+    assert "query" not in data  # no echo of what the caller just sent
+    assert "detail" not in data
     # Reading the full files costs at least as much as the lean context.
     assert data["tokens_if_read"] >= data["tokens_estimated"]
-    assert data["tokens_saved"] == max(0, data["tokens_if_read"] - data["tokens_estimated"])
     assert data["savings_ratio"] >= 1.0
 
 
@@ -618,7 +683,6 @@ def test_get_context_no_match_has_zero_savings(indexed_db: Path) -> None:
     data = _call("get_context", {"query": "zzz_no_such_symbol_42"})
     assert data["total"] == 0
     assert data["tokens_if_read"] == 0
-    assert data["tokens_saved"] == 0
     assert data["savings_ratio"] == 0.0
 
 
@@ -696,8 +760,8 @@ def test_get_context_respects_token_budget(indexed_db: Path) -> None:
 def test_get_context_authenticate_has_callers(indexed_db: Path) -> None:
     """The authenticate function is called by other entities in the fixture."""
     data = _call("get_context", {"query": "authenticate"})
-    # Find the authenticate entity specifically
-    auth_ents = [e for e in data["entities"] if e.get("name") == "authenticate"]
+    # Find the authenticate entity specifically (name lives in the id's tail now)
+    auth_ents = [e for e in data["entities"] if e["entity_id"].endswith(":authenticate")]
     assert auth_ents, "authenticate should appear in get_context results"
     assert auth_ents[0]["called_by"], "authenticate must have at least one caller"
 

@@ -296,7 +296,11 @@ def tool_definitions() -> list[Tool]:
                 "short source preview, and each entity's callers and callees. Replaces "
                 "3-4 round-trips (search + entity + impact) and uses ~10x fewer tokens "
                 "than opening files. Defaults to lean summaries; pass detail='full' only "
-                "when you need complete bodies (1-2 entities at a time)."
+                "when you need complete bodies (1-2 entities at a time). In summary mode "
+                "the depends_on/called_by lists are qualified NAMES, not entity_ids -- "
+                "to act on a neighbour, get its id from impact_analysis(this entity_id) "
+                "or search_code(name); the file path is embedded in each entity_id "
+                "({lang}:{file}:{qname})."
             ),
             inputSchema={
                 "type": "object",
@@ -485,6 +489,36 @@ def _source_preview(raw_source: str | None, max_lines: int = _SOURCE_PREVIEW_LIN
     return f"{head}\n... ({len(lines) - max_lines} more lines; pass detail='full' for all)"
 
 
+def _neighbor_label(entity_id: str) -> str:
+    """Compact display form of a neighbour id for get_context summary mode.
+
+    An entity_id is ``{lang}:{file}:{qualified_name}``, so on a deeply nested
+    repo every neighbour id repeats the full file path (~75+ chars on a real
+    Java project) when the qualified name (~25 chars) is all an agent needs to
+    *understand* the neighbourhood. Every char returned stays in the agent's
+    conversation context for the rest of its session and is re-read from cache
+    on every later turn, so this redundancy compounds instead of being paid
+    once. Full ids remain available via detail='full' or impact_analysis.
+
+    Pseudo-ids without a third segment (``external:sqrt``, ``route:GET /me``)
+    and wildcard markers are already short and pass through unchanged.
+    """
+    parts = entity_id.split(":", 2)
+    if len(parts) == 3 and parts[0] not in ("external", "wildcard"):
+        return parts[2]
+    return entity_id
+
+
+def _first_line(text: str | None) -> str | None:
+    """First line of a docstring for summary mode, with a truncation marker."""
+    if not text:
+        return text
+    lines = text.strip().splitlines()
+    if len(lines) <= 1:
+        return lines[0] if lines else ""
+    return f"{lines[0]} ..."
+
+
 def _labels_for(conn, entity_ids: list[str]) -> dict[str, str]:
     """Map each entity_id to a human-readable 'name (file:line)' label.
 
@@ -564,6 +598,12 @@ def _get_entity_context(args: dict[str, Any]) -> str:
         ).fetchall()
     finally:
         store.close()
+    # The caller passed the entity_id, which already encodes lang/file/qname --
+    # echoing them back as fields is context weight re-paid every later turn.
+    # Neighbour lists stay full ids here: this is the acting-on-the-graph tool.
+    for derivable in ("name", "qualified_name", "language", "file"):
+        entity.pop(derivable, None)
+    entity = {k: v for k, v in entity.items() if v not in (None, "")}
     return json.dumps(
         {
             "entity": entity,
@@ -586,11 +626,10 @@ def _impact_analysis(args: dict[str, Any]) -> str:
             "root": tree.root,
             "total": tree.total,
             "truncated": tree.truncated,
+            # name and file are both embedded in entity_id ({lang}:{file}:{qname});
+            # repeating them per caller doubled every node of a deep impact tree.
             "callers": {
-                callee: [
-                    {"entity_id": c.entity_id, "name": c.name, "type": c.type, "file": c.file}
-                    for c in callers
-                ]
+                callee: [{"entity_id": c.entity_id, "type": c.type} for c in callers]
                 for callee, callers in tree.callers.items()
             },
         }
@@ -699,13 +738,10 @@ def _get_context(args: dict[str, Any]) -> str:
         if not hits:
             return json.dumps(
                 {
-                    "query": query,
                     "total": 0,
-                    "detail": detail,
                     "truncated": False,
                     "tokens_estimated": 0,
                     "tokens_if_read": 0,
-                    "tokens_saved": 0,
                     "savings_ratio": 0.0,
                     "warnings": warnings,
                     "entities": [],
@@ -713,6 +749,7 @@ def _get_context(args: dict[str, Any]) -> str:
             )
 
         entities = []
+        files_seen: list[str] = []
         used_tokens = 0
         truncated = False
         col_select = ", ".join(columns)
@@ -725,14 +762,18 @@ def _get_context(args: dict[str, Any]) -> str:
             if row is None:
                 continue
             entity: dict[str, Any] = dict(zip(columns, row, strict=True))
+            entity_file = entity.get("file")
 
-            # In summary mode, attach a short preview instead of the full body.
+            # In summary mode, attach a short preview instead of the full body,
+            # and cut the docstring to its first line (the preview usually shows
+            # the docstring's opening anyway; detail='full' has the whole thing).
             if not full:
                 preview_row = store.conn.execute(
                     "SELECT raw_source FROM entities WHERE entity_id = ?",
                     [eid],
                 ).fetchone()
                 entity["source_preview"] = _source_preview(preview_row[0] if preview_row else None)
+                entity["docstring"] = _first_line(entity.get("docstring"))
 
             # Outbound: imports + calls (what this entity depends on)
             deps = [
@@ -762,10 +803,21 @@ def _get_context(args: dict[str, Any]) -> str:
                 entity["depends_on"] = deps
                 entity["called_by"] = callers
             else:
-                entity["depends_on"] = deps[:_NEIGHBOR_CAP]
-                entity["called_by"] = callers[:_NEIGHBOR_CAP]
+                # Qualified names, not full ids -- see _neighbor_label.
+                entity["depends_on"] = [_neighbor_label(d) for d in deps[:_NEIGHBOR_CAP]]
+                entity["called_by"] = [_neighbor_label(c) for c in callers[:_NEIGHBOR_CAP]]
 
-            entity["via"] = list(hit.retrievers)
+            # Every char returned here stays in the agent's context for the rest
+            # of its session and is re-read from cache on every later turn, so
+            # redundancy has a compounding cost, not a one-time one. Drop fields
+            # derivable from entity_id ({lang}:{file}:{qname}) and empty values.
+            for derivable in ("name", "qualified_name", "language", "file"):
+                entity.pop(derivable, None)
+            entity = {
+                k: v
+                for k, v in entity.items()
+                if not (v is None or v == "" or v == [] or (k.endswith("_count") and v == 0))
+            }
 
             # Token budget: always include the first entity, then stop once the
             # running estimate would exceed max_tokens.
@@ -775,13 +827,14 @@ def _get_context(args: dict[str, Any]) -> str:
                 break
             used_tokens += entity_tokens
             entities.append(entity)
+            if entity_file:
+                files_seen.append(entity_file)
 
         # Per-file staleness banner: name the exact file(s) among *this response's*
         # entities that changed since indexing, rather than only the repo-wide
         # count above. More actionable -- the agent knows precisely what to
         # re-Read instead of distrusting the whole response.
-        referenced_files = {e["file"] for e in entities if e.get("file")}
-        stale_in_response = sorted(referenced_files & _get_stale_paths())
+        stale_in_response = sorted(set(files_seen) & _get_stale_paths())
         if stale_in_response:
             shown = ", ".join(stale_in_response[:5])
             more = "" if len(stale_in_response) <= 5 else f" (+{len(stale_in_response) - 5} more)"
@@ -791,22 +844,19 @@ def _get_context(args: dict[str, Any]) -> str:
             )
 
         # Savings: how many tokens reading the surfaced entities' files in full
-        # would cost, versus the (lean) context we actually returned.
-        tokens_if_read = read_baseline_tokens(
-            store.conn, [e["file"] for e in entities if e.get("file")]
-        )
-        tokens_saved = max(0, tokens_if_read - used_tokens)
+        # would cost, versus the (lean) context we actually returned. No query/
+        # detail echo and no derivable tokens_saved field -- the response lives
+        # in the agent's context for the whole session, so every byte here is
+        # paid on every subsequent turn.
+        tokens_if_read = read_baseline_tokens(store.conn, files_seen)
         savings_ratio = round(tokens_if_read / used_tokens, 1) if used_tokens else 0.0
 
         return json.dumps(
             {
-                "query": query,
                 "total": len(entities),
-                "detail": detail,
                 "truncated": truncated,
                 "tokens_estimated": used_tokens,
                 "tokens_if_read": tokens_if_read,
-                "tokens_saved": tokens_saved,
                 "savings_ratio": savings_ratio,
                 "warnings": warnings,
                 "entities": entities,
