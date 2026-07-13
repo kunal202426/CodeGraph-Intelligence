@@ -263,6 +263,35 @@ since `project_brief` is a low-risk additive tool (one bounded call, not a repla
 anything round 1-3 already validated) and not an active regression that needs urgent
 confirmation either way.
 
+## Round 5 (2026-07-13, same day): properly isolated `project_brief` A/B — a real, modest win
+
+Redid round 4 with the discipline it was missing: 3 different cold-start questions (not 1),
+each run twice in a fresh session — once letting `project_brief` fire normally, once with an
+explicit instruction to skip it while still allowing `get_context`/other codegraph tools.
+Every session's actual tool calls were confirmed from the in-transcript tool log (not
+reconstructed after the fact from a usage-panel side effect) — the first attempt at the
+"without" prompt (`"Do not call project_brief for this question"`) turned out to make the
+agent avoid the whole codegraph toolset, not just that one tool, which would have silently
+reproduced round 3's already-answered with/without-codegraph question instead of isolating
+`project_brief`; caught via the tool log showing zero MCP activity, fixed by making the
+prompt explicit that other codegraph tools were still expected.
+
+| Question | With `project_brief` | Without (codegraph tools still used) | Delta |
+|---|---|---|---|
+| Architecture overview | $0.37 (85% cache hit) | $0.48 (77% cache hit) | With −23% |
+| Transaction flow walkthrough | $0.70 (91% cache hit) | $0.67 (90% cache hit) | Without −4% |
+| Core abstractions/entry points | $0.48 (87% cache hit) | $0.52 (82% cache hit) | With −8% |
+| **Total** | **$1.55** | **$1.67** | **With −7%** |
+
+**`project_brief` wins.** 2 of 3 questions favor it on raw $ cost, the third is a near-wash
+slightly against it, and — more consistently than the $ number — **cache hit rate is higher
+with `project_brief` on all 3 questions**, including the one it lost on cost. A modest,
+real, properly-isolated improvement: not the dramatic win a from-scratch feature sometimes
+promises, but a genuine one, and importantly not a regression on any of the 3 questions
+tested. Consistent with round 3's finding that codegraph is closest to break-even (not a
+clear win) on a repo LedgerGuard's size — `project_brief` nudges that break-even point
+further in codegraph's favor rather than transforming it.
+
 ## What this report is NOT saying
 
 - Not saying CodeGraph's core graph/search/analysis features are wrong — cycles, smells,
