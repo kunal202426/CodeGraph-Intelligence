@@ -10,6 +10,7 @@ can call CodeGraph directly. A representative few:
   - get_entity_context — full source + immediate neighbours for an entity_id
   - impact_analysis    — reverse-call blast radius for an entity_id
   - ask_codebase       — natural-language question answered via GraphRAG
+  - project_brief      — cheap session-start orientation summary, call once first
   - get_unsummarized_entities / store_summaries — agent writes per-entity
         summaries back into the index (no API key), enriching semantic search
 
@@ -33,6 +34,7 @@ from typing import Any
 from mcp.server import Server
 from mcp.types import TextContent, Tool
 
+from codegraph.analysis.brief import build_project_brief
 from codegraph.graph.queries import find_callers, hybrid_search, read_baseline_tokens
 from codegraph.graph.ranking import (
     extract_search_terms,
@@ -306,7 +308,10 @@ def tool_definitions() -> list[Tool]:
                 "the depends_on/called_by lists are qualified NAMES, not entity_ids -- "
                 "to act on a neighbour, get its id from impact_analysis(this entity_id) "
                 "or search_code(name); the file path is embedded in each entity_id "
-                "({lang}:{file}:{qname})."
+                "({lang}:{file}:{qname}). Note: tokens_estimated/tokens_if_read/"
+                "savings_ratio in the response measure THIS response's size against a "
+                "full-file-read baseline, not your session's real $ cost -- that also "
+                "depends on round-trip count, which this ratio doesn't capture."
             ),
             inputSchema={
                 "type": "object",
@@ -340,6 +345,24 @@ def tool_definitions() -> list[Tool]:
                     },
                 },
                 "required": ["query"],
+            },
+        ),
+        Tool(
+            name="project_brief",
+            description=(
+                "Call this ONCE, first, at the start of a session on this codebase -- "
+                "before get_context, before anything else. Returns a small orientation "
+                "summary: language/file counts, architectural layers (presentation/"
+                "service/data directories), the highest fan-in entities (the functions "
+                "most of the codebase calls into -- likely the core abstractions), and "
+                "HTTP entry points (route -> handler). One cheap call replaces the "
+                "several exploratory get_context calls a fresh session would otherwise "
+                "need just to find its bearings. Takes no arguments."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": [],
             },
         ),
         Tool(
@@ -934,6 +957,36 @@ def _get_context(args: dict[str, Any]) -> str:
         store.close()
 
 
+def _project_brief(_args: dict[str, Any]) -> str:
+    """Small, cheap session-start orientation summary (see build_project_brief)."""
+    store = _open_store()
+    try:
+        brief = build_project_brief(store.conn)
+        layers = {
+            layer: (
+                dirs + [f"+{brief.layer_more[layer]} more"] if layer in brief.layer_more else dirs
+            )
+            for layer, dirs in brief.layers.items()
+        }
+        return json.dumps(
+            {
+                "files": brief.file_count,
+                "entities": brief.entity_count,
+                "languages": brief.languages,
+                "layers": layers,
+                "hot_paths": [
+                    {"name": h.name, "file": h.file, "callers": h.callers} for h in brief.hot_paths
+                ],
+                "entry_points": [
+                    {"route": e.route, "handler": e.handler, "file": e.file}
+                    for e in brief.entry_points
+                ],
+            }
+        )
+    finally:
+        store.close()
+
+
 def _list_files(args: dict[str, Any]) -> str:
     """Return indexed files with language, LOC, and entity count."""
     language_filter = args.get("language")
@@ -1248,6 +1301,7 @@ _HANDLERS = {
     "ask_codebase": _ask_codebase,
     "trace_path": _trace_path,
     "get_context": _get_context,
+    "project_brief": _project_brief,
     "list_files": _list_files,
     "index_status": _index_status,
     "reindex": _reindex,

@@ -24,6 +24,7 @@ _EXPECTED = {
     "impact_analysis",
     "ask_codebase",
     "get_context",
+    "project_brief",
     "trace_path",
     "list_files",
     "index_status",
@@ -48,7 +49,7 @@ def indexed_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return db
 
 
-def test_eleven_tools_declared() -> None:
+def test_twelve_tools_declared() -> None:
     tools = tool_definitions()
     assert {t.name for t in tools} == _EXPECTED
 
@@ -511,6 +512,33 @@ def test_get_context_tool_definition() -> None:
     assert "detail" in props
     assert props["detail"]["default"] == "summary"
     assert set(props["detail"]["enum"]) == {"summary", "full"}
+
+
+def test_project_brief_tool_definition() -> None:
+    by_name = {t.name: t for t in tool_definitions()}
+    tool = by_name["project_brief"]
+    assert tool.inputSchema["required"] == []
+    assert tool.inputSchema["properties"] == {}
+
+
+def test_project_brief_returns_orientation_summary(indexed_db: Path) -> None:
+    data = _call("project_brief", {})
+    assert data["files"] >= 1
+    assert data["entities"] >= 1
+    assert isinstance(data["languages"], dict)
+    assert "python" in data["languages"]
+    assert isinstance(data["layers"], dict)
+    assert isinstance(data["hot_paths"], list)
+    assert isinstance(data["entry_points"], list)
+
+
+def test_project_brief_hot_path_has_caller_count(indexed_db: Path) -> None:
+    """`authenticate` is called from multiple places in the sample fixture --
+    must show up as a hot path with a caller count."""
+    data = _call("project_brief", {})
+    auth = next((h for h in data["hot_paths"] if h["name"] == "authenticate"), None)
+    assert auth is not None
+    assert auth["callers"] >= 1
 
 
 def test_get_context_returns_packed_result(indexed_db: Path) -> None:

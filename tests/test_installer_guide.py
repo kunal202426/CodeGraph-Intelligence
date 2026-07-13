@@ -36,12 +36,20 @@ def test_write_block_is_under_400_tokens(tmp_path: Path) -> None:
     assert len(text) / 4 < 400
 
 
+def test_guide_mandates_project_brief_once_at_session_start(tmp_path: Path) -> None:
+    """project_brief() is the cheap session-start orientation call -- the guide
+    must tell the agent to call it once, first, before anything else."""
+    text = write_agent_guide(tmp_path).read_text(encoding="utf-8")
+    assert "project_brief()" in text
+    assert "First message?" in text
+
+
 def test_guide_is_strong_mandate_with_savings_instruction(tmp_path: Path) -> None:
     """The guide must (a) require CodeGraph before reading files and (b) tell the
     agent to report the token savings — the two levers behind 'auto-use'."""
     text = write_agent_guide(tmp_path).read_text(encoding="utf-8")
     assert "REQUIRED" in text
-    assert "Do NOT open a source file" in text
+    assert "before opening any source file, call" in text
     # Savings-reporting instruction references the get_context response fields.
     assert "savings_ratio" in text
     assert "tokens_if_read" in text
@@ -58,8 +66,8 @@ def test_guide_does_not_mandate_a_separate_index_status_call(tmp_path: Path) -> 
     `reindex` in response to its `warnings` field, not call `index_status` as an
     unconditional first step."""
     text = write_agent_guide(tmp_path).read_text(encoding="utf-8")
-    assert "Skip `index_status`" in text
-    assert "get_context` reports staleness itself via `warnings`" in text
+    assert "skip `index_status`" in text
+    assert "get_context` reports staleness via" in text
 
 
 def test_write_is_idempotent(tmp_path: Path) -> None:

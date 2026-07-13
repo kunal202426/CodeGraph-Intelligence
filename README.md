@@ -4,7 +4,9 @@
 queryable graph, search it by meaning, ask grounded questions over a local + Anthropic
 GraphRAG pipeline, explore it in a browser, and expose it all to your coding agent over
 MCP — so the agent queries the graph instead of re-reading your files every message,
-cutting the token cost and context-window pressure that come with that.
+cutting the reading-context size and round-trip count that come with that. Real $ session
+cost depends on more than response size (see the honest breakdown below); it scales with
+repo size and question type, not a flat multiplier.
 
 > **Status: active development.** Core indexing, search, and MCP tools are stable.
 > 1114 tests passing. Every user-facing surface manually tested: 21/21 passed, 6 issues
@@ -148,8 +150,18 @@ The AI still *wrote* the same ~1–1.5k-token answer either way; that part is un
 
 > **Note on the numbers:** the "Nx less" figures are Kortex's own estimate of
 > *reading/context* tokens (4-chars/token heuristic, baseline = reading the full files the
-> answer came from). They measure the reading pile, **not** your total turn. Real savings
-> vary by project size and question. Broader user testing is in progress.
+> answer came from). They measure the reading pile, **not** your total turn, and **not**
+> your actual $ cost — that also depends on round-trip count (each tool call re-reads the
+> whole accumulated conversation from cache), which this estimate doesn't capture at all.
+> A real controlled A/B ([full writeup →](docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md)),
+> measuring actual session `/usage` cost rather than estimated tokens, first caught this:
+> a mandatory extra tool call and a bloated response payload made Kortex cost **34% more**
+> real money than not using it at all on a 47-file repo, despite the "Nx less" number
+> looking good the whole time. Both were implementation bugs, since fixed — a re-measurement
+> after fixing them landed within ~3% either way (noise, not a real gap) on that same repo.
+> Like the field's most mature comparable tool's own published numbers, $ cost savings are
+> genuinely scale-dependent: closer to break-even on a small/medium repo, a clear win once a
+> codebase (and the session count against it) gets large. Broader user testing is ongoing.
 
 ---
 

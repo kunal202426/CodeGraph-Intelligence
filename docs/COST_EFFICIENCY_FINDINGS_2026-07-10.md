@@ -137,12 +137,17 @@ call that grep needs several rounds to approximate. The value scales with codeba
 and with **cross-file/structural** questions — and, critically, with **cross-session
 reuse**: Claude's context evaporates between sessions, but the index (and its stored
 summaries) persist. A single A/B session is close to the tool's worst case; the
-per-session re-exploration it can eliminate across dozens of sessions is its best. The
-biggest unbuilt lever from this analysis: a ~500-token pre-computed `project_brief`
-(architecture, layers, key entities, hot paths) served once at session start, replacing
-the multi-call re-orientation every fresh session currently performs — that's the
-persistent-index advantage made directly billable. Needs its own design pass; logged as
-the top candidate for the next improvement round, ahead of everything below.
+per-session re-exploration it can eliminate across dozens of sessions is its best.
+
+**Shipped (2026-07-13): `project_brief`.** The biggest unbuilt lever flagged in this
+section — a small pre-computed session-start summary (architecture/layers, hot paths by
+call fan-in, HTTP entry points, language/size stats), replacing the multi-call
+re-orientation every fresh session currently performs — is now a real tool
+(`analysis/brief.py`, `server/mcp_server.py::_project_brief`), computed on demand from
+existing indexed tables (no new storage), wired into the guide as "call once, first,
+before anything else." Not yet re-measured in its own controlled A/B — the honest next
+step is a round-4 test isolating this specific tool's effect on a fresh-session cold-start
+question, the way round 3 isolated the resolver/ranking fixes.
 
 ## Not fixed this pass — prioritized ideas for real improvement
 
