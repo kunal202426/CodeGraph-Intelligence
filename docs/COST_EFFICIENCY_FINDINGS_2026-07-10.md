@@ -241,6 +241,28 @@ win on much larger ones. What round 3 shows is that our *implementation* is no l
 cost on the table for reasons that were fixable (redundant calls, bloated payloads) — the
 remaining ~break-even result is closer to the honest floor for a repo this size, not a bug.
 
+## Round 4 (2026-07-13, same day): a single-question `project_brief` sanity check — inconclusive, not a real measurement
+
+After shipping `project_brief`, ran one cold-start question ("what's the architecture, what
+should I know before changing it") on LedgerGuard, once with codegraph (`project_brief` +
+`get_context` confirmed via the `codegraph MCP` usage indicator and the tool's savings line
+in the response) and once without (confirmed by the *absence* of both). **With: $0.48, 87%
+cache hit. Without: $0.29, 78% cache hit** — codegraph cost ~66% more on this single
+question, the opposite direction from what `project_brief` was built to achieve.
+
+**Not treated as a real finding.** A single question is exactly the kind of sample round 3
+already showed can't be trusted alone — individual questions in that 5-question run swung
+2-3x in either direction while the *total* landed within noise of parity. This round also had
+a session-labeling mix-up (which run was "with" vs "without" got confused mid-test and had to
+be reconstructed from the `codegraph MCP` usage indicator after the fact), which is its own
+signal that the test wasn't run cleanly enough to trust. Logged rather than acted on: a
+proper isolation of `project_brief`'s effect needs the same discipline as round 3 (multiple
+questions, verified-clean session labeling throughout, not just at the end) — deferred until
+the next full validation pass rather than burning more of this session re-running it now,
+since `project_brief` is a low-risk additive tool (one bounded call, not a replacement of
+anything round 1-3 already validated) and not an active regression that needs urgent
+confirmation either way.
+
 ## What this report is NOT saying
 
 - Not saying CodeGraph's core graph/search/analysis features are wrong — cycles, smells,
