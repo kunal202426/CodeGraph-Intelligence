@@ -112,26 +112,78 @@ with a dedicated `adaptive-explore-sizing.test.ts`). A tiny repo gets a tighter 
 one gets more room. We use fixed defaults (`limit=5`, `max_tokens=1500`) regardless of repo
 size. Low effort, plausible win — worth a follow-up.
 
-## Shipped from this pass
+## Round 2: deeper pattern mining (2026-07-13)
 
-`installer/guide.py` — the default advice for `get_context` on understanding/exploration
-queries now points toward `detail="full"` for the top few results instead of defaulting to
-summary mode, mirroring the proven "full source, one call, don't re-open" pattern above.
-Edit-workflow advice (Read+Edit directly, don't also pull source over MCP) is unchanged —
-per the correction above, that part was already right.
+A follow-up pass went past the MCP-surface files above into the competitor's context-building,
+search, and resolution internals (`context/index.ts`, `search/*.ts`, `resolution/*.ts`) and
+cross-checked each against our own `resolver.py` / `queries.py` equivalents. Ranked easy-wins
+first; implemented the top 6, logged the rest.
 
-## Not done this pass — logged for later, ranked by leverage
+### Shipped
 
-1. **Markdown response format for `get_context`** (medium confidence, medium effort) — most
-   direct untested idea from this research; measure a same-content JSON vs. markdown
-   response size before committing.
-2. **Reframe our headline efficiency claim to lead with tool-call count / latency, not $
-   cost** (high confidence, low effort) — extends [cost-efficiency findings doc
-   item #2](COST_EFFICIENCY_FINDINGS_2026-07-10.md), now with external confirmation from the
-   field-tested competitor's own honest framing.
-3. **Adaptive default sizing by repo file count** (medium confidence, low effort).
-4. **Daemon + local-handshake-proxy architecture** (high confidence it works — they've
-   proven it in production — high effort to build correctly; this is the real fix for
-   "MCP stuck connecting," not a timeout bound).
-5. **A single default-listed tool instead of 11** (low confidence without our own test data —
-   worth an A/B before committing to collapsing our tool surface this aggressively).
+1. **tsconfig/jsconfig `paths` alias resolution** (`graph/resolver.py`) — `@/foo` imports used
+   to be an explicitly deferred TODO, falling through the bare-specifier branch straight to
+   `external:`. Every Next/Nuxt/Vite-scaffolded repo we index was losing cross-file edges for
+   every aliased import. Now reads `compilerOptions.paths`/`baseUrl` (JSONC-tolerant: comments,
+   trailing commas) and resolves through them before giving up. Ported from
+   `resolution/path-aliases.ts`.
+2. **Ambiguous-name resolution ceiling** (`graph/resolver.py`) — method-call and inheritance-
+   chain resolution now decline same-file disambiguation above 500 same-named candidates,
+   mirroring `resolution/name-matcher.ts`'s `DEFAULT_AMBIGUOUS_NAME_CEILING` (their comment
+   cites a real 15-28 minute stall on one repo from exactly this). Defensive; no evidence yet
+   it's hurting us today, but it's a one-line-per-branch fix against a known failure mode.
+3. **Test-file and generated-file down-ranking in search** (`graph/ranking.py`, new module) —
+   `UserServiceTest.java` no longer ranks equal to `UserService.java` for a generic query;
+   suffix-classified generated files (`.pb.go`, `_pb2.py`, `.g.dart`, ...) rank behind
+   hand-written code on a name collision. Ported from `query-utils.ts` / `extraction/
+   generated-detection.ts`'s ranking use (distinct from our existing `walker.looks_generated`,
+   which is a content-based hard-exclude for minified/bundled files, not a ranking signal).
+4. **Identifier segmentation + multi-term co-occurrence re-ranking** (`graph/ranking.py`,
+   `graph/queries.py::search_literal`) — names now split into camelCase/snake_case segments
+   (`OrderStateMachine` -> order/state/machine) so a query like "state machine" can find a
+   compound identifier it previously couldn't see inside; results corroborating 2+ distinct
+   query words rank above single-generic-word matches. Single-term queries keep the exact same
+   tiering as before. Ported from `context/index.ts` steps 5a-5c + `search/identifier-
+   segments.ts`.
+5. **Low-confidence match warning** (`server/mcp_server.py::_get_context`) — a multi-word query
+   where no single hit corroborates 2+ words now appends a warning instead of presenting weak
+   coincidental matches with the same confidence as a strong one. Ported from `context/
+   markers.ts`'s low-confidence handoff marker.
+6. **Per-file / test-file diversity cap in `get_context`** (`server/mcp_server.py`) — results
+   are now over-fetched and capped so one file (~60% of the budget) or test files (~33%) can't
+   crowd out the rest of a multi-hit response. Ported from `context/index.ts`'s per-file/
+   non-production diversity caps.
+
+`installer/guide.py`'s `detail="full"`-by-default change from round 1 is unaffected by this
+pass.
+
+### Not done this pass — logged for later, ranked by leverage
+
+1. **Extraction-version staleness signal** (medium effort) — a monotonic `EXTRACTION_VERSION`
+   bumped only when the parser/resolver's output shape improves, surfaced as "re-index
+   recommended, richer extraction available." We currently have no way to tell a user who
+   upgrades CodeGraph that a full re-index (not just an incremental one) would extract more.
+2. **Field-qualified search syntax** (`kind:function name:auth path:...`) (medium effort) —
+   `search_code`/`get_context` take only a raw string today; a small tokenizer could let
+   structured filters ride alongside free text.
+3. **Bounded edit-distance fuzzy fallback** for typo'd symbol names (medium effort) — zero
+   results today on a misspelled query; a capped DP edit-distance scan over known names as a
+   last resort is cheap even at scale with an early-exit.
+4. **tsconfig-alias sibling: JS/TS workspace (monorepo) package resolution** (medium effort) —
+   `package.json` `workspaces` / `pnpm-workspace.yaml` member resolution, so a monorepo
+   cross-package import doesn't get misclassified as `external:`. Natural pairing with the
+   tsconfig-alias fix shipped this pass.
+5. **Markdown response format for `get_context`** (medium confidence, medium effort) — measure
+   a same-content JSON vs. markdown response size before committing.
+6. **Reframe our headline efficiency claim to lead with tool-call count / latency, not $ cost**
+   (high confidence, low effort) — extends [cost-efficiency findings doc
+   item #2](COST_EFFICIENCY_FINDINGS_2026-07-10.md).
+7. **Adaptive default sizing by repo file count** (medium confidence, low effort).
+8. **Daemon + local-handshake-proxy architecture** (high confidence it works, high effort to
+   build correctly — the real fix for "MCP stuck connecting," not a timeout bound).
+9. **A single default-listed tool instead of 11** (low confidence without our own test data).
+10. **Dynamic-dispatch edge synthesis** (EventEmitter, React setState->render, vtable-override
+    bridging) — real and valuable, but a multi-week feature, not a portable pattern.
+11. **WAL/checkpoint growth valve for bulk-index write throughput** — DuckDB's checkpoint
+    semantics differ from SQLite's; profile a large-repo `codegraph index` run on non-SSD
+    storage before assuming this applies to us.

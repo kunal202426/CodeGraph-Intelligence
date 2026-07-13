@@ -34,6 +34,12 @@ from mcp.server import Server
 from mcp.types import TextContent, Tool
 
 from codegraph.graph.queries import find_callers, hybrid_search, read_baseline_tokens
+from codegraph.graph.ranking import (
+    extract_search_terms,
+    is_test_path,
+    significant_terms,
+    split_identifier_segments,
+)
 from codegraph.graph.store import GraphStore
 
 DEFAULT_DB = Path(".codegraph/graph.duckdb")
@@ -519,6 +525,59 @@ def _first_line(text: str | None) -> str | None:
     return f"{lines[0]} ..."
 
 
+def _has_confident_match(query: str, hit_names: list[str], hit_files: list[str]) -> bool:
+    """Cheap match-quality check for get_context's warnings field.
+
+    A single-word (or already-non-prose) query is trusted by construction --
+    whatever hybrid_search ranked first IS the answer to a one-concept query.
+    For a genuine multi-word query, confidence requires at least one hit whose
+    name (identifier-segmented, so `OrderStateMachine` counts) or file path
+    corroborates 2+ of the query's significant words -- otherwise every hit is
+    a coincidental single-word match and the response is presented with the
+    same certainty as a strong one despite likely being noise.
+    """
+    terms = significant_terms(extract_search_terms(query))
+    if len(terms) < 2:
+        return True
+    for name, file in zip(hit_names, hit_files, strict=True):
+        segments = set(split_identifier_segments(name)) | set(split_identifier_segments(file))
+        name_lower = name.lower()
+        hits = sum(1 for t in terms if t in segments or t in name_lower)
+        if hits >= 2:
+            return True
+    return False
+
+
+def _apply_diversity_cap(hits: list, limit: int) -> list:
+    """Cap any single file's share of the result list, and test files' share.
+
+    hybrid_search's ranking has no notion of "don't let one file or one test
+    suite crowd out everything else" -- a BFS-adjacent or literal match can
+    legitimately return several hits from the same file. Keeps hits in their
+    existing rank order, greedily skipping ones that would exceed either cap
+    so the (over-fetched) pool backfills with the next-best diverse result
+    instead of just truncating to the first *limit* hits.
+    """
+    file_cap = max(2, -(-limit * 3 // 5))  # ceil(limit * 0.6), floor 2
+    test_cap = max(1, limit // 3)
+    per_file: dict[str, int] = {}
+    test_count = 0
+    kept = []
+    for hit in hits:
+        if len(kept) >= limit:
+            break
+        file_is_test = is_test_path(hit.file)
+        if file_is_test and test_count >= test_cap:
+            continue
+        if per_file.get(hit.file, 0) >= file_cap:
+            continue
+        kept.append(hit)
+        per_file[hit.file] = per_file.get(hit.file, 0) + 1
+        if file_is_test:
+            test_count += 1
+    return kept
+
+
 def _labels_for(conn, entity_ids: list[str]) -> dict[str, str]:
     """Map each entity_id to a human-readable 'name (file:line)' label.
 
@@ -716,11 +775,20 @@ def _get_context(args: dict[str, Any]) -> str:
     try:
         has_vectors = store.count_embedded() > 0
         vector = _maybe_embed(query) if has_vectors else None
-        hits = hybrid_search(store.conn, query, vector, limit=limit)
+        # Over-fetch, then diversity-cap down to `limit` -- otherwise one file
+        # (or one test suite) matching well can crowd out every other result.
+        hits = hybrid_search(store.conn, query, vector, limit=min(limit * 3, 30))
+        hits = _apply_diversity_cap(hits, limit)
 
         # Surface the one failure that is otherwise silent: a --no-embed index
         # degrades semantic search to literal-only with no signal to the agent.
         warnings: list[str] = []
+        if hits and not _has_confident_match(query, [h.name for h in hits], [h.file for h in hits]):
+            warnings.append(
+                "Low-confidence matches: no result strongly corroborates the query "
+                f"'{query}' -- treat this as a starting point, not a complete answer. "
+                "Try a more specific query or check the directories below."
+            )
         stale = _get_stale_count()
         if stale > 0:
             noun = "file" if stale == 1 else "files"

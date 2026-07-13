@@ -637,6 +637,20 @@ def test_get_context_warns_present_even_when_no_match(indexed_db: Path) -> None:
     assert any("embeddings" in w.lower() for w in data["warnings"])
 
 
+def test_get_context_warns_on_low_confidence_multi_term_match(indexed_db: Path) -> None:
+    """'boot server' matches `boot` and `run_server` individually, but no
+    single hit corroborates both words -- that's noise, not a real answer,
+    and should be flagged rather than presented with full confidence."""
+    data = _call("get_context", {"query": "boot server"})
+    assert data["total"] > 0
+    assert any("low-confidence" in w.lower() for w in data["warnings"])
+
+
+def test_get_context_no_low_confidence_warning_for_single_term_query(indexed_db: Path) -> None:
+    data = _call("get_context", {"query": "authenticate"})
+    assert not any("low-confidence" in w.lower() for w in data["warnings"])
+
+
 def test_source_preview_truncates_long_bodies() -> None:
     """The preview helper caps long source and adds a truncation marker."""
     from codegraph.server.mcp_server import _source_preview
@@ -654,6 +668,51 @@ def test_source_preview_keeps_short_bodies() -> None:
     short = "def f():\n    return 1"
     assert _source_preview(short) == short
     assert _source_preview(None) == ""
+
+
+def test_confident_match_single_term_query_always_confident() -> None:
+    from codegraph.server.mcp_server import _has_confident_match
+
+    assert _has_confident_match("authenticate", ["authenticate"], ["auth/login.py"])
+
+
+def test_confident_match_requires_two_term_corroboration() -> None:
+    from codegraph.server.mcp_server import _has_confident_match
+
+    assert not _has_confident_match("boot server", ["boot"], ["main.py"])
+    assert _has_confident_match("state machine", ["OrderStateMachine"], ["app/order.py"])
+
+
+def test_diversity_cap_limits_per_file_share() -> None:
+    from types import SimpleNamespace
+
+    from codegraph.server.mcp_server import _apply_diversity_cap
+
+    hits = [SimpleNamespace(file="src/big.py", name=f"fn_{i}") for i in range(10)]
+    kept = _apply_diversity_cap(hits, limit=5)
+    assert len(kept) == 3  # file_cap = ceil(5 * 0.6) = 3
+
+
+def test_diversity_cap_backfills_from_other_files() -> None:
+    from types import SimpleNamespace
+
+    from codegraph.server.mcp_server import _apply_diversity_cap
+
+    hits = [SimpleNamespace(file="src/big.py", name=f"fn_{i}") for i in range(10)] + [
+        SimpleNamespace(file="src/other.py", name="helper")
+    ]
+    kept = _apply_diversity_cap(hits, limit=5)
+    assert any(h.file == "src/other.py" for h in kept)
+
+
+def test_diversity_cap_limits_test_file_share() -> None:
+    from types import SimpleNamespace
+
+    from codegraph.server.mcp_server import _apply_diversity_cap
+
+    hits = [SimpleNamespace(file="tests/test_x.py", name=f"test_{i}") for i in range(10)]
+    kept = _apply_diversity_cap(hits, limit=6)
+    assert len(kept) == 2  # test_cap = max(1, 6 // 3) = 2
 
 
 def test_get_context_reports_token_estimate(indexed_db: Path) -> None:
