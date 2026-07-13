@@ -29,32 +29,31 @@ _END = "<!-- END CODEGRAPH -->"
 _BLOCK_BODY = """\
 ## CodeGraph -- REQUIRED workflow (code intelligence over MCP)
 
-This repo is indexed by CodeGraph. Its tools return ~10x fewer tokens than reading files
-and capture cross-file call/import edges single files miss. Use them by default.
+This repo is indexed by CodeGraph. Its tools return far fewer tokens than reading files and
+surface cross-file call/import edges a single file can't show. Use them by default.
 
 **Rules (every task):**
 1. Do NOT open a source file before calling `get_context("<concept>")`. Skip `index_status`
-   -- `get_context` reports staleness itself via `warnings`; call `reindex` only if it appears.
-2. Editing code? ONE `get_context` to locate it, then Read the file and edit -- never
-   pull full source over MCP first (Edit needs a fresh Read; fetching both pays twice).
-   Reading 1-2 entities only? `get_context(..., detail="full")` directly, not
-   summary-then-full.
-3. After a `get_context` call, report the savings: `CodeGraph: ~<tokens_estimated> vs
-   ~<tokens_if_read> tokens (<savings_ratio>x less)`.
+   -- `get_context` reports staleness itself via `warnings`; run `reindex` only if it appears.
+2. Use `detail="full"` on the first call when you'll need real code -- understanding or
+   editing. A second round-trip for the body costs more than the larger response. Summary
+   mode is only for browsing candidates before narrowing down.
+3. Editing? After locating the target, Read the file yourself before Edit -- Edit needs a
+   fresh Read regardless of what MCP returned.
+4. After `get_context`, report: `CodeGraph: ~<tokens_estimated> vs ~<tokens_if_read> tokens
+   (<savings_ratio>x less)`.
 
 **Which tool:**
-- `get_context(query)` -- START HERE. Search + signatures + callers/callees, token
-  savings, staleness. `detail="full"` = complete source (1-2 max).
-- `get_entity_context(entity_id)` -- full source + neighbours for ONE entity.
-- `impact_analysis(entity_id)` -- what breaks if I change this (reverse callers).
+- `get_context(query)` -- START HERE. Signatures + callers/callees + staleness;
+  `detail="full"` for source (rule 2).
+- `get_entity_context(id)` -- full source + neighbours for ONE entity.
+- `impact_analysis(id)` -- what breaks if I change this (reverse callers).
 - `trace_path(from_id, to_id)` -- shortest call chain A to B.
 - `search_code(query)` -- fast id-only lookup.
 
-**entity_id format:** `{lang}:{rel_path}:{qualified_name}`, e.g.
-`py:auth/login.py:authenticate`. Forward slashes always.
-
-**Token discipline:** keep `get_context` in summary mode; don't request `detail="full"`
-for many entities at once."""
+**entity_id:** `{lang}:{rel_path}:{qualified_name}`, e.g. `py:auth/login.py:authenticate`.
+`detail="full"` on many entities at once still costs tokens -- fine for 1-5, not a whole
+search's worth."""
 
 # The full managed block including markers.
 _MANAGED_BLOCK = f"{_BEGIN}\n{_BLOCK_BODY}\n{_END}"
