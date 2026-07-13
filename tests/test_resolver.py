@@ -396,6 +396,70 @@ def test_ts_bare_specifier_marked_external(tmp_path: Path) -> None:
     assert "external:react.useState" in dsts
 
 
+def test_ts_alias_import_resolves_via_tsconfig_paths(tmp_path: Path) -> None:
+    """`@/foo` resolves through tsconfig `compilerOptions.paths` instead of
+    falling through to external -- this used to be an explicitly deferred gap
+    (every Next/Nuxt/Vite-scaffolded repo loses cross-file edges for every
+    `@/`-aliased import)."""
+    db = _ts_repo(
+        tmp_path,
+        {
+            "tsconfig.json": ('{"compilerOptions": {"baseUrl": ".", "paths": {"@/*": ["src/*"]}}}'),
+            "app/main.ts": 'import { authenticate } from "@/auth/login";\n',
+            "src/auth/login.ts": "export function authenticate() { return true; }\n",
+        },
+    )
+    store = GraphStore(db)
+    try:
+        dsts = {dst for _src, dst, _conf in _edges(store)}
+    finally:
+        store.close()
+    assert "ts:src/auth/login.ts:authenticate" in dsts
+
+
+def test_ts_alias_import_falls_back_to_external_without_tsconfig(tmp_path: Path) -> None:
+    db = _ts_repo(
+        tmp_path,
+        {
+            "app/main.ts": 'import { authenticate } from "@/auth/login";\n',
+            "src/auth/login.ts": "export function authenticate() { return true; }\n",
+        },
+    )
+    store = GraphStore(db)
+    try:
+        dsts = {dst for _src, dst, _conf in _edges(store)}
+    finally:
+        store.close()
+    assert "external:@/auth/login.authenticate" in dsts
+
+
+def test_ts_alias_tolerates_jsonc_comments_and_trailing_commas(tmp_path: Path) -> None:
+    db = _ts_repo(
+        tmp_path,
+        {
+            "tsconfig.json": (
+                "{\n"
+                "  // comment before paths\n"
+                '  "compilerOptions": {\n'
+                '    "baseUrl": ".",\n'
+                '    "paths": {\n'
+                '      "@/*": ["src/*"], /* trailing */\n'
+                "    },\n"
+                "  },\n"
+                "}\n"
+            ),
+            "app/main.ts": 'import { authenticate } from "@/auth/login";\n',
+            "src/auth/login.ts": "export function authenticate() { return true; }\n",
+        },
+    )
+    store = GraphStore(db)
+    try:
+        dsts = {dst for _src, dst, _conf in _edges(store)}
+    finally:
+        store.close()
+    assert "ts:src/auth/login.ts:authenticate" in dsts
+
+
 def test_ts_resolves_through_index_file(tmp_path: Path) -> None:
     """`import X from "./pkg"` matches `./pkg/index.ts`."""
     db = _ts_repo(
@@ -678,3 +742,51 @@ def test_bare_submodule_import_resolves_by_suffix(tmp_path: Path) -> None:
     finally:
         store.close()
     assert "py:backend/services/leads_service.py:backend.services.leads_service" in dsts
+
+
+# ---------- ambiguous-name candidate ceiling ----------
+
+
+def test_method_call_under_ceiling_still_disambiguates_to_same_file() -> None:
+    from codegraph.graph.resolver import _resolve_method_call
+
+    call_file = "app/widget.py"
+    candidates = [f"py:vendor/dup_{i}.py:Base.render" for i in range(5)]
+    candidates.append(f"py:{call_file}:Base.render")
+    entity_ids_by_qname = {"Base.render": candidates}
+
+    result, conf = _resolve_method_call(
+        "py:?methodcall:Base.render",
+        f"py:{call_file}:caller",
+        entities_by_file={},
+        imports_by_file={},
+        entity_ids_by_qname=entity_ids_by_qname,
+    )
+    assert result == f"py:{call_file}:Base.render"
+    assert conf == 0.9
+
+
+def test_method_call_over_ceiling_skips_disambiguation(tmp_path: Path) -> None:
+    """A name redeclared past `_AMBIGUOUS_CANDIDATE_CEILING` times (a vendored
+    blob) must not be scanned for a same-file match on every call site --
+    that's the quadratic blowup a real large repo can hit. Confirmed by a
+    candidate list that DOES contain the correct same-file entity: with the
+    ceiling working, disambiguation is skipped entirely and the call falls
+    through to plain callee-name resolution instead of finding it."""
+    from codegraph.graph.resolver import _AMBIGUOUS_CANDIDATE_CEILING, _resolve_method_call
+
+    call_file = "app/widget.py"
+    candidates = [
+        f"py:vendor/dup_{i}.py:Base.render" for i in range(_AMBIGUOUS_CANDIDATE_CEILING + 5)
+    ]
+    candidates.append(f"py:{call_file}:Base.render")
+    entity_ids_by_qname = {"Base.render": candidates}
+
+    result, _conf = _resolve_method_call(
+        "py:?methodcall:Base.render",
+        f"py:{call_file}:caller",
+        entities_by_file={},
+        imports_by_file={},
+        entity_ids_by_qname=entity_ids_by_qname,
+    )
+    assert result.startswith("external:")

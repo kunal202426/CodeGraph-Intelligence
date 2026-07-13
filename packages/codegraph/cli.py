@@ -326,7 +326,7 @@ def index(
         _flush()
 
     # Cross-file symbol resolution: rewrites `py:?:...` edges in place.
-    stats = resolve_symbols(store)
+    stats = resolve_symbols(store, repo)
 
     # Semantic embeddings (T3.3/T3.5): (re-)embed entities whose input changed.
     embedded = 0

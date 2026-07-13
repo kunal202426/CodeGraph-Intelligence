@@ -225,7 +225,7 @@ def index_one_file(
         )
         store.upsert_entities(result.entities)
         store.upsert_edges(result.edges)
-        resolve_symbols(store)
+        resolve_symbols(store, repo)
 
         if not no_embed:
             _embed_file(store, rel_path)

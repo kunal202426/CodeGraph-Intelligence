@@ -37,9 +37,11 @@ resolve_symbols(store) -> ResolutionStats
 
 from __future__ import annotations
 
+import json
 import posixpath
 import re
 from dataclasses import dataclass
+from pathlib import Path
 
 from codegraph.graph.store import GraphStore
 from codegraph.uir import Edge
@@ -88,6 +90,14 @@ _PROVISIONAL_WHERE = (
     "OR dst_id LIKE 'jl:?%' OR dst_id LIKE 'hs:?%' "
     "OR dst_id LIKE 'ml:?%' OR dst_id LIKE 'html:?%'"
 )
+
+# Above this many same-named candidates, per-call-site disambiguation (filter
+# to same-file, walk inheritance, etc.) is skipped and the name is treated as
+# unresolvable-by-name rather than scanned. A name redeclared this many times
+# is almost always a vendored/generated blob, not a real ambiguity worth
+# disambiguating -- and scanning it on every one of its (possibly thousands
+# of) call sites is the quadratic blowup that actually hurts on real repos.
+_AMBIGUOUS_CANDIDATE_CEILING = 500
 
 # Rust standard / core library namespace prefixes → always external.
 _RUST_STDLIB_PREFIXES = (
@@ -203,12 +213,17 @@ class ResolutionStats:
         return self.external + self.wildcard
 
 
-def resolve_symbols(store: GraphStore) -> ResolutionStats:
+def resolve_symbols(store: GraphStore, repo_root: Path | None = None) -> ResolutionStats:
     """Update unresolved import edges in the graph DB.
 
     Reads from `entities` + `files`, mutates `edges`. Returns counts.
+
+    `repo_root`, when given, is used to load tsconfig/jsconfig `paths` aliases
+    (`@/foo` -> `src/foo`) so TS/JS bare-specifier imports through an alias
+    resolve to the real file instead of falling through to `external:`.
     """
     idx = _build_indexes(store)
+    ts_aliases = _load_ts_path_aliases(repo_root) if repo_root is not None else {}
 
     rows = store.conn.execute(
         f"SELECT src_id, dst_id, type, line FROM edges WHERE {_PROVISIONAL_WHERE}"
@@ -286,6 +301,7 @@ def resolve_symbols(store: GraphStore) -> ResolutionStats:
             idx.known_files,
             idx.by_qname_suffix,
             idx.default_export_by_file,
+            ts_aliases,
         )
         resolved_edges.append(
             Edge(src_id=src_id, dst_id=new_dst, type=edge_type, line=line, confidence=new_conf)
@@ -592,11 +608,16 @@ def _resolve_method_call(
         candidates = entity_ids_by_qname.get(rest, [])
         if len(candidates) == 1:
             return candidates[0], 0.9
-        if len(candidates) > 1:
+        if 1 < len(candidates) <= _AMBIGUOUS_CANDIDATE_CEILING:
             same_file = [c for c in candidates if c.split(":", 2)[1:2] == [file]]
             if len(same_file) == 1:
                 return same_file[0], 0.9
-        if entity_ids_by_name and bases_by_class and name_by_id:
+        if (
+            len(candidates) <= _AMBIGUOUS_CANDIDATE_CEILING
+            and entity_ids_by_name
+            and bases_by_class
+            and name_by_id
+        ):
             inherited = _walk_inheritance_chain(
                 type_name,
                 callee,
@@ -654,7 +675,7 @@ def _walk_inheritance_chain(
                 candidates = entity_ids_by_qname.get(f"{base_name}.{method}", [])
                 if len(candidates) == 1:
                     return candidates[0]
-                if len(candidates) > 1:
+                if 1 < len(candidates) <= _AMBIGUOUS_CANDIDATE_CEILING:
                     same_file = [c for c in candidates if c.split(":", 2)[1:2] == [call_file]]
                     if len(same_file) == 1:
                         return same_file[0]
@@ -727,6 +748,7 @@ def _resolve_one(
     known_files: set[str],
     by_qname_suffix: dict[str, list[str]] | None = None,
     default_export_by_file: dict[str, str] | None = None,
+    ts_aliases: dict[str, list[str]] | None = None,
 ) -> tuple[str, float]:
     rel_match = _REL_RE.match(dst_id)
     if rel_match:
@@ -746,6 +768,7 @@ def _resolve_one(
             by_file_name,
             known_files,
             default_export_by_file or {},
+            ts_aliases,
         )
 
     if dst_id.startswith("go:?:"):
@@ -913,11 +936,14 @@ def _resolve_typescript(
     by_file_name: dict[tuple[str, str], str],
     known_files: set[str],
     default_export_by_file: dict[str, str] | None = None,
+    ts_aliases: dict[str, list[str]] | None = None,
 ) -> tuple[str, float]:
     """Resolve a `ts:?:<specifier>(::<name>)?` edge against the file system.
 
     Behaviour:
-    - Bare specifier (no leading ./ or ../) → external.
+    - Bare specifier (no leading ./ or ../) → tried against `ts_aliases`
+      (tsconfig/jsconfig `paths`, e.g. `@/foo` -> `src/foo`) first; if no
+      alias matches (or it doesn't resolve to a known file), external.
     - Relative specifier → walk extensions + index files to find the real file.
       * `::<name>` named import → look up (file, name) in entities.
       * `::default` → the target file's sole exported (non-module) entity when
@@ -925,8 +951,6 @@ def _resolve_typescript(
         `export default` targets explicitly), else the module entity (conf 0.7).
       * `::*` → wildcard, conf 0.7.
       * no `::` (side-effect-only import) → module entity, conf 0.7.
-    - tsconfig `paths` aliases (`@/`, etc.) are deferred — they go through the
-      bare branch and end up as external for now.
     """
     if "::" in rest:
         specifier, name = rest.split("::", 1)
@@ -935,20 +959,24 @@ def _resolve_typescript(
 
     is_relative = specifier.startswith("./") or specifier.startswith("../")
     if not is_relative:
-        # Bare specifier: lodash / react / @scope/pkg / TS-paths alias.
-        target = f"{specifier}.{name}" if name else specifier
-        return f"external:{target}", 0.5
+        target_file = (
+            _resolve_ts_alias_to_file(specifier, ts_aliases, known_files) if ts_aliases else None
+        )
+        if target_file is None:
+            # Bare specifier with no matching alias: lodash / react / @scope/pkg.
+            target = f"{specifier}.{name}" if name else specifier
+            return f"external:{target}", 0.5
+    else:
+        src_parts = src_id.split(":", 2)
+        if len(src_parts) < 3:
+            return f"external:{specifier}{'::' + name if name else ''}", 0.5
+        src_file = src_parts[1]
+        src_dir = posixpath.dirname(src_file)
+        joined = posixpath.normpath(posixpath.join(src_dir, specifier))
 
-    src_parts = src_id.split(":", 2)
-    if len(src_parts) < 3:
-        return f"external:{specifier}{'::' + name if name else ''}", 0.5
-    src_file = src_parts[1]
-    src_dir = posixpath.dirname(src_file)
-    joined = posixpath.normpath(posixpath.join(src_dir, specifier))
-
-    target_file = _find_ts_file(joined, known_files)
-    if target_file is None:
-        return f"external:{specifier}{'::' + name if name else ''}", 0.5
+        target_file = _find_ts_file(joined, known_files)
+        if target_file is None:
+            return f"external:{specifier}{'::' + name if name else ''}", 0.5
 
     if name == "*":
         return f"wildcard:ts:{target_file}", 0.7
@@ -1205,4 +1233,156 @@ def _find_ts_file(joined_no_ext: str, known_files: set[str]) -> str | None:
         candidate = f"{joined_no_ext}/{idx}"
         if candidate in known_files:
             return candidate
+    return None
+
+
+# ----------------------------------------------------------------------
+# tsconfig / jsconfig `paths` alias resolution
+
+
+def _strip_jsonc_comments(text: str) -> str:
+    """Strip `//` and `/* */` comments from tsconfig/jsconfig JSONC, string-safe.
+
+    tsconfig.json is JSONC (comments + trailing commas allowed), which the
+    stdlib `json` module rejects outright. This walks the text once tracking
+    whether we're inside a string literal so a URL like `"http://x"` inside a
+    string value survives untouched.
+    """
+    out: list[str] = []
+    in_string = False
+    in_line_comment = False
+    in_block_comment = False
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        nxt = text[i + 1] if i + 1 < n else ""
+        if in_line_comment:
+            if ch == "\n":
+                in_line_comment = False
+                out.append(ch)
+            i += 1
+            continue
+        if in_block_comment:
+            if ch == "*" and nxt == "/":
+                in_block_comment = False
+                i += 2
+                continue
+            i += 1
+            continue
+        if in_string:
+            out.append(ch)
+            if ch == "\\" and i + 1 < n:
+                out.append(nxt)
+                i += 2
+                continue
+            if ch == '"':
+                in_string = False
+            i += 1
+            continue
+        if ch == '"':
+            in_string = True
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "/" and nxt == "/":
+            in_line_comment = True
+            i += 2
+            continue
+        if ch == "/" and nxt == "*":
+            in_block_comment = True
+            i += 2
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _load_ts_path_aliases(repo_root: Path) -> dict[str, list[str]]:
+    """Read `compilerOptions.paths`/`baseUrl` from tsconfig.json or jsconfig.json.
+
+    Returns a map from each alias pattern (e.g. `"@/*"`) to its candidate
+    target patterns (e.g. `["src/*"]`), already joined with `baseUrl` and
+    normalized to POSIX paths relative to *repo_root* — the same form
+    `known_files` entries use. Returns `{}` if neither config file exists, is
+    malformed, or declares no `paths`. Best-effort: a broken tsconfig must
+    never fail the index.
+    """
+    for name in ("tsconfig.json", "jsconfig.json"):
+        config_path = repo_root / name
+        if config_path.is_file():
+            break
+    else:
+        return {}
+
+    try:
+        raw = config_path.read_text(encoding="utf-8")
+        stripped = _strip_jsonc_comments(raw)
+        # Trailing commas before a closing bracket/brace (also JSONC-legal).
+        stripped = re.sub(r",(\s*[}\]])", r"\1", stripped)
+        data = json.loads(stripped)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+    compiler_options = data.get("compilerOptions") if isinstance(data, dict) else None
+    if not isinstance(compiler_options, dict):
+        return {}
+    paths = compiler_options.get("paths")
+    if not isinstance(paths, dict):
+        return {}
+    base_url = compiler_options.get("baseUrl", ".")
+    if not isinstance(base_url, str):
+        base_url = "."
+    config_dir = posixpath.dirname(config_path.relative_to(repo_root).as_posix())
+    base_dir = posixpath.normpath(posixpath.join(config_dir, base_url)) if config_dir else base_url
+
+    aliases: dict[str, list[str]] = {}
+    for pattern, targets in paths.items():
+        if not isinstance(pattern, str) or not isinstance(targets, list):
+            continue
+        resolved_targets = [
+            posixpath.normpath(posixpath.join(base_dir, t)) if base_dir not in ("", ".") else t
+            for t in targets
+            if isinstance(t, str)
+        ]
+        if resolved_targets:
+            aliases[pattern] = resolved_targets
+    return aliases
+
+
+def _resolve_ts_alias_to_file(
+    specifier: str, aliases: dict[str, list[str]], known_files: set[str]
+) -> str | None:
+    """Expand *specifier* against tsconfig `paths` aliases to a known file.
+
+    Exact (non-wildcard) patterns are tried before wildcard patterns; among
+    wildcard patterns the longest prefix wins (mirrors how bundlers apply the
+    most specific alias first). Returns `None` if no pattern matches, or none
+    of a matching pattern's candidate targets resolve to an indexed file.
+    """
+    exact_targets = aliases.get(specifier)
+    if exact_targets:
+        for target in exact_targets:
+            hit = _find_ts_file(target, known_files)
+            if hit is not None:
+                return hit
+
+    best_prefix = ""
+    best_targets: list[str] = []
+    for pattern, targets in aliases.items():
+        if not pattern.endswith("*"):
+            continue
+        prefix = pattern[:-1]
+        if specifier.startswith(prefix) and len(prefix) >= len(best_prefix):
+            best_prefix = prefix
+            best_targets = targets
+
+    if best_targets:
+        remainder = specifier[len(best_prefix) :]
+        for target in best_targets:
+            candidate = f"{target[:-1]}{remainder}" if target.endswith("*") else target
+            hit = _find_ts_file(candidate, known_files)
+            if hit is not None:
+                return hit
+
     return None
