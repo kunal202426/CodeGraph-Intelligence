@@ -10,6 +10,8 @@ callers wrap them in transactions or surface them as JSON.
 Module layout
 -------------
 search_literal     — substring + docstring ILIKE, ranked by match quality
+                      (see graph/ranking.py for the identifier-segmentation
+                      and test/generated-path heuristics it re-ranks with)
 vector_search      — cosine similarity over entity embeddings
 hybrid_search      — Reciprocal Rank Fusion of literal + vector results
 find_entity_by_name_or_id — resolve a user-typed reference to EntityRow(s)
@@ -25,6 +27,13 @@ from dataclasses import dataclass, field
 import duckdb
 
 from codegraph.ai.tokens import estimate_tokens
+from codegraph.graph.ranking import (
+    extract_search_terms,
+    is_generated_path,
+    is_test_path,
+    significant_terms,
+    split_identifier_segments,
+)
 
 # Entity-id language prefixes — used by `find_entity_by_name_or_id` to tell
 # "this is an entity_id, not a free-form name" without a regex.
@@ -68,42 +77,90 @@ class SearchHit:
     docstring: str | None
 
 
+_SEARCH_POOL_MAX = 2000
+
+
 def search_literal(
     conn: duckdb.DuckDBPyConnection,
     query: str,
     limit: int = 20,
 ) -> list[SearchHit]:
-    """Substring + docstring ILIKE search.
+    """Substring + docstring ILIKE search, re-ranked in Python.
 
-    Ranking (best → worst):
-      1. Exact case-insensitive name match
-      2. Name starts with the query
-      3. Name contains the query (anywhere)
-      4. Docstring-only match (name didn't match at all)
+    Base ranking tier (best → worst): exact case-insensitive name match >
+    name starts with the query > name contains the query (anywhere) >
+    docstring-only match (name didn't match at all). Ties broken by shorter
+    `name` length (more specific) then alphabetical -- this part matches the
+    original SQL-only ranking exactly for single-term queries.
 
-    Ties broken by shorter `name` length (more specific) then alphabetical.
+    On top of the tier, a multi-term query (2+ words, e.g. "state machine")
+    also gets a co-occurrence boost: the name is split into identifier
+    segments (`OrderStateMachine` -> order/state/machine) so a query whose
+    words are scattered across a camelCase/snake_case name -- not just a
+    literal substring -- still ranks near the top, with a further boost when
+    every query term is corroborated. Test/fixture files are demoted (unless
+    the query itself is about tests) and generated-looking files are demoted
+    on a name collision, so a hand-written implementation doesn't have to
+    compete on equal footing with its own test suite or codegen output.
     """
     if not query:
         return []
     pattern = f"%{query}%"
+    sig_terms = significant_terms(extract_search_terms(query))
+
+    extra_where = ""
+    extra_params: list[str] = []
+    if len(sig_terms) >= 2:
+        extra_where = " OR (" + " OR ".join(["name ILIKE ?"] * len(sig_terms)) + ")"
+        extra_params = [f"%{t}%" for t in sig_terms]
+
+    pool_limit = min(max(limit * 5, 100), _SEARCH_POOL_MAX)
     rows = conn.execute(
-        """
+        f"""
         SELECT entity_id, type, name, qualified_name, file, start_line, docstring
         FROM entities
-        WHERE name ILIKE ? OR docstring ILIKE ?
-        ORDER BY
-          CASE
-            WHEN LOWER(name) = LOWER(?)          THEN 0
-            WHEN name ILIKE ? || '%'             THEN 1
-            WHEN name ILIKE ?                    THEN 2
-            ELSE 3
-          END,
-          LENGTH(name),
-          name
+        WHERE name ILIKE ? OR docstring ILIKE ?{extra_where}
         LIMIT ?
         """,
-        [pattern, pattern, query, query, pattern, limit],
+        [pattern, pattern, *extra_params, pool_limit],
     ).fetchall()
+
+    query_lower = query.lower()
+    is_test_query = "test" in sig_terms or "tests" in sig_terms or "spec" in sig_terms
+
+    def _score(name: str, docstring: str | None, file: str) -> float:
+        name_lower = name.lower()
+        if name_lower == query_lower:
+            base = 100.0
+        elif name_lower.startswith(query_lower):
+            base = 80.0
+        elif query_lower in name_lower:
+            base = 60.0
+        elif docstring and query_lower in docstring.lower():
+            base = 20.0
+        else:
+            base = 0.0
+
+        if len(sig_terms) >= 2:
+            segments = set(split_identifier_segments(name)) | set(split_identifier_segments(file))
+            hits = sum(1 for t in sig_terms if t in segments or t in name_lower)
+            if hits:
+                base += hits * 15.0
+                if hits == len(sig_terms):
+                    base += 10.0
+
+        if base <= 0.0:
+            return 0.0
+        if not is_test_query and is_test_path(file):
+            base *= 0.3
+        if is_generated_path(file):
+            base *= 0.4
+        return base
+
+    scored = [(_score(r[2], r[6], r[4]), len(r[2]), r[2], r) for r in rows]
+    scored = [s for s in scored if s[0] > 0.0]
+    scored.sort(key=lambda s: (-s[0], s[1], s[2]))
+
     return [
         SearchHit(
             entity_id=r[0],
@@ -114,7 +171,7 @@ def search_literal(
             start_line=r[5],
             docstring=r[6],
         )
-        for r in rows
+        for _, _, _, r in scored[:limit]
     ]
 
 
