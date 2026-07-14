@@ -944,6 +944,22 @@ def test_get_context_single_string_query_unchanged(indexed_db: Path) -> None:
     assert any(e["entity_id"].endswith(":authenticate") for e in data["entities"])
 
 
+def test_maybe_embed_batch_returns_one_vector_per_query() -> None:
+    from codegraph.server.mcp_server import _maybe_embed_batch
+
+    vectors = _maybe_embed_batch(["authenticate", "run server"])
+    assert len(vectors) == 2
+    # Either the model is available (both real vectors) or unavailable (both
+    # None) -- either way, per-query count and fallback shape must match.
+    assert all(v is None for v in vectors) or all(isinstance(v, list) for v in vectors)
+
+
+def test_maybe_embed_batch_empty_list_returns_empty() -> None:
+    from codegraph.server.mcp_server import _maybe_embed_batch
+
+    assert _maybe_embed_batch([]) == []
+
+
 # ---------- agent-driven summaries ----------
 
 

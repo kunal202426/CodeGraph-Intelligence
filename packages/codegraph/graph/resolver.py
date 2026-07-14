@@ -549,12 +549,15 @@ def _resolve_call(
     imports_by_file: dict[str, dict[str, str]],
     entities_by_dir: dict[str, dict[str, str]] | None = None,
 ) -> tuple[str, float]:
-    """Resolve a `<lang>:?call:<callee>` edge.
+    """Resolve a `<lang>:?call:<callee>` edge -- an UNTYPED call (the parser
+    couldn't infer the receiver's type, or there is no receiver at all).
 
     Order: a same-file entity named `<callee>` (conf 1.0) → a name the caller's
     file imports (conf 0.9) → for Java, a same-package sibling that needs no
-    import (conf 0.85) → external (conf 0.5). Method-call precision (typed
-    receivers) is out of MVP scope; we match on the simple callee name.
+    import (conf 0.85) → external (conf 0.5), matching on the simple callee
+    name since no type is known to disambiguate. Receiver-typed calls
+    (`obj.method()` where `obj`'s type WAS inferred) go through
+    `_resolve_method_call` instead, which resolves the exact declared method.
     """
     _, _, callee = dst_id.partition(":?call:")
     parts = src_id.split(":", 2)

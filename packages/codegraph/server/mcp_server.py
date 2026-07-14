@@ -652,6 +652,21 @@ def _maybe_embed(query: str) -> list[float] | None:
         return None
 
 
+def _maybe_embed_batch(queries: list[str]) -> list[list[float] | None]:
+    """Embed several queries in ONE model.encode() call instead of one call
+    per query -- real latency win for get_context's multi-query batching,
+    independent of (and in addition to) the round-trip savings batching
+    itself provides. Falls back to all-None (literal-only search) for every
+    query on any failure, matching _maybe_embed's per-query behaviour.
+    """
+    try:
+        from codegraph.embeddings.pipeline import embed_batch
+
+        return [v.tolist() for v in embed_batch(queries)]
+    except Exception:  # noqa: BLE001 - model unavailable → literal search only
+        return [None] * len(queries)
+
+
 def _search_code(args: dict[str, Any]) -> str:
     query = str(args["query"])
     limit = int(args.get("limit", 10))
@@ -810,10 +825,11 @@ def _merge_query_hits(conn, queries: list[str], limit: int, has_vectors: bool) -
     matching two queries in the batch only appears once.
     """
     pool = min(limit * 3, 30)
-    per_query: list[list] = []
-    for q in queries:
-        vector = _maybe_embed(q) if has_vectors else None
-        per_query.append(hybrid_search(conn, q, vector, limit=pool))
+    vectors = _maybe_embed_batch(queries) if has_vectors else [None] * len(queries)
+    per_query: list[list] = [
+        hybrid_search(conn, q, vector, limit=pool)
+        for q, vector in zip(queries, vectors, strict=True)
+    ]
 
     seen_ids: set[str] = set()
     merged: list = []
