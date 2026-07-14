@@ -72,6 +72,23 @@ def _make_handler(
     return handler, repo, db
 
 
+def _wait_for_fired(fired: list, prev_len: int, timeout: float = 2.0) -> None:
+    """Poll until `fired` grows past `prev_len`, instead of a fixed sleep.
+
+    The debounce callback runs on a background thread, so a fixed
+    `time.sleep(0.3)` between dispatch and assertion is a race: it's usually
+    enough locally but can flake on a slower/more loaded CI runner (seen in
+    practice -- CI failed here once with the callback still in flight after
+    300ms). Polling every 10ms up to a generous timeout is both more robust
+    (no flake unless the callback genuinely never fires) and faster in the
+    common case (returns as soon as the callback lands, not after a fixed
+    wait).
+    """
+    start = time.monotonic()
+    while len(fired) <= prev_len and time.monotonic() - start < timeout:
+        time.sleep(0.01)
+
+
 # --------------------------------------------------------------------------- #
 # ChangeEvent
 # --------------------------------------------------------------------------- #
@@ -432,9 +449,14 @@ def test_persistently_failing_file_is_quarantined(tmp_path: Path, monkeypatch) -
     src.write_text("def run():\n    pass\n", encoding="utf-8")
     monkeypatch.setattr(watcher_mod, "index_one_file", _fail_always)
 
-    for _ in range(4):
+    for _ in range(3):
+        prev = len(fired)
         handler.dispatch(_MockEvent(src_path=src.resolve(), event_type="modified"))
-        time.sleep(0.3)
+        _wait_for_fired(fired, prev)
+    # The 4th dispatch is expected to produce NO event (quarantined) -- there's
+    # nothing to positively wait for, so give it a short settle window instead.
+    handler.dispatch(_MockEvent(src_path=src.resolve(), event_type="modified"))
+    time.sleep(0.1)
 
     # Events 1-3 fire with errors; the 3rd announces the quarantine; the 4th
     # dispatch produces no event at all.
@@ -465,8 +487,9 @@ def test_success_resets_the_failure_count(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(watcher_mod, "index_one_file", _fail_twice_then_ok)
 
     for _ in range(5):
+        prev = len(fired)
         handler.dispatch(_MockEvent(src_path=src.resolve(), event_type="modified"))
-        time.sleep(0.3)
+        _wait_for_fired(fired, prev)
 
     assert len(fired) == 5  # nothing dropped
     assert not any(e.error and "giving up" in e.error for e in fired)
@@ -482,19 +505,22 @@ def test_deleting_a_quarantined_file_clears_the_quarantine(tmp_path: Path, monke
     monkeypatch.setattr(watcher_mod, "index_one_file", _fail_always)
 
     for _ in range(3):
+        prev = len(fired)
         handler.dispatch(_MockEvent(src_path=src.resolve(), event_type="modified"))
-        time.sleep(0.3)
+        _wait_for_fired(fired, prev)
     assert "giving up" in fired[-1].error
 
     # Delete goes through despite quarantine, and clears it.
+    prev = len(fired)
     handler.dispatch(_MockEvent(src_path=src.resolve(), event_type="deleted"))
-    time.sleep(0.3)
+    _wait_for_fired(fired, prev)
     assert fired[-1].action == "deleted"
     assert fired[-1].error is None
 
     # The path indexes again after re-creation (quarantine lifted).
     monkeypatch.setattr(watcher_mod, "index_one_file", lambda *a, **k: 1)
+    prev = len(fired)
     handler.dispatch(_MockEvent(src_path=src.resolve(), event_type="modified"))
-    time.sleep(0.3)
+    _wait_for_fired(fired, prev)
     assert fired[-1].action == "modified"
     assert fired[-1].error is None
