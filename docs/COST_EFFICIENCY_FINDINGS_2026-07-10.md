@@ -154,11 +154,19 @@ question, the way round 3 isolated the resolver/ranking fixes.
 Ranked by confidence × leverage, not implemented blind — each needs either more design
 thought or its own empirical validation before landing.
 
-### 1. Multi-query `get_context` (high confidence, medium effort)
-The "search broadly, then drill into 1-2 specific entities" pattern showed up in every
-multi-step transcript today. Let `get_context` accept a list of queries (or a
-`follow_up_of` style parameter) so that pattern is one round-trip instead of two. Directly
-extends the fix already shipped this pass.
+### 1. Multi-query `get_context` -- SHIPPED 2026-07-13
+`get_context`'s `query` param now also accepts a list of up to 5 strings: each is run
+through `hybrid_search` independently, merged round-robin (query1's top hit, query2's top
+hit, ... before either gets a second slot) so no single query's results crowd out the
+others, deduped by `entity_id`, then diversity-capped and token-budget-truncated exactly
+like the single-query path. Fully backward compatible -- a plain string behaves
+byte-identical to before. Motivated directly by a real transcript: the round-5
+"transaction flow" question burned 7 separate `get_context` calls, one per pipeline stage,
+when the agent knew all 7 names by the second call. This is the first change this session
+that reduces round-trip *count* for a known multi-lookup pattern, rather than shrinking
+response size or removing one fixed redundant call -- everything shipped through round 5
+closed the round-1 regression back to parity; this is the first genuine attempt to push
+below parity. Not yet empirically re-measured (see the open question this raises below).
 
 ### 2. Make the token-savings metric honest about what it measures (high confidence, low effort, high trust value)
 `tokens_estimated`/`tokens_if_read`/`savings_ratio` should either be relabeled to make clear

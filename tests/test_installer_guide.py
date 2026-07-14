@@ -44,6 +44,13 @@ def test_guide_mandates_project_brief_once_at_session_start(tmp_path: Path) -> N
     assert "First message?" in text
 
 
+def test_guide_mentions_batched_get_context_queries(tmp_path: Path) -> None:
+    """get_context accepts a list of up to 5 queries to collapse N round-trips
+    for known names into one call -- the guide must surface this."""
+    text = write_agent_guide(tmp_path).read_text(encoding="utf-8")
+    assert "list (max 5)" in text
+
+
 def test_guide_is_strong_mandate_with_savings_instruction(tmp_path: Path) -> None:
     """The guide must (a) require CodeGraph before reading files and (b) tell the
     agent to report the token savings — the two levers behind 'auto-use'."""

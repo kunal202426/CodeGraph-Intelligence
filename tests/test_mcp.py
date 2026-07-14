@@ -897,6 +897,53 @@ def test_get_context_limit_respected(indexed_db: Path) -> None:
     assert len(data["entities"]) <= 2
 
 
+# ---------- get_context: batched (list) queries ----------
+
+
+def test_get_context_batch_merges_results_from_each_query(indexed_db: Path) -> None:
+    """A list query must return results for EACH named target, not just the
+    first -- the whole point is collapsing N round-trips into one, not
+    picking a winner."""
+    data = _call("get_context", {"query": ["authenticate", "run_server"], "limit": 10})
+    names_or_ids = " ".join(e["entity_id"] for e in data["entities"])
+    assert "authenticate" in names_or_ids
+    assert "run_server" in names_or_ids
+
+
+def test_get_context_batch_dedupes_repeated_target(indexed_db: Path) -> None:
+    data = _call("get_context", {"query": ["authenticate", "authenticate"], "limit": 10})
+    auth_hits = [e for e in data["entities"] if e["entity_id"].endswith(":authenticate")]
+    assert len(auth_hits) == 1
+
+
+def test_get_context_batch_caps_at_five_queries(indexed_db: Path) -> None:
+    """More than 5 queries must not error -- extras are silently dropped."""
+    many = ["authenticate", "run_server", "boot", "User", "Session", "UserController", "LoginForm"]
+    data = _call("get_context", {"query": many, "limit": 10})
+    assert data["total"] >= 1
+
+
+def test_get_context_batch_respects_limit_across_all_queries(indexed_db: Path) -> None:
+    data = _call("get_context", {"query": ["authenticate", "run_server", "User"], "limit": 2})
+    assert len(data["entities"]) <= 2
+
+
+def test_get_context_batch_skips_low_confidence_warning(indexed_db: Path) -> None:
+    """The low-confidence heuristic is tuned for one prose query; a batch of
+    already-known symbol names shouldn't trigger it even if, individually,
+    a name wouldn't corroborate 2+ words of some other query."""
+    data = _call("get_context", {"query": ["authenticate", "run_server"], "limit": 10})
+    assert not any("low-confidence" in w.lower() for w in data["warnings"])
+
+
+def test_get_context_single_string_query_unchanged(indexed_db: Path) -> None:
+    """Backward compatibility: a plain string query behaves identically to
+    before batching was added."""
+    data = _call("get_context", {"query": "authenticate"})
+    assert data["total"] >= 1
+    assert any(e["entity_id"].endswith(":authenticate") for e in data["entities"])
+
+
 # ---------- agent-driven summaries ----------
 
 

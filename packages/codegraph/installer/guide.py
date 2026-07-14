@@ -30,7 +30,7 @@ _BLOCK_BODY = """\
 ## CodeGraph -- REQUIRED workflow (code intelligence over MCP)
 
 This repo is indexed by CodeGraph -- tools return far fewer tokens than reading files and
-surface cross-file edges a single file can't show. Use them by default.
+surface cross-file edges files can't show. Use them by default.
 
 **Rules (every task):**
 1. First message? Call `project_brief()` once. Then, before opening any source file, call
@@ -39,18 +39,18 @@ surface cross-file edges a single file can't show. Use them by default.
 2. Use `detail="full"` on the first call when you'll need real code -- understanding or
    editing. A second round-trip costs more than the larger response. Summary mode is for
    browsing candidates first.
-3. Editing? Locate it, then Read + Edit yourself -- Edit needs a fresh Read regardless of
-   what MCP returned.
+3. Editing? Locate it, then Read + Edit yourself -- Edit needs a fresh Read either way.
 4. After `get_context`, report: `CodeGraph: ~<tokens_estimated> vs ~<tokens_if_read> tokens
    (<savings_ratio>x less)` -- response size, not $ cost.
 
 **Which tool:**
 - `project_brief()` -- ONCE, first: layers, hot paths, entry points.
 - `get_context(query)` -- signatures + callers/callees + staleness; `detail="full"` = source.
-- `get_entity_context(id)` -- full source + neighbours, one entity.
-- `impact_analysis(id)` -- what breaks if changed.
+  2+ known names? Pass a list (max 5), not separately.
+- `get_entity_context(id)` -- full source + neighbours, 1 entity.
+- `impact_analysis(id)` -- what breaks.
 - `trace_path(from_id, to_id)` -- shortest call chain A to B.
-- `search_code(query)` -- id-only lookup.
+- `search_code(query)` -- id lookup.
 
 **entity_id:** `{lang}:{rel_path}:{qualified_name}`, e.g. `py:auth/login.py:authenticate`.
 `detail="full"` on many entities at once still costs tokens -- fine for 1-5, not a whole

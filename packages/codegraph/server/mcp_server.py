@@ -304,10 +304,13 @@ def tool_definitions() -> list[Tool]:
                 "short source preview, and each entity's callers and callees. Replaces "
                 "3-4 round-trips (search + entity + impact) and uses ~10x fewer tokens "
                 "than opening files. Defaults to lean summaries; pass detail='full' only "
-                "when you need complete bodies (1-2 entities at a time). In summary mode "
-                "the depends_on/called_by lists are qualified NAMES, not entity_ids -- "
-                "to act on a neighbour, get its id from impact_analysis(this entity_id) "
-                "or search_code(name); the file path is embedded in each entity_id "
+                "when you need complete bodies (1-2 entities at a time). Pass a LIST of "
+                "up to 5 queries to batch several already-known lookups (e.g. every stage "
+                "of a pipeline you're tracing) into one call instead of one round-trip "
+                "per name -- results are merged and deduped. In summary mode the "
+                "depends_on/called_by lists are qualified NAMES, not entity_ids -- to act "
+                "on a neighbour, get its id from impact_analysis(this entity_id) or "
+                "search_code(name); the file path is embedded in each entity_id "
                 "({lang}:{file}:{qname}). Note: tokens_estimated/tokens_if_read/"
                 "savings_ratio in the response measure THIS response's size against a "
                 "full-file-read baseline, not your session's real $ cost -- that also "
@@ -317,8 +320,19 @@ def tool_definitions() -> list[Tool]:
                 "type": "object",
                 "properties": {
                     "query": {
-                        "type": "string",
-                        "description": "Natural-language question or symbol name.",
+                        "oneOf": [
+                            {"type": "string"},
+                            {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "minItems": 1,
+                                "maxItems": 5,
+                            },
+                        ],
+                        "description": (
+                            "Natural-language question or symbol name. Or a list of up "
+                            "to 5 to batch related lookups into one call."
+                        ),
                     },
                     "limit": {
                         "type": "integer",
@@ -505,6 +519,11 @@ _SOURCE_PREVIEW_LINES = 8
 # Max neighbour ids listed per entity in get_context summary mode (counts are
 # always exact; the full lists are available via impact_analysis / full detail).
 _NEIGHBOR_CAP = 8
+
+# Max queries get_context accepts in one batched call. Bounded so batching
+# (meant to collapse "look up these N known names in one round-trip" into one
+# call) can't itself become an unbounded-cost round-trip.
+_MAX_BATCH_QUERIES = 5
 
 
 def _source_preview(raw_source: str | None, max_lines: int = _SOURCE_PREVIEW_LINES) -> str:
@@ -779,15 +798,54 @@ def _trace_path(args: dict[str, Any]) -> str:
     )
 
 
+def _merge_query_hits(conn, queries: list[str], limit: int, has_vectors: bool) -> list:
+    """Run hybrid_search once per query, merge into one deduped, round-robin
+    ranked list (single-query callers get a list of length 1, unchanged).
+
+    Round-robins across queries (query1's #1 hit, query2's #1 hit, ...,
+    query1's #2 hit, ...) rather than concatenating each query's full result
+    set in order -- a batched call is "give me each of these things", so
+    every query should get a fair shot at a slot before any one query's
+    results crowd out the rest. Deduped by entity_id: the same entity
+    matching two queries in the batch only appears once.
+    """
+    pool = min(limit * 3, 30)
+    per_query: list[list] = []
+    for q in queries:
+        vector = _maybe_embed(q) if has_vectors else None
+        per_query.append(hybrid_search(conn, q, vector, limit=pool))
+
+    seen_ids: set[str] = set()
+    merged: list = []
+    max_len = max((len(bucket) for bucket in per_query), default=0)
+    for rank in range(max_len):
+        for bucket in per_query:
+            if rank < len(bucket) and bucket[rank].entity_id not in seen_ids:
+                seen_ids.add(bucket[rank].entity_id)
+                merged.append(bucket[rank])
+    return merged
+
+
 def _get_context(args: dict[str, Any]) -> str:
     """Hybrid search packed with callers/callees in one response.
 
     Defaults to token-lean summaries (signature + docstring + short source
     preview). Pass ``detail="full"`` to include complete ``raw_source`` bodies.
+    ``query`` accepts a single string or a list of up to `_MAX_BATCH_QUERIES`,
+    to batch several already-known lookups (e.g. every stage of a pipeline)
+    into one round-trip instead of one call per name -- see _merge_query_hits.
     """
     from codegraph.ai.tokens import estimate_tokens
 
-    query = str(args["query"])
+    raw_query = args["query"]
+    queries = (
+        [str(q) for q in raw_query][:_MAX_BATCH_QUERIES]
+        if isinstance(raw_query, list)
+        else [str(raw_query)]
+    )
+    if not queries:
+        queries = [""]
+    batched = len(queries) > 1
     limit = max(1, min(int(args.get("limit", 5)), 10))
     detail = str(args.get("detail", "summary")).lower()
     max_tokens = max(100, int(args.get("max_tokens", 1500)))
@@ -797,19 +855,24 @@ def _get_context(args: dict[str, Any]) -> str:
     store = _open_store()
     try:
         has_vectors = store.count_embedded() > 0
-        vector = _maybe_embed(query) if has_vectors else None
+        hits = _merge_query_hits(store.conn, queries, limit, has_vectors)
         # Over-fetch, then diversity-cap down to `limit` -- otherwise one file
         # (or one test suite) matching well can crowd out every other result.
-        hits = hybrid_search(store.conn, query, vector, limit=min(limit * 3, 30))
         hits = _apply_diversity_cap(hits, limit)
 
         # Surface the one failure that is otherwise silent: a --no-embed index
         # degrades semantic search to literal-only with no signal to the agent.
+        # Skipped in batch mode: the low-confidence heuristic is tuned for a
+        # single prose query, not a list of already-known symbol names.
         warnings: list[str] = []
-        if hits and not _has_confident_match(query, [h.name for h in hits], [h.file for h in hits]):
+        if (
+            not batched
+            and hits
+            and not _has_confident_match(queries[0], [h.name for h in hits], [h.file for h in hits])
+        ):
             warnings.append(
                 "Low-confidence matches: no result strongly corroborates the query "
-                f"'{query}' -- treat this as a starting point, not a complete answer. "
+                f"'{queries[0]}' -- treat this as a starting point, not a complete answer. "
                 "Try a more specific query or check the directories below."
             )
         stale = _get_stale_count()
