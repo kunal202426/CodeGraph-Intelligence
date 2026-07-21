@@ -28,6 +28,7 @@ import duckdb
 
 from codegraph.ai.tokens import estimate_tokens
 from codegraph.graph.ranking import (
+    bounded_edit_distance,
     extract_search_terms,
     is_generated_path,
     is_test_path,
@@ -79,6 +80,16 @@ class SearchHit:
 
 _SEARCH_POOL_MAX = 2000
 
+# Fuzzy-fallback tuning: only tried when the normal (substring/segment) path
+# finds literally nothing, and only for single-concept queries -- fuzzy
+# matching a whole multi-word phrase against a name isn't a coherent typo
+# model. 2 edits covers the common case (one typo'd/transposed/missing
+# character); scanning is capped so a huge repo can't make a "you probably
+# mean X" fallback expensive.
+_FUZZY_MAX_DIST = 2
+_FUZZY_MIN_QUERY_LEN = 3
+_FUZZY_SCAN_CAP = 20000
+
 
 def search_literal(
     conn: duckdb.DuckDBPyConnection,
@@ -102,6 +113,11 @@ def search_literal(
     the query itself is about tests) and generated-looking files are demoted
     on a name collision, so a hand-written implementation doesn't have to
     compete on equal footing with its own test suite or codegen output.
+
+    If nothing matches at all (no substring/segment hit anywhere) and the
+    query is a single concept, falls back to a bounded typo-tolerant scan
+    (see `_fuzzy_fallback`) instead of returning empty -- a misspelled
+    symbol name still finds its target.
     """
     if not query:
         return []
@@ -160,6 +176,45 @@ def search_literal(
     scored = [(_score(r[2], r[6], r[4]), len(r[2]), r[2], r) for r in rows]
     scored = [s for s in scored if s[0] > 0.0]
     scored.sort(key=lambda s: (-s[0], s[1], s[2]))
+
+    if not scored and len(sig_terms) <= 1:
+        return _fuzzy_fallback(conn, query, limit)
+
+    return [
+        SearchHit(
+            entity_id=r[0],
+            type=r[1],
+            name=r[2],
+            qualified_name=r[3],
+            file=r[4],
+            start_line=r[5],
+            docstring=r[6],
+        )
+        for _, _, _, r in scored[:limit]
+    ]
+
+
+def _fuzzy_fallback(conn: duckdb.DuckDBPyConnection, query: str, limit: int) -> list[SearchHit]:
+    """Last-resort typo-tolerant match: no substring/segment hit at all, so
+    scan (a bounded sample of) entity names for one within `_FUZZY_MAX_DIST`
+    edits of the query. Only reached for single-concept queries with nothing
+    else to show -- see the call site in `search_literal`.
+    """
+    query_lower = query.lower()
+    if len(query_lower) < _FUZZY_MIN_QUERY_LEN:
+        return []
+    rows = conn.execute(
+        "SELECT entity_id, type, name, qualified_name, file, start_line, docstring "
+        "FROM entities LIMIT ?",
+        [_FUZZY_SCAN_CAP],
+    ).fetchall()
+
+    scored: list[tuple[int, int, str, tuple]] = []
+    for r in rows:
+        dist = bounded_edit_distance(query_lower, r[2].lower(), _FUZZY_MAX_DIST)
+        if dist is not None:
+            scored.append((dist, len(r[2]), r[2], r))
+    scored.sort(key=lambda s: (s[0], s[1], s[2]))
 
     return [
         SearchHit(

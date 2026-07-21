@@ -156,3 +156,64 @@ def test_generated_file_ranked_below_hand_written_on_equal_name(tmp_path) -> Non
         assert hits[0].file == "api/service.py"
     finally:
         store.close()
+
+
+# ---------- fuzzy fallback ----------
+
+
+def test_typo_falls_back_to_closest_name(tmp_path) -> None:
+    """A misspelled symbol name (one missing char) with zero substring/segment
+    matches must still find the real entity via the fuzzy fallback."""
+    store = _store(tmp_path, [_entity("py:a.py:authenticate", "authenticate", "a.py")])
+    try:
+        hits = search_literal(store.conn, "authentcate", limit=10)
+        assert any(h.name == "authenticate" for h in hits)
+    finally:
+        store.close()
+
+
+def test_fuzzy_fallback_only_used_when_nothing_else_matches(tmp_path) -> None:
+    """When a normal (substring/segment) hit exists, the fuzzy fallback must
+    not kick in and dilute the result with unrelated near-misses."""
+    store = _store(
+        tmp_path,
+        [
+            _entity("py:a.py:authenticate", "authenticate", "a.py"),
+            _entity("py:a.py:authorize", "authorize", "a.py"),
+        ],
+    )
+    try:
+        hits = search_literal(store.conn, "authenticate", limit=10)
+        assert hits[0].name == "authenticate"
+        assert not any(h.name == "authorize" for h in hits)
+    finally:
+        store.close()
+
+
+def test_fuzzy_fallback_skipped_for_multi_word_queries(tmp_path) -> None:
+    """Fuzzy matching a whole multi-word phrase against a single name isn't a
+    coherent typo model -- must stay empty rather than guess."""
+    store = _store(tmp_path, [_entity("py:a.py:authenticate", "authenticate", "a.py")])
+    try:
+        hits = search_literal(store.conn, "totally unrelated phrase", limit=10)
+        assert hits == []
+    finally:
+        store.close()
+
+
+def test_very_short_query_does_not_fuzzy_match(tmp_path) -> None:
+    store = _store(tmp_path, [_entity("py:a.py:ab", "ab", "a.py")])
+    try:
+        hits = search_literal(store.conn, "xy", limit=10)
+        assert hits == []
+    finally:
+        store.close()
+
+
+def test_wildly_different_query_stays_empty(tmp_path) -> None:
+    store = _store(tmp_path, [_entity("py:a.py:authenticate", "authenticate", "a.py")])
+    try:
+        hits = search_literal(store.conn, "zzz_not_a_real_symbol_9999", limit=10)
+        assert hits == []
+    finally:
+        store.close()

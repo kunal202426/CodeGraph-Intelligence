@@ -160,3 +160,35 @@ def is_generated_path(file: str) -> bool:
         return False
     lower = file.lower()
     return any(lower.endswith(suffix) for suffix in _GENERATED_SUFFIXES)
+
+
+def bounded_edit_distance(a: str, b: str, max_dist: int) -> int | None:
+    """Levenshtein distance between *a* and *b*, or `None` if it exceeds
+    *max_dist* -- a typo-tolerant fallback's distance check, not a general
+    string-diff utility.
+
+    Row-minimum pruning: once every value in the current DP row exceeds
+    `max_dist`, the final distance can only be larger (each further row can
+    only add, never subtract, edits), so abort immediately. Keeps a fuzzy
+    scan over many candidate names cheap -- O(len(b)) memory, and the early
+    exit keeps it sub-quadratic in practice for anything but near-matches.
+    """
+    if a == b:
+        return 0
+    la, lb = len(a), len(b)
+    if abs(la - lb) > max_dist:
+        return None
+    prev = list(range(lb + 1))
+    for i in range(1, la + 1):
+        curr = [i] + [0] * lb
+        for j in range(1, lb + 1):
+            cost = 0 if a[i - 1] == b[j - 1] else 1
+            curr[j] = min(
+                prev[j] + 1,  # deletion
+                curr[j - 1] + 1,  # insertion
+                prev[j - 1] + cost,  # substitution
+            )
+        if min(curr) > max_dist:
+            return None
+        prev = curr
+    return prev[lb] if prev[lb] <= max_dist else None

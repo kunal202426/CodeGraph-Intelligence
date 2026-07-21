@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from codegraph.graph.ranking import (
+    bounded_edit_distance,
     extract_search_terms,
     is_generated_path,
     is_test_path,
@@ -101,3 +102,30 @@ def test_dart_freezed_generated_file_detected() -> None:
 def test_hand_written_file_not_flagged_as_generated() -> None:
     assert not is_generated_path("api/v1/service.go")
     assert not is_generated_path("lib/models/user.dart")
+
+
+# ---------- bounded_edit_distance ----------
+
+
+def test_identical_strings_have_zero_distance() -> None:
+    assert bounded_edit_distance("authenticate", "authenticate", 2) == 0
+
+
+def test_one_missing_character_has_distance_one() -> None:
+    assert bounded_edit_distance("authentcate", "authenticate", 2) == 1
+
+
+def test_one_substitution_has_distance_one() -> None:
+    assert bounded_edit_distance("authenticata", "authenticate", 2) == 1
+
+
+def test_distance_exceeding_max_returns_none() -> None:
+    assert bounded_edit_distance("cat", "dog", 2) is None
+
+
+def test_length_difference_alone_can_exceed_max() -> None:
+    assert bounded_edit_distance("", "abc", 2) is None
+
+
+def test_two_substitutions_within_bound() -> None:
+    assert bounded_edit_distance("ab", "ba", 2) == 2
