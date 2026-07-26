@@ -205,8 +205,16 @@ def get_db_path() -> Path:
 
 
 def tool_definitions() -> list[Tool]:
-    """The four tools this server advertises (pure — used by list_tools + tests)."""
-    return [
+    """Tools this server advertises (pure -- used by list_tools + tests).
+
+    `ask_codebase` is omitted when `ANTHROPIC_API_KEY` isn't set: it always
+    errors without one (see `ai/llm.py`), so advertising it costs real schema
+    tokens every session for no benefit to a Claude-Code-only user with no
+    separate Anthropic API key -- and risks a wasted round-trip if the agent
+    tries it anyway. Re-evaluated on every call, so it reappears the moment
+    the key is set.
+    """
+    tools = [
         Tool(
             name="search_code",
             description="Prefer this over grep/file-reading for finding code. Hybrid "
@@ -299,22 +307,18 @@ def tool_definitions() -> list[Tool]:
         Tool(
             name="get_context",
             description=(
-                "START HERE before reading any source file. The primary tool -- one call "
-                "returns hybrid search results packed with signatures, docstrings, a "
-                "short source preview, and each entity's callers and callees. Replaces "
-                "3-4 round-trips (search + entity + impact) and uses ~10x fewer tokens "
-                "than opening files. Defaults to lean summaries; pass detail='full' only "
-                "when you need complete bodies (1-2 entities at a time). Pass a LIST of "
-                "up to 5 queries to batch several already-known lookups (e.g. every stage "
-                "of a pipeline you're tracing) into one call instead of one round-trip "
-                "per name -- results are merged and deduped. In summary mode the "
-                "depends_on/called_by lists are qualified NAMES, not entity_ids -- to act "
-                "on a neighbour, get its id from impact_analysis(this entity_id) or "
-                "search_code(name); the file path is embedded in each entity_id "
-                "({lang}:{file}:{qname}). Note: tokens_estimated/tokens_if_read/"
-                "savings_ratio in the response measure THIS response's size against a "
-                "full-file-read baseline, not your session's real $ cost -- that also "
-                "depends on round-trip count, which this ratio doesn't capture."
+                "START HERE before reading any source file. One call returns search "
+                "results with signatures, docstrings, a source preview, and "
+                "callers/callees -- replaces 3-4 round-trips and ~10x fewer tokens than "
+                "opening files. Defaults to lean summaries; detail='full' for complete "
+                "bodies (1-2 entities at a time). Pass a list of up to 5 queries to "
+                "batch related lookups into one call instead of several round-trips "
+                "(merged, deduped). Summary mode's depends_on/called_by are qualified "
+                "NAMES not entity_ids -- get an id via impact_analysis or search_code; "
+                "entity_id format is {lang}:{file}:{qname}. "
+                "tokens_estimated/tokens_if_read/savings_ratio measure response size vs. "
+                "a full-file-read, not $ cost (round-trip count matters too and isn't "
+                "captured here)."
             ),
             inputSchema={
                 "type": "object",
@@ -401,10 +405,10 @@ def tool_definitions() -> list[Tool]:
         Tool(
             name="index_status",
             description=(
-                "Call this once at the start of a session to confirm the index exists "
-                "and is fresh. Returns file, entity, and edge counts; embedding "
-                "coverage; and whether source files changed since the last index "
-                "(staleness). If stale, run the reindex tool before relying on results."
+                "Full status dump: file/entity/edge counts, embedding coverage, "
+                "staleness. Usually unnecessary as a routine step -- get_context "
+                "already reports staleness via its own warnings field. Use this for a "
+                "one-off health check, not before every task."
             ),
             inputSchema={
                 "type": "object",
@@ -484,6 +488,9 @@ def tool_definitions() -> list[Tool]:
             },
         ),
     ]
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        tools = [t for t in tools if t.name != "ask_codebase"]
+    return tools
 
 
 @server.list_tools()

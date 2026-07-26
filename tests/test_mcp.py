@@ -49,12 +49,26 @@ def indexed_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return db
 
 
-def test_twelve_tools_declared() -> None:
+def test_twelve_tools_declared(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     tools = tool_definitions()
     assert {t.name for t in tools} == _EXPECTED
 
 
-def test_each_tool_has_object_schema_with_required() -> None:
+def test_ask_codebase_omitted_without_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ask_codebase always errors without ANTHROPIC_API_KEY (see ai/llm.py) --
+    advertising it anyway would cost real schema tokens every session for a
+    tool that can't work, and risk a wasted round-trip if tried. Must not be
+    listed when the key is absent (the common case for a Claude-Code-only
+    user with no separate Anthropic API key)."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    tools = tool_definitions()
+    assert "ask_codebase" not in {t.name for t in tools}
+    assert {t.name for t in tools} == _EXPECTED - {"ask_codebase"}
+
+
+def test_each_tool_has_object_schema_with_required(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     by_name = {t.name: t for t in tool_definitions()}
     assert by_name["search_code"].inputSchema["required"] == ["query"]
     assert by_name["get_entity_context"].inputSchema["required"] == ["entity_id"]
@@ -86,7 +100,8 @@ def test_tool_descriptions_are_directive() -> None:
         )
 
 
-def test_list_tools_handler_matches_definitions() -> None:
+def test_list_tools_handler_matches_definitions(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     tools = asyncio.run(list_tools())
     assert {t.name for t in tools} == _EXPECTED
 
