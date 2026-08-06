@@ -67,33 +67,47 @@ rules exactly — do not deviate:
 23. `codegraph uninstall claude -y` — confirm clean removal, then reinstall if you want
     to keep using it afterward
 
-### MCP — the 11 tools, from inside your agent
+### MCP — the tools, from inside your agent
 24. `index_status`
-25. `search_code`
-26. `get_context`
-27. `get_entity_context`
-28. `impact_analysis`
-29. `trace_path`
-30. `list_files`
-31. `reindex` — make a small code change first, then call this, confirm it picks it up
-32. `get_unsummarized_entities` + `store_summaries` — run the pair together, confirm a
+25. `project_brief` — should return in one cheap call: language/file counts, layers,
+    hot-path entities (highest fan-in), HTTP entry points
+26. `search_code`
+27. `get_context` — try both a plain string query AND a list of 2-3 queries in one call
+    (batching); confirm the batched call returns results for every name, not just the
+    first, and doesn't duplicate an entity matched by more than one query
+28. `get_entity_context`
+29. `impact_analysis`
+30. `trace_path`
+31. `list_files`
+32. `reindex` — make a small code change first, then call this, confirm it picks it up
+33. `get_unsummarized_entities` + `store_summaries` — run the pair together, confirm a
     summary gets written and re-embedded
-33. `ask_codebase` (needs API key)
+34. `ask_codebase` — needs `ANTHROPIC_API_KEY` set. If it's NOT set, this tool should be
+    **absent from the tool list entirely** (not just erroring when called) — confirm
+    that instead.
 
 ### Recently-added resolution features — worth extra scrutiny, least manually verified
-34. Pick a real `obj.method()` call in this codebase where two *different* classes
+35. Pick a real `obj.method()` call in this codebase where two *different* classes
     define a method with the *same name* — confirm `impact_analysis`/`trace_path` on one
     doesn't wrongly pull in callers of the other (receiver-type inference)
-35. Pick a method only declared on a *base class*, called via a subclass instance —
+36. Pick a method only declared on a *base class*, called via a subclass instance —
     confirm it resolves through the inheritance walk instead of showing as unreachable
-36. If this codebase (or another project you point me at) uses Flask/FastAPI/Express/
+37. If this codebase (or another project you point me at) uses Flask/FastAPI/Express/
     Django/Spring/Rails routing — confirm a route handler with no direct static caller
     shows up as **called** (via the route registration), not as dead code
-37. If there's a frontend making `fetch`/`axios` calls to a backend route with a static
+38. If there's a frontend making `fetch`/`axios` calls to a backend route with a static
     URL — confirm `trace_path` finds the cross-language edge between them
+39. If this codebase uses a `@/`-style import alias (Next/Nuxt/Vite tsconfig `paths`) —
+    confirm `get_context`/`trace_path` resolve through it instead of showing `external:`
+40. `search_code`/`get_context` with a deliberately misspelled symbol name (one typo'd or
+    missing character) — confirm the fuzzy fallback still finds the real entity instead
+    of returning nothing
+41. `codegraph status` immediately after a clean `codegraph index .` on a repo with at
+    least one vendored/minified file (a `.min.js`, a bundled vendor lib, etc.) — confirm
+    staleness says "up to date", not a permanent "N file changed" that never clears
 
 ### Comparative A/B test — with vs. without CodeGraph (run after everything above)
-38. Two separate Claude Code sessions against the same codebase, same prompts, one with
+42. Two separate Claude Code sessions against the same codebase, same prompts, one with
     the CodeGraph MCP tool wired in and one without. Compare: tokens spent (reading
     tokens especially), $ cost, response latency, and — critically — answer *quality*
     (does the token/cost saving come at the expense of correctness or completeness?).
