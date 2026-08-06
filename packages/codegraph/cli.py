@@ -286,14 +286,26 @@ def index(
                 progress.advance(task)
                 continue
 
-            if looks_generated(source):
-                skipped_generated += 1
-                progress.advance(task)
-                continue
-
             rel_path = path.relative_to(repo).as_posix()
             current_hash = hash_source(source)
             prev_hash = store.get_file_hash(rel_path)
+
+            if looks_generated(source):
+                skipped_generated += 1
+                # Still record a `files` row (zero entities) so staleness
+                # checks don't treat "deliberately excluded" the same as
+                # "never indexed" -- otherwise a vendored minified file shows
+                # as stale forever, since no amount of re-indexing ever
+                # creates the row find_stale_files() is looking for.
+                if prev_hash != current_hash:
+                    # If this path previously had real entities (content
+                    # changed FROM normal TO generated), clear them -- a
+                    # generated file must never carry stale entities forward.
+                    if prev_hash is not None:
+                        pending_stale_paths.append(rel_path)
+                    pending_file_rows.append((rel_path, lang, current_hash, source.count("\n") + 1))
+                progress.advance(task)
+                continue
 
             # T2.3: skip re-parse when hash hasn't changed (unless --force).
             if prev_hash == current_hash and not force:

@@ -188,11 +188,6 @@ def index_one_file(
     except OSError:
         return 0
 
-    # A build step overwriting a source path with minified/bundled output
-    # must not burn seconds of tree-sitter time per save on it.
-    if looks_generated(source):
-        return 0
-
     rel_path = abs_path.relative_to(repo).as_posix()
     current_hash = hash_source(source)
 
@@ -200,6 +195,23 @@ def index_one_file(
     try:
         store.init_schema()
         prev_hash = store.get_file_hash(rel_path)
+
+        # A build step overwriting a source path with minified/bundled output
+        # must not burn seconds of tree-sitter time per save on it -- but it
+        # still needs a `files` row (zero entities) so staleness checks stop
+        # treating "deliberately excluded" the same as "never indexed" (see
+        # the identical fix in cli.py's index loop for the full story).
+        if looks_generated(source):
+            if prev_hash != current_hash:
+                if prev_hash is not None:
+                    store.clear_file(rel_path)
+                store.upsert_file(
+                    path=rel_path,
+                    language=lang,
+                    hash_=current_hash,
+                    loc=source.count("\n") + 1,
+                )
+            return 0
 
         if prev_hash == current_hash:
             # Content unchanged — return the current entity count without re-parsing.

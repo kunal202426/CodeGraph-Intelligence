@@ -292,3 +292,33 @@ def test_generated_file_is_skipped_by_index_one_file(tmp_path: Path) -> None:
     db = tmp_path / "graph.duckdb"
 
     assert index_one_file(repo, minified, db, no_embed=True) == 0
+
+
+def test_generated_file_gets_a_files_row_so_staleness_check_stops(tmp_path: Path) -> None:
+    """Regression: a deliberately-skipped generated file used to get NO
+    `files` row at all, so find_stale_files() treated "deliberately
+    excluded" identically to "never indexed" and flagged it as stale on
+    every single check -- forever, since no amount of re-indexing ever
+    creates that row (real-world repro: any repo with a vendored minified
+    JS file permanently shows "1 file changed -- re-index recommended")."""
+    from codegraph.graph.store import GraphStore
+    from codegraph.sync.watcher import find_stale_files, index_one_file
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    minified = repo / "bundle.js"
+    minified.write_text("var a=1;" * 3000, encoding="utf-8")
+    db = tmp_path / "graph.duckdb"
+
+    assert index_one_file(repo, minified, db, no_embed=True) == 0
+
+    store = GraphStore(db)
+    try:
+        row = store.conn.execute(
+            "SELECT count(*) FROM files WHERE path = ?", ["bundle.js"]
+        ).fetchone()
+    finally:
+        store.close()
+    assert row is not None and row[0] == 1
+
+    assert find_stale_files(repo, db) == []

@@ -182,6 +182,41 @@ def test_index_purges_entities_for_files_no_longer_walked(
         store.close()
 
 
+def test_generated_file_gets_a_files_row_via_bulk_index(runner: CliRunner, tmp_path: Path) -> None:
+    """Same regression as watcher.index_one_file, via the bulk `codegraph
+    index` path: a skipped generated/minified file must still get a `files`
+    row (zero entities) so staleness checks don't flag it as stale forever."""
+    from codegraph.sync.watcher import find_stale_files
+
+    repo = tmp_path / "repo"
+    _make_pyrepo(
+        repo,
+        {
+            "real.py": "def real(): pass\n",
+            "bundle.js": "var a=1;" * 3000,
+        },
+    )
+    db = tmp_path / "graph.duckdb"
+    result = runner.invoke(app, ["index", str(repo), "--db", str(db)])
+    assert result.exit_code == 0, result.stdout
+    assert "Skipped 1 generated/minified" in result.stdout
+
+    store = GraphStore(db)
+    try:
+        row = store.conn.execute(
+            "SELECT count(*) FROM files WHERE path = ?", ["bundle.js"]
+        ).fetchone()
+        entity_row = store.conn.execute(
+            "SELECT count(*) FROM entities WHERE file = ?", ["bundle.js"]
+        ).fetchone()
+    finally:
+        store.close()
+    assert row is not None and row[0] == 1
+    assert entity_row is not None and entity_row[0] == 0
+
+    assert find_stale_files(repo, db) == []
+
+
 # ---------- search ----------
 
 
