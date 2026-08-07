@@ -9,7 +9,7 @@ cost depends on more than response size (see the honest breakdown below); it sca
 repo size and question type, not a flat multiplier.
 
 > **Status: active development.** Core indexing, search, and MCP tools are stable.
-> 1114 tests passing. Every user-facing surface manually tested: 21/21 passed, 6 issues
+> 1233 tests passing. Every user-facing surface manually tested: 21/21 passed, 6 issues
 > fixed. [Manual test →](docs/MANUAL_TEST_REPORT.md) | [Bench notes →](docs/QUALITY_REPORT_2026-07-01.md).
 > MCP server works but still preview, not production-ready.
 
@@ -19,6 +19,36 @@ repo size and question type, not a flat multiplier.
 ---
 
 ## Changelog
+
+**Aug 2026**
+
+- Real, controlled A/B on a genuinely large repo — JobHuntPro (1321 entities, 187 files, 4
+  sub-apps, cross-language: JS Chrome extension + Node/Express + Python/FastAPI + React) —
+  instead of the 47-file repo every earlier cost measurement used: **codegraph won overall,
+  -14% $ cost**. It lost only the one question a well-written README already answered, and
+  won both harder cross-file questions by a growing margin. First real evidence for the
+  scale-dependence claim this project has cited since its own competitor research, not an
+  assumption borrowed from someone else's numbers.
+  [Full writeup →](docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md)
+- `get_context` now accepts a list of up to 5 queries in one call — merged, deduped, fair
+  round-robin across queries — instead of one call per name. The first fix aimed at cutting
+  round-trip *count*, not just response size, which is what every earlier efficiency pass
+  had been optimizing.
+- New `project_brief` tool: a cheap, one-call session-start orientation summary (architecture
+  layers, hot-path entities by call fan-in, HTTP entry points) — measured as a real, if
+  modest, ~7% cost win in its own isolated A/B, with a higher cache-hit rate across the board.
+- tsconfig/jsconfig `paths` alias resolution (`@/foo` imports) — previously an explicitly
+  deferred TODO in this project's own resolver, silently losing cross-file edges on every
+  Next/Nuxt/Vite-scaffolded repo indexed.
+- Search re-ranked with identifier segmentation (`OrderStateMachine` now matches "state
+  machine"), multi-term co-occurrence boosting, and down-ranking of test/fixture and
+  generated files on a name collision — plus a bounded fuzzy-match fallback so a typo'd
+  symbol name still finds its target instead of returning nothing.
+- Fixed a real staleness bug found via manual testing: a repo with any vendored/minified
+  file (extremely common) used to show a permanent "N file changed — re-index recommended"
+  that no amount of re-indexing could ever clear, because the file was never given a row to
+  begin with.
+- 1233 tests passing (up from 1114), zero regressions.
 
 **Jul 2026**
 
@@ -161,7 +191,12 @@ The AI still *wrote* the same ~1–1.5k-token answer either way; that part is un
 > after fixing them landed within ~3% either way (noise, not a real gap) on that same repo.
 > Like the field's most mature comparable tool's own published numbers, $ cost savings are
 > genuinely scale-dependent: closer to break-even on a small/medium repo, a clear win once a
-> codebase (and the session count against it) gets large. Broader user testing is ongoing.
+> codebase (and the session count against it) gets large — and that's no longer just a claim
+> borrowed from someone else's benchmark. A follow-up A/B on a real ~1300-entity, 4-service
+> repo (JobHuntPro) measured Kortex **14% cheaper overall**, losing only the question a
+> well-written README already answered and winning the harder cross-file ones by a growing
+> margin — first-party evidence the scale-dependence holds, not just an assumption borrowed
+> from someone else's numbers. Broader user testing is ongoing.
 
 ---
 
