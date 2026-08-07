@@ -1505,6 +1505,86 @@ def _breadcrumb(msg: str) -> None:
     )
 
 
+def _process_alive(pid: int) -> bool:
+    """True if a process with this PID is currently running.
+
+    Platform-specific because the obvious cross-platform trick doesn't work:
+    `os.kill(pid, 0)` is the standard POSIX liveness probe (raises
+    `ProcessLookupError` without actually signaling anything), but on
+    Windows `os.kill` with a non-special value calls `TerminateProcess` --
+    using it here would actually try to KILL the process instead of just
+    checking it. Windows needs `OpenProcess`/`GetExitCodeProcess` instead,
+    which only queries state.
+    """
+    import sys
+
+    if sys.platform == "win32":
+        import ctypes
+        import ctypes.wintypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
+        handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return False
+        try:
+            exit_code = ctypes.wintypes.DWORD()
+            if not ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return False
+            return exit_code.value == STILL_ACTIVE
+        finally:
+            ctypes.windll.kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists, just owned by someone else
+    else:
+        return True
+
+
+_PPID_CHECK_INTERVAL_SEC = 5.0
+
+
+def _ppid_watchdog_tick(parent_pid: int) -> bool:
+    """One watchdog check: True if `parent_pid` is gone (caller should exit).
+
+    Pulled out of the loop below as its own pure function so it's directly
+    testable without spawning a real background thread -- that thread would
+    otherwise keep running (and eventually calling the real os._exit) well
+    past a test's own teardown.
+    """
+    return not _process_alive(parent_pid)
+
+
+def _start_ppid_watchdog(parent_pid: int, interval: float = _PPID_CHECK_INTERVAL_SEC) -> None:
+    """Exit this process if `parent_pid` stops running.
+
+    An MCP server talks to its parent over stdio, and a clean shutdown
+    should close stdin and let the server's read loop exit on its own --
+    but that signal isn't always delivered when the parent process tree is
+    killed abruptly rather than shut down cleanly (Windows especially).
+    That's the actual root cause behind the "orphaned MCP server holding
+    the DB lock" incidents diagnosed by hand, repeatedly, during manual
+    testing this project has gone through -- each one required noticing the
+    symptom, enumerating processes, and killing the right PID manually.
+    Watching the parent's own liveness directly catches it instead of
+    depending on stdio EOF, which is the thing observed to be unreliable.
+
+    Runs on its own daemon thread so it can't block serving or process exit.
+    """
+
+    def _loop() -> None:
+        while True:
+            time.sleep(interval)
+            if _ppid_watchdog_tick(parent_pid):
+                _breadcrumb(f"parent process {parent_pid} no longer running -- exiting")
+                os._exit(0)
+
+    threading.Thread(target=_loop, daemon=True, name="codegraph-ppid-watchdog").start()
+
+
 async def _serve() -> None:
     from mcp.server.stdio import stdio_server
 
@@ -1523,6 +1603,7 @@ def main() -> None:
     if args.db is not None:
         _db_path = args.db
     _breadcrumb(f"starting (db: {get_db_path()})")
+    _start_ppid_watchdog(os.getppid())
 
     # Staleness check: warn to stderr if source files changed since last index.
     # stdout is reserved for MCP framing; all diagnostics must go to stderr.

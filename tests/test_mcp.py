@@ -845,6 +845,54 @@ def test_main_emits_starting_and_serving_breadcrumbs(
     assert "warmup" in captured.err
 
 
+def test_process_alive_true_for_current_process() -> None:
+    import os
+
+    assert mcp_server._process_alive(os.getpid())
+
+
+def test_process_alive_false_for_an_exited_process() -> None:
+    """Deterministic, not a guessed-PID heuristic: spawn a trivial child,
+    wait for it to fully exit, then confirm the liveness check correctly
+    reports it as dead -- this is the exact check the PPID watchdog relies
+    on to detect a killed parent, so it must be correct in both directions."""
+    import subprocess
+    import sys
+
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait(timeout=5.0)
+    assert not mcp_server._process_alive(proc.pid)
+
+
+def test_ppid_watchdog_tick_true_when_parent_gone(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression test for the root cause behind repeatedly-diagnosed
+    "orphaned MCP server" incidents: the watchdog's per-check logic must
+    signal exit once the parent is gone. Tests the pure tick function
+    directly rather than the thread-spawning wrapper -- a real background
+    thread would keep looping (and eventually call the real os._exit) well
+    past this test's own teardown, which would kill the whole test run."""
+    monkeypatch.setattr(mcp_server, "_process_alive", lambda pid: False)
+    assert mcp_server._ppid_watchdog_tick(12345) is True
+
+
+def test_ppid_watchdog_tick_false_while_parent_alive(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(mcp_server, "_process_alive", lambda pid: True)
+    assert mcp_server._ppid_watchdog_tick(12345) is False
+
+
+def test_start_ppid_watchdog_spawns_a_named_daemon_thread() -> None:
+    """Shallow wiring check: confirms the thread actually gets created,
+    named, and marked daemon (so it can't block process exit) -- without
+    waiting through a real sleep-interval cycle."""
+    import os
+    import threading
+
+    mcp_server._start_ppid_watchdog(parent_pid=os.getpid(), interval=999.0)
+    thread = next((t for t in threading.enumerate() if t.name == "codegraph-ppid-watchdog"), None)
+    assert thread is not None
+    assert thread.daemon is True
+
+
 def test_warm_embedding_model_with_timeout_waits_for_a_fast_warmup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
