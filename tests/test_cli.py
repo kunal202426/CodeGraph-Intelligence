@@ -25,6 +25,45 @@ def _make_pyrepo(root: Path, files: dict[str, str]) -> None:
         p.write_text(content, encoding="utf-8")
 
 
+# ---------- terminal output encoding ----------
+
+
+@pytest.mark.parametrize("encoding", ["cp1252", "cp437", "ascii", None])
+def test_glyphs_fall_back_to_ascii_on_a_narrow_console(encoding: str | None) -> None:
+    """Regression: a bare check mark in the index summary crashed a real
+    `codegraph index` on a cp1252 console with UnicodeEncodeError, while the
+    whole test suite still passed -- CliRunner captures as UTF-8, so no test
+    ever saw it. On any encoding that can't take the fancy set, every glyph
+    must degrade to something that actually encodes there.
+    """
+    from codegraph.cli import _pick_glyphs
+
+    fancy, *glyphs = _pick_glyphs(encoding)
+    assert fancy is False
+    for glyph in glyphs:
+        assert glyph.isascii(), f"{glyph!r} is not ASCII"
+        glyph.encode(encoding or "ascii")  # raises on regression
+
+
+def test_glyphs_use_the_fancy_set_on_utf8() -> None:
+    """A capable terminal should still get the nicer glyphs."""
+    from codegraph.cli import _pick_glyphs
+
+    fancy, ok, _warn, rule = _pick_glyphs("utf-8")
+    assert fancy is True
+    assert ok == "✔"
+    assert rule == "─"
+
+
+def test_unknown_encoding_name_degrades_instead_of_raising() -> None:
+    """An unrecognized encoding must not blow up at import time."""
+    from codegraph.cli import _pick_glyphs
+
+    fancy, ok, _warn, _rule = _pick_glyphs("not-a-real-codec")
+    assert fancy is False
+    assert ok.isascii()
+
+
 # ---------- index ----------
 
 

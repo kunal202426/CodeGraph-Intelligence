@@ -12,7 +12,14 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
-from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TaskProgressColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
 from rich.table import Table
 from rich.tree import Tree
 
@@ -63,6 +70,61 @@ app = typer.Typer(
 console = Console()
 
 DEFAULT_DB = Path(".codegraph/graph.duckdb")
+
+# Every non-ASCII character the CLI prints unguarded. If the output encoding
+# can't take all of these, we drop to the ASCII set wholesale rather than
+# printing a half-broken mix.
+_FANCY_SAMPLE = "✔╦─"
+
+
+def _pick_glyphs(encoding: str | None) -> tuple[bool, str, str, str]:
+    """Choose (fancy, ok, warn, rule) glyphs for a given output *encoding*.
+
+    A legacy Windows console runs cp1252, which cannot encode box-drawing or
+    check-mark characters -- printing one raises UnicodeEncodeError and takes
+    the whole command down mid-run. Rich handles this for its own renderables
+    (Tree, Panel, Progress), but raw strings handed to `console.print` are
+    ours to guard. Found the hard way: a bare check mark in the index summary
+    crashed a real `codegraph index` on a cp1252 console while the whole test
+    suite still passed, because the test runner captures as UTF-8.
+
+    Pure and encoding-explicit so the fallback is testable without having to
+    reload the module against a fake stdout.
+    """
+    try:
+        _FANCY_SAMPLE.encode(encoding or "ascii")
+    except (UnicodeEncodeError, LookupError):
+        return (False, "+", "!", "-")
+    return (True, "✔", "!", "─")
+
+
+# Resolved once at import: the richer glyphs when the terminal can render
+# them, plain ASCII everywhere else. Same information either way.
+_FANCY, OK_GLYPH, WARN_GLYPH, RULE_CHAR = _pick_glyphs(getattr(sys.stdout, "encoding", None))
+
+# Box-drawing wordmark shown once on `init` (the first-run moment). Kept to
+# three short lines so it reads as a product header, not an ASCII-art banner
+# that eats half the terminal.
+_LOGO = (
+    "╦╔═╔═╗╦═╗╔╦╗╔═╗═╗ ╦",
+    "╠╩╗║ ║╠╦╝ ║ ║╣ ╔╩╦╝",
+    "╩ ╩╚═╝╩╚═ ╩ ╚═╝╩ ╚═",
+)
+
+
+def _print_logo(subtitle: str = "") -> None:
+    """Print the Kortex wordmark. Used at the top of first-run commands."""
+    console.print()
+    if _FANCY:
+        for line in _LOGO:
+            console.print(f"  [bold cyan]{line}[/bold cyan]")
+    else:
+        console.print("  [bold cyan]K O R T E X[/bold cyan]")
+    console.print("  [dim]local-first code intelligence[/dim]")
+    if subtitle:
+        console.print(f"  [dim]{subtitle}[/dim]")
+    console.print()
+
 
 # Map Language → parser instance. Parsers are stateless; one instance each.
 # TypeScriptParser handles TS / TSX / JS / JSX via per-file grammar selection.
@@ -264,13 +326,16 @@ def index(
             pending_edges.clear()
 
     progress_cols = (
+        SpinnerColumn(style="cyan"),
         TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("{task.completed}/{task.total}"),
+        BarColumn(complete_style="cyan", finished_style="green"),
+        TaskProgressColumn(),
+        TextColumn("[dim]{task.completed}/{task.total}[/dim]"),
         TimeElapsedColumn(),
+        TextColumn("[dim]{task.fields[current]}[/dim]"),
     )
     with Progress(*progress_cols, console=console, transient=True) as progress:
-        task = progress.add_task("Indexing", total=len(files))
+        task = progress.add_task("Parsing", total=len(files), current="")
         for path, lang in files:
             parser = _LANGUAGE_PARSERS.get(lang)
             if parser is None:
@@ -287,6 +352,9 @@ def index(
                 continue
 
             rel_path = path.relative_to(repo).as_posix()
+            # Tail of the path, so a deeply nested file doesn't push the whole
+            # progress line past the terminal width.
+            progress.update(task, current=rel_path[-38:])
             current_hash = hash_source(source)
             prev_hash = store.get_file_hash(rel_path)
 
@@ -338,13 +406,19 @@ def index(
         _flush()
 
     # Cross-file symbol resolution: rewrites `py:?:...` edges in place.
-    stats = resolve_symbols(store, repo)
+    # Both this and embedding below used to run with no output at all -- on a
+    # real repo that's tens of seconds of a seemingly-hung terminal right after
+    # the progress bar disappears. A live spinner costs nothing and turns dead
+    # air into visible progress.
+    with console.status("[cyan]Resolving cross-file symbols...", spinner="dots"):
+        stats = resolve_symbols(store, repo)
 
     # Semantic embeddings (T3.3/T3.5): (re-)embed entities whose input changed.
     embedded = 0
     embed_error: str | None = None
     if not no_embed:
-        embedded, embed_error = _embed_changed(store)
+        with console.status("[cyan]Computing semantic embeddings...", spinner="dots"):
+            embedded, embed_error = _embed_changed(store)
 
     elapsed = time.monotonic() - start
     n_entities = store.count_entities()
@@ -359,19 +433,19 @@ def index(
         else f"Parsed [bold]{parsed_files}[/bold] files"
     )
     console.print(
-        f"[green]Indexed[/green] [bold]{n_entities}[/bold] entities, "
+        f"[green]{OK_GLYPH}[/green] [green]Indexed[/green] [bold]{n_entities}[/bold] entities, "
         f"[bold]{n_edges}[/bold] edges. {re_parse_clause} in [bold]{elapsed:.1f}s[/bold]."
     )
     if stats.inspected:
         console.print(
-            f"[dim]Resolved {stats.resolved}/{stats.inspected} imports; "
+            f"  [dim]Resolved {stats.resolved}/{stats.inspected} imports; "
             f"{stats.external} external, {stats.wildcard} wildcard.[/dim]"
         )
     if not no_embed and not embed_error:
         if embedded:
-            console.print(f"[dim]Embedded {embedded} entities for semantic search.[/dim]")
+            console.print(f"  [dim]Embedded {embedded} entities for semantic search.[/dim]")
         else:
-            console.print("[dim]Embeddings up to date (0 re-embedded).[/dim]")
+            console.print("  [dim]Embeddings up to date (0 re-embedded).[/dim]")
     if embed_error:
         console.print(
             f"[yellow]Embeddings skipped ({embed_error}). "
@@ -386,18 +460,18 @@ def index(
                 "[bold]codegraph index <repo> --no-embed[/bold] (literal search only).[/dim]"
             )
     if skipped_lang:
-        console.print(f"[dim]Skipped {skipped_lang} files with unsupported languages.[/dim]")
+        console.print(f"  [dim]Skipped {skipped_lang} files with unsupported languages.[/dim]")
     if skipped_generated:
         console.print(
-            f"[dim]Skipped {skipped_generated} generated/minified files "
+            f"  [dim]Skipped {skipped_generated} generated/minified files "
             "(a source line over 10k chars).[/dim]"
         )
     if parse_errors:
-        console.print(f"[yellow]{parse_errors} files had errors (see above).[/yellow]")
+        console.print(f"  [yellow]{parse_errors} files had errors (see above).[/yellow]")
     if gone_paths:
         noun = "file" if len(gone_paths) == 1 else "files"
         console.print(
-            f"[dim]Removed {len(gone_paths)} {noun} no longer present from the index.[/dim]"
+            f"  [dim]Removed {len(gone_paths)} {noun} no longer present from the index.[/dim]"
         )
     if parsed_files == 0 and unchanged_files == 0 and skipped_lang == 0:
         console.print("[yellow]No indexable files found.[/yellow]")
@@ -1673,17 +1747,23 @@ def init(
     db.parent.mkdir(parents=True, exist_ok=True)
     _ensure_codegraph_gitignored(repo)
 
-    console.print(f"[bold]Step 1/3[/bold] Indexing [bold]{repo}[/bold]...")
+    _print_logo(f"setting up {repo.name}")
+
+    console.print(f"[bold cyan]Step 1/3[/bold cyan]  Indexing [bold]{repo}[/bold]")
     index(repo=repo, db=db, no_embed=no_embed)
 
-    console.print(f"\n[bold]Step 2/3[/bold] Wiring up [bold]{t.display_name}[/bold]...")
+    console.print(f"\n[bold cyan]Step 2/3[/bold cyan]  Wiring up [bold]{t.display_name}[/bold]")
     t.install(None, global_=(location == "global"))  # None = discovery, works everywhere
     config_path = t.global_config_path() if location == "global" else t.local_config_path()
-    console.print(f"[green]MCP server registered[/green] [dim]({config_path})[/dim]")
+    console.print(
+        f"[green]{OK_GLYPH}[/green] [green]MCP server registered[/green] [dim]({config_path})[/dim]"
+    )
 
-    console.print("\n[bold]Step 3/3[/bold] Writing agent guide...")
+    console.print("\n[bold cyan]Step 3/3[/bold cyan]  Writing agent guide")
     guide_path = write_agent_guide(repo)
-    console.print(f"[green]Guide written[/green] [dim]({guide_path})[/dim]")
+    console.print(
+        f"[green]{OK_GLYPH}[/green] [green]Guide written[/green] [dim]({guide_path})[/dim]"
+    )
 
     if install_hooks:
         from codegraph.sync.git_hooks import install_git_hooks
@@ -1691,10 +1771,13 @@ def init(
         hook_files = install_git_hooks(repo)
         if hook_files:
             console.print(
-                f"[green]Git hooks installed[/green] [dim]({len(hook_files)} hooks)[/dim]"
+                f"[green]{OK_GLYPH}[/green] [green]Git hooks installed[/green] "
+                f"[dim]({len(hook_files)} hooks)[/dim]"
             )
         else:
-            console.print("[yellow]Skipped git hooks: not a git repo.[/yellow]")
+            console.print(
+                f"[yellow]{WARN_GLYPH}[/yellow] [yellow]Skipped git hooks: not a git repo.[/yellow]"
+            )
 
     # Self-verify: confirm the index really resolved and is non-empty, so the
     # user gets a clear pass/fail instead of trusting three silent steps.
@@ -1710,8 +1793,9 @@ def init(
             "Re-run [bold]codegraph index .[/bold] before using the agent."
         )
 
+    console.print("\n[dim]" + RULE_CHAR * 58 + "[/dim]")
     console.print(
-        f"\n[green bold]Done.[/green bold] {t.display_name} can now use CodeGraph on this repo.\n"
+        f"[green bold]Done.[/green bold] {t.display_name} can now use CodeGraph on this repo.\n"
         "Next steps:\n"
         f"  - [bold]Restart {t.display_name}[/bold] -- the MCP server only loads on startup "
         "(this is the #1 step people miss).\n"
