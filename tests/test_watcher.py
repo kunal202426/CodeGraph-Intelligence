@@ -360,7 +360,7 @@ def test_debounce_handler_fires_callback_for_python_file(tmp_path: Path) -> None
     src.write_text("def run():\n    pass\n", encoding="utf-8")
 
     handler.dispatch(_MockEvent(src_path=src.resolve(), event_type="modified"))
-    time.sleep(0.6)  # 0 s debounce + ~200 ms for parse+DB
+    _wait_for_fired(fired, 0)
 
     assert len(fired) == 1
     assert fired[0].path == "app.py"
@@ -389,7 +389,7 @@ def test_debounce_handler_reports_db_lock_without_crashing(tmp_path: Path, monke
     monkeypatch.setattr(watcher_mod, "_LOCK_RETRY_BACKOFF_SEC", 0.0)
 
     handler.dispatch(_MockEvent(src_path=src.resolve(), event_type="modified"))
-    time.sleep(0.4)
+    _wait_for_fired(fired, 0)
 
     assert len(fired) == 1
     assert fired[0].error is not None
@@ -407,7 +407,7 @@ def test_debounce_handler_fires_delete_callback(tmp_path: Path) -> None:
     index_one_file(repo, src, db, no_embed=True, _parsers=_py_parsers())
 
     handler.dispatch(_MockEvent(src_path=src.resolve(), event_type="deleted"))
-    time.sleep(0.4)
+    _wait_for_fired(fired, 0)
 
     assert len(fired) == 1
     assert fired[0].action == "deleted"
@@ -425,9 +425,9 @@ def test_debounce_coalesces_rapid_events(tmp_path: Path) -> None:
     evt = _MockEvent(src_path=src.resolve(), event_type="modified")
     for _ in range(5):
         handler.dispatch(evt)
-        time.sleep(0.01)
+        time.sleep(0.01)  # deliberate pacing, well inside the debounce window
 
-    time.sleep(0.5)  # let the single debounced timer fire and finish
+    _wait_for_fired(fired, 0)
     assert len(fired) == 1
 
 
