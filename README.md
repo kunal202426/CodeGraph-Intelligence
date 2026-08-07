@@ -17,9 +17,45 @@
 
 <br>
 
-[**Quickstart**](#-quickstart) · [**How the saving works**](#-how-the-token-saving-actually-works) · [**MCP tools**](#-mcp-tools) · [**Architecture**](#-architecture) · [**Benchmarks**](#-benchmarks) · [**FAQ**](#faq)
+[**What it's for**](#-what-this-is-for) · [**Quickstart**](#-quickstart) · [**How the saving works**](#-how-the-token-saving-actually-works) · [**MCP tools**](#-mcp-tools) · [**Architecture**](#-architecture) · [**Benchmarks**](#-benchmarks) · [**FAQ**](#faq)
 
 </div>
+
+<br>
+
+## 🎯 What this is for
+
+**The problem:** your AI coding agent has no memory of your codebase. Every question starts
+from zero — it greps, opens ten files, reads them end to end, and *still* can't see that the
+function it just changed is called from three other places. Next message, it does the whole
+thing again. On a large repo that's slow, expensive, and it fills the context window until
+the agent forgets what you asked.
+
+**What Kortex does:** it reads your repo **once** and builds a real graph of it — every
+function, class, and module, plus who calls what and who imports what — into a single local
+file. Then it hands your agent a tool that answers *"where is X and what touches it?"* in one
+lookup, instead of a pile of file reads.
+
+<div align="center">
+
+| Without Kortex | With Kortex |
+|---|---|
+| Agent greps, opens 10 files, reads all of them | Agent makes **1 call**, gets the 3 things that matter |
+| Cross-file relationships are guessed from imports | **Real call/import edges**, resolved across files *and* languages |
+| Every question re-reads from scratch | The index **persists** — built once, reused every session |
+| Context window fills with source it didn't need | Context stays small enough to keep the actual conversation |
+
+</div>
+
+**Who it's for:** anyone using Claude Code, Cursor, Codex, Gemini, or another MCP agent on a
+codebase big enough that "just read the files" has started to hurt.
+
+**The honest version:** on a small repo this is roughly break-even — the agent could have just
+read the files. It pays off as the codebase grows and the questions get more cross-cutting.
+Measured on a real ~1300-entity, 4-service repo: **14% cheaper overall**, winning the hard
+cross-file questions by a growing margin. Full numbers, including a round where it came out
+*worse*, are in [the cost findings](docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md) — nothing
+swept under the rug.
 
 <br>
 
