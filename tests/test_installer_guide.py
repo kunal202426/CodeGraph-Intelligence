@@ -51,12 +51,29 @@ def test_guide_mentions_batched_get_context_queries(tmp_path: Path) -> None:
     assert "list (max 5)" in text
 
 
+def test_guide_suggests_checking_docs_before_the_graph(tmp_path: Path) -> None:
+    """Round-6 A/B finding on JobHuntPro: codegraph lost the one question a
+    well-written README already answered. The guide must steer a broad
+    architecture question toward existing docs first."""
+    text = write_agent_guide(tmp_path).read_text(encoding="utf-8")
+    assert "README/docs" in text
+
+
+def test_guide_tells_agent_not_to_dispatch_explore_subagent(tmp_path: Path) -> None:
+    """Round-6 finding: a without-codegraph session dispatched Claude Code's
+    own Explore subagent for hard questions. get_context must be positioned
+    as a full replacement for that, not just for grep, so a with-codegraph
+    session never pays for both."""
+    text = write_agent_guide(tmp_path).read_text(encoding="utf-8")
+    assert "explore-subagent" in text
+
+
 def test_guide_is_strong_mandate_with_savings_instruction(tmp_path: Path) -> None:
     """The guide must (a) require CodeGraph before reading files and (b) tell the
     agent to report the token savings — the two levers behind 'auto-use'."""
     text = write_agent_guide(tmp_path).read_text(encoding="utf-8")
     assert "REQUIRED" in text
-    assert "before opening any source file, call" in text
+    assert "before a file/grep/" in text
     # Savings-reporting instruction references the get_context response fields.
     assert "savings_ratio" in text
     assert "tokens_if_read" in text

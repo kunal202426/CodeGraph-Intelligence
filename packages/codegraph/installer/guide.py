@@ -33,13 +33,13 @@ This repo is indexed by CodeGraph -- tools return far fewer tokens than reading 
 surface cross-file edges files can't show. Use them by default.
 
 **Rules (every task):**
-1. First message? Call `project_brief()` once. Then, before opening any source file, call
-   `get_context("<concept>")` -- skip `index_status`; `get_context` reports staleness via
-   `warnings`, so run `reindex` only if it appears.
-2. Use `detail="full"` on the first call when you'll need real code -- understanding or
-   editing. A second round-trip costs more than the larger response. Summary mode is for
-   browsing candidates first.
-3. Editing? Locate it, then Read + Edit yourself -- Edit needs a fresh Read either way.
+1. First message? Skim README/docs for a broad question -- often already answers it. Then
+   `project_brief()` once. For anything deeper, `get_context(...)` before a file/grep/
+   explore-subagent -- skip `index_status`; `get_context` reports staleness via `warnings`,
+   run `reindex` only if it appears.
+2. Use `detail="full"` when you'll need real code -- a second round-trip costs more than the
+   larger response. Summary mode is for browsing candidates.
+3. Editing? Locate it, then Read + Edit -- Edit needs a fresh Read either way.
 4. After `get_context`, report: `CodeGraph: ~<tokens_estimated> vs ~<tokens_if_read> tokens
    (<savings_ratio>x less)` -- response size, not $ cost.
 
@@ -47,7 +47,7 @@ surface cross-file edges files can't show. Use them by default.
 - `project_brief()` -- ONCE, first: layers, hot paths, entry points.
 - `get_context(query)` -- signatures + callers/callees + staleness; `detail="full"` = source.
   2+ known names? Pass a list (max 5), not separately.
-- `get_entity_context(id)` -- full source + neighbours, 1 entity.
+- `get_entity_context(id)` -- full source + neighbours.
 - `impact_analysis(id)` -- what breaks.
 - `trace_path(from_id, to_id)` -- shortest call chain A to B.
 - `search_code(query)` -- id lookup.
