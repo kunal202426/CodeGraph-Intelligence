@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 236" width="880" height="236" role="img" aria-label="Reading tokens for one question: 17,000 without Kortex versus 1,350 with Kortex, about 12 times less reading">
+  <title>Reading tokens for one question — 17,000 without Kortex vs 1,350 with Kortex</title>
+  <defs>
+    <linearGradient id="cardbg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0d1424"/>
+      <stop offset="100%" stop-color="#0a1020"/>
+    </linearGradient>
+    <linearGradient id="heavy" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#7c2d12"/>
+      <stop offset="100%" stop-color="#f97316"/>
+    </linearGradient>
+    <linearGradient id="light" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#065f46"/>
+      <stop offset="100%" stop-color="#34d399"/>
+    </linearGradient>
+  </defs>
+
+  <style>
+    .h    { font: 700 15px ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; fill: #e2e8f0; }
+    .lbl  { font: 600 13px ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; fill: #cbd5e1; }
+    .sub  { font: 500 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fill: #64748b; }
+    .val  { font: 700 14px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fill: #f8fafc; }
+    .foot { font: 600 13px ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; fill: #94a3b8; }
+    .win  { font: 800 15px ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; fill: #34d399; }
+    .badge { animation: breathe 2.8s ease-in-out infinite; }
+    @keyframes breathe { 0%,100% { opacity: .72; } 50% { opacity: 1; } }
+    .rise { opacity: 0; animation: rise .5s ease-out forwards; }
+    @keyframes rise { to { opacity: 1; } }
+  </style>
+
+  <rect width="880" height="236" rx="14" fill="url(#cardbg)"/>
+
+  <text class="h"   x="32" y="40">One real question — <tspan fill="#7dd3fc">“how does symbol resolution work?”</tspan></text>
+  <text class="sub" x="32" y="60">READING / CONTEXT TOKENS — THE PILE THE MODEL HAS TO INGEST BEFORE IT CAN ANSWER</text>
+
+  <!-- without -->
+  <text class="lbl" x="32" y="107">Reading the files in full</text>
+  <rect x="250" y="90" height="30" rx="6" fill="url(#heavy)" width="0">
+    <animate attributeName="width" from="0" to="560" dur="1.3s" begin="0.25s" fill="freeze"
+             calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/>
+  </rect>
+  <g class="rise" style="animation-delay:1.35s">
+    <text class="val" x="822" y="110" text-anchor="end">~17,000</text>
+  </g>
+
+  <!-- with -->
+  <text class="lbl" x="32" y="163">Kortex targeted context</text>
+  <rect x="250" y="146" height="30" rx="6" fill="url(#light)" width="0">
+    <animate attributeName="width" from="0" to="44" dur="1.3s" begin="0.45s" fill="freeze"
+             calcMode="spline" keySplines="0.22 1 0.36 1" keyTimes="0;1"/>
+  </rect>
+  <g class="rise" style="animation-delay:1.5s">
+    <text class="val" x="308" y="166">~1,350</text>
+    <g class="badge">
+      <rect x="380" y="149" width="96" height="24" rx="12" fill="#34d399" fill-opacity="0.14" stroke="#34d399" stroke-opacity="0.5"/>
+      <text class="win" x="428" y="166" text-anchor="middle">~12× less</text>
+    </g>
+  </g>
+
+  <line x1="32" y1="196" x2="848" y2="196" stroke="#1e293b" stroke-width="1"/>
+  <text class="foot" x="32" y="219">The model still <tspan fill="#e2e8f0">writes</tspan> the same ~1–1.5k-token answer either way — Kortex only shrinks the reading pile.</text>
+</svg>

@@ -1,24 +1,556 @@
-# Kortex — a local-first CodeGraph tool
+<div align="center">
 
-**A local-first AI memory layer for your codebase.** Index a repo (22 languages) into a
-queryable graph, search it by meaning, ask grounded questions over a local + Anthropic
-GraphRAG pipeline, explore it in a browser, and expose it all to your coding agent over
-MCP — so the agent queries the graph instead of re-reading your files every message,
-cutting the reading-context size and round-trip count that come with that. Real $ session
-cost depends on more than response size (see the honest breakdown below); it scales with
-repo size and question type, not a flat multiplier.
+<img src="docs/assets/banner.svg" alt="Kortex — a local-first AI memory layer for your codebase" width="100%">
 
+<br>
+
+**Index a repo into a queryable graph, search it by meaning, and serve it to your coding agent over MCP —<br>so the agent queries the graph instead of re-reading your files on every message.**
+
+<br>
+
+![tests](https://img.shields.io/badge/tests-1240_passing-22c55e?style=flat-square&labelColor=0d1424)
+![languages](https://img.shields.io/badge/languages-22-38bdf8?style=flat-square&labelColor=0d1424)
+![mcp](https://img.shields.io/badge/MCP_tools-12-a5b4fc?style=flat-square&labelColor=0d1424)
+![python](https://img.shields.io/badge/python-3.11+-3776ab?style=flat-square&labelColor=0d1424)
+![offline](https://img.shields.io/badge/runs-offline-14b8a6?style=flat-square&labelColor=0d1424)
+![license](https://img.shields.io/badge/license-PolyForm_Noncommercial-f59e0b?style=flat-square&labelColor=0d1424)
+
+<br>
+
+[**Quickstart**](#-quickstart) · [**How the saving works**](#-how-the-token-saving-actually-works) · [**MCP tools**](#-mcp-tools) · [**Architecture**](#-architecture) · [**Benchmarks**](#-benchmarks) · [**FAQ**](#faq)
+
+</div>
+
+<br>
+
+> [!NOTE]
 > **Status: active development.** Core indexing, search, and MCP tools are stable.
-> 1233 tests passing. Every user-facing surface manually tested: 21/21 passed, 6 issues
-> fixed. [Manual test →](docs/MANUAL_TEST_REPORT.md) | [Bench notes →](docs/QUALITY_REPORT_2026-07-01.md).
-> MCP server works but still preview, not production-ready.
+> 1240 tests passing. Every user-facing surface manually tested: 21/21 passed, 6 issues fixed.
+> [Manual test →](docs/MANUAL_TEST_REPORT.md) · [Bench notes →](docs/QUALITY_REPORT_2026-07-01.md)
+> The MCP server works but is still preview, not production-ready.
 
-> Everything runs on your machine. The only network call is the Anthropic API for
-> `ask` / `summarize` (optional; all graph and search features work offline).
+> [!TIP]
+> **Everything runs on your machine.** The only network call is the Anthropic API for
+> `ask` / `summarize` — both optional. All graph and search features work fully offline.
 
 ---
 
-## Changelog
+## 📚 In plain words
+
+This codebase is like a **huge library full of books** (each file is a book).
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+### 🐢 Without Kortex
+
+Every time you ask the AI a question, it grabs **armfuls of whole books** and flips through
+all of them, every single time.
+
+Heavy, slow — and it *still* struggles to see how one book references another.
+
+</td>
+<td width="50%" valign="top">
+
+### ⚡ With Kortex
+
+A librarian has already read every book once and built a **card catalog** — who mentions
+whom, who calls what.
+
+Now the librarian hands the AI just **the 2–3 exact pages that matter**, plus a sticky note
+saying *"this page connects to that one."*
+
+</td>
+</tr>
+</table>
+
+So the AI reads a few index cards instead of hauling the whole library. That's the whole idea.
+
+---
+
+## 💡 How the token saving actually works
+
+*(Read this — it's the honest version.)*
+
+<div align="center">
+<img src="docs/assets/token-savings.svg" alt="One question: ~17,000 reading tokens without Kortex vs ~1,350 with Kortex — about 12x less" width="100%">
+</div>
+
+There are **two different kinds of tokens**, and Kortex only touches one of them:
+
+| Token type | What it is | Does Kortex reduce it? |
+|---|---|---|
+| **Reading tokens** (input/context) | How much code the AI has to *read* to understand your project | ✅ **Yes, a lot.** This is the whole point. |
+| **Writing tokens** (output) | How much the AI *writes back* as its answer | ❌ **No.** That depends on your question, not on Kortex. |
+
+**Why this matters for what you see:** the little token counter ticking in your chat is
+mostly the AI's *thinking + writing*. Kortex does **not** shrink that. The saving happens in
+the **reading pile** — the code that gets stuffed into the AI's context to answer you, which
+you don't directly see on that counter.
+
+**So is it worth it? Be honest with yourself:**
+
+| Your situation | Verdict |
+|---|---|
+| 🤏 Tiny repo, one quick question | **Meh.** The saving is small and the answer's writing cost dominates. You won't feel it. |
+| 🚀 Big codebase, long back-and-forth (10–20 questions) | **This is where it pays off.** Without Kortex the AI re-reads huge files again and again, cost piles up, and the context window fills until it forgets earlier parts. Kortex keeps every question at ~1–2k of reading. |
+
+> [!IMPORTANT]
+> **Note on the numbers.** The "Nx less" figures are Kortex's own estimate of
+> *reading/context* tokens (4-chars/token heuristic, baseline = reading the full files the
+> answer came from). They measure the reading pile, **not** your total turn, and **not**
+> your actual $ cost — that also depends on round-trip count (each tool call re-reads the
+> whole accumulated conversation from cache), which this estimate doesn't capture at all.
+>
+> A real controlled A/B ([full writeup →](docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md)),
+> measuring actual session `/usage` cost rather than estimated tokens, first caught this:
+> a mandatory extra tool call and a bloated response payload made Kortex cost **34% more**
+> real money than not using it at all on a 47-file repo, despite the "Nx less" number
+> looking good the whole time. Both were implementation bugs, since fixed — a re-measurement
+> after fixing them landed within ~3% either way (noise, not a real gap) on that same repo.
+>
+> Like the field's most mature comparable tool's own published numbers, $ cost savings are
+> genuinely **scale-dependent**: closer to break-even on a small/medium repo, a clear win once
+> a codebase (and the session count against it) gets large — and that's no longer just a claim
+> borrowed from someone else's benchmark. A follow-up A/B on a real ~1300-entity, 4-service
+> repo measured Kortex **14% cheaper overall**, losing only the question a well-written README
+> already answered and winning the harder cross-file ones by a growing margin — first-party
+> evidence the scale-dependence holds. Broader user testing is ongoing.
+
+---
+
+## 🚀 Quickstart
+
+<table>
+<tr><td>
+
+**1 · Clone Kortex** *(one time, anywhere)*
+
+```bash
+git clone https://github.com/kunal202426/CodeGraph-Intelligence.git
+cd CodeGraph-Intelligence
+```
+
+**2 · Install dependencies** *(one time, ~2 minutes)*
+
+```bash
+uv sync --extra dev
+```
+
+> First index also downloads the `all-MiniLM-L6-v2` embedding model (~80 MB), once. Kortex tells you when it starts.
+
+**3 · Set up a project** *(once per project)*
+
+```bash
+cd /path/to/your/project
+uv run codegraph init
+```
+
+**4 · Confirm it's wired** *(optional but reassuring)*
+
+```bash
+uv run codegraph doctor
+```
+
+**5 · Restart your agent** — the MCP server isn't loaded until it restarts. *(This is the #1 step people miss.)*
+
+**6 · Just ask normally** — *"explain how authentication works in this project"*
+
+</td></tr>
+</table>
+
+`init` does three things automatically:
+
+- Indexes your code into `.codegraph/graph.duckdb` (~30 s for a medium project)
+- Registers Kortex as an MCP tool in your agent (Claude Code / Cursor / etc.)
+- Writes a `CLAUDE.md` guide that **requires** your agent to call Kortex before reading
+  files, and to report the token savings back to you
+
+It finishes by self-verifying the index (`Verified: N entities`). `doctor` prints a
+`PASS`/`FAIL` line for the index, MCP config, agent guide, and freshness, with the exact fix
+command for anything that needs attention.
+
+Because of the guide, Claude calls `get_context` first (~500 tokens instead of reading your
+whole codebase) and tells you the savings, e.g. *"CodeGraph: ~480 vs ~6,200 tokens (13x
+less)"*. You don't need to remember any commands.
+
+<details>
+<summary><b>Prefer the pieces individually?</b></summary>
+
+<br>
+
+```bash
+# Index a repo (writes .codegraph/graph.duckdb + embeddings)
+uv run codegraph index /path/to/repo
+
+# Search, explore, ask
+uv run codegraph search "user authentication"
+uv run codegraph impact authenticate
+uv run codegraph ask "how does login work?"      # needs ANTHROPIC_API_KEY
+
+# Browser UI: D3 graph + search + streaming AI chat
+uv run codegraph serve
+
+# Keep the index fresh as you edit
+uv run codegraph watch .
+```
+
+Full command list via `uv run codegraph --help`: `init`, `doctor`, `index`, `search`, `deps`,
+`impact`, `cycles`, `smells`, `deadcode`, `owner`, `layers`, `ask`, `summarize`, `context`,
+`trace`, `status`, `watch`, `serve`, `install`, `uninstall`.
+
+`init --target cursor|codex|gemini|kiro|opencode|hermes|antigravity` wires a different agent.
+
+</details>
+
+---
+
+## 🔄 What actually happens when you ask a question
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor You
+    participant Agent as Claude Code
+    participant K as Kortex (MCP)
+    participant DB as DuckDB graph
+
+    You->>Agent: "how does auth work?"
+    Agent->>K: get_context("authentication")
+    K->>DB: hybrid search (literal + semantic)
+    DB-->>K: matched entities
+    K->>DB: expand callers / callees
+    DB-->>K: graph neighbourhood
+    K-->>Agent: ~500 tokens — signatures, docs, edges
+    Note over Agent,K: not 10 whole files
+    Agent-->>You: answer + "~13x less reading"
+```
+
+---
+
+## ✨ What it does
+
+| | Capability |
+|---|---|
+| 🕸️ | **Understands your code as a graph** — tree-sitter parses 22 languages into a unified entity/edge model (functions, classes, methods, modules + `imports`/`calls` edges), stored in a single DuckDB file with cross-file symbol resolution. |
+| 🔍 | **Search by meaning, not just text** — local `all-MiniLM-L6-v2` embeddings + DuckDB vector search, fused with literal search via Reciprocal Rank Fusion. |
+| 💬 | **Answers grounded questions** — GraphRAG retrieval (vector seeds + graph expansion) feeds `claude-sonnet-4-6` to answer "how does X work?" with `file:line` citations. |
+| 📊 | **Analyzes structure** — dependency trees, reverse-call impact, import-cycle detection (Tarjan SCC), code-smell heuristics, dead-code candidates, git-blame ownership, architectural layer analysis. |
+| 🎯 | **Resolves `obj.method()` to the exact class** — infers the receiver type from a local variable's constructor/annotation, a typed parameter, `self`/`this`, or a tracked `self.attr`, across all 8 OO-capable languages. Two unrelated classes sharing a method name no longer risk a wrong call edge; falls back to name-only resolution whenever the type isn't clear. |
+| 🧬 | **Follows inherited methods** — if `method` isn't on `obj`'s own class, walks base classes/interfaces (or Go's embedded-struct promotion), same-file preferred when ambiguous. |
+| 🌐 | **Resolves framework routing to real calls** — Flask, FastAPI, Express, Django, Spring, and Rails route handlers get real `calls` edges from their registration, so a handler invoked only through routing isn't false-positive dead code. A TS/JS `fetch`/`axios` call with a static URL resolves straight through to the backend handler — across files *and* languages, in one edge. |
+| 🔁 | **Stays fresh automatically** — `codegraph watch` debounces filesystem events and re-indexes only changed files in ~300 ms. An opt-in git-hook fallback keeps the index fresh across commits, pulls, and checkouts where filesystem watching isn't reliable. |
+| 🔌 | **Plugs into any MCP agent** — 12 MCP tools plus a one-command installer for 8 agents: Claude Code, Cursor, Codex, Gemini, Kiro, opencode, Hermes Agent, Antigravity. |
+
+<details>
+<summary><b>⚠️ What it cannot do</b> — being honest about the limits</summary>
+
+<br>
+
+- **Not a code reviewer**: it surfaces what is *relevant* to a question, not what is
+  *correct*. It does not catch bugs or security issues.
+- **It does not reduce the AI's *writing* tokens**, only the *reading/context* tokens (see
+  [How the token saving actually works](#-how-the-token-saving-actually-works)). On a single
+  small question the net difference can be marginal; the value compounds on large codebases
+  and long sessions.
+- **`codegraph ask` / `summarize` / `ask_codebase` are not free**: they call Anthropic's
+  API and require a separate API key. The CLI warns you clearly if the key is missing.
+- **No runtime understanding**: Kortex reads static structure (what calls what, what
+  imports what). It does not know what happens when the code actually runs.
+- **Inheritance walk has real edges but real limits**: `obj.method()` now resolves through a
+  base class/interface (Python, TS/JS, Java, PHP, Ruby, C++) or Go's embedded-struct method
+  promotion when `method` isn't declared on `obj`'s own type. Not covered: Ruby's `include`
+  mixins (only `< Base` superclass syntax is captured), Rust (no inheritance concept — traits
+  and default methods aren't walked), and multiple/diamond inheritance beyond a same-file or
+  unambiguous repo-wide base — an ambiguous chain falls back to name-only resolution rather
+  than guessing.
+- **Framework resolution covers routing, not every framework feature**: Flask, FastAPI,
+  Express, Django, Spring, and Rails route handlers resolve to real `calls` edges (same-file
+  and cross-file), and a static-URL `fetch`/`axios` call resolves cross-language to the
+  handler that serves it. Other framework-level relationships — Rails `has_many`
+  associations, dependency-injection wiring, ORM relationship traversal — are not resolved.
+  A route with a fully dynamic URL (built from string interpolation, not a literal) can't be
+  matched and still shows as external.
+- **Function-local imports**: if a function does `from X import Y` inside the function
+  body (rare but valid Python), that call may not trace through to the definition.
+- **One process per client, no shared daemon**: each connected agent window spawns its own
+  MCP server process. The local DuckDB index is single-writer, so running `codegraph watch`
+  and a heavy re-index simultaneously from two terminals may conflict. A shared multi-client
+  daemon was scoped and deliberately not built — see [STATUS.md](STATUS.md).
+- **Web UI is local-only**: `codegraph serve` opens a browser to `localhost`. It is not
+  hosted, shared, or deployed anywhere.
+- **22 languages**: Python, TypeScript, JavaScript, Go, Rust, Java, Ruby, PHP, C, C++,
+  Kotlin, C#, Scala, Bash, Elixir, R, Julia, Haskell, OCaml, HTML, CSS, SQL. Other
+  languages are silently skipped during indexing.
+
+</details>
+
+---
+
+## 🔑 Do I need an API key?
+
+**Short answer: No, for everything that matters.**
+
+| Product | What it is | Free? |
+|---|---|---|
+| **Claude.ai subscription** (Pro/Team) | The claude.ai web/app interface | You already have it |
+| **Anthropic API key** | Direct API access, billed per-token, from [console.anthropic.com](https://console.anthropic.com) | Separate, first ~$5 free |
+
+These are **two different products**. Having a Claude subscription does not give you an API
+key, and you do not need one to use Kortex's core features.
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+### ✅ Works free (no API key)
+
+| Feature | Command / Tool |
+|---|---|
+| Index your codebase | `codegraph index`, `init` |
+| Search by meaning + text | `codegraph search`, `search_code` |
+| Understand dependencies | `codegraph deps`, `impact` |
+| Cycles, smells, dead code | `cycles`, `smells`, `deadcode` |
+| 11 of the 12 MCP tools | everything except `ask_codebase` |
+| Auto-refresh as you code | `codegraph watch` |
+| Browser UI with D3 graph | `codegraph serve` |
+
+**The entire token-savings value proposition is free.**
+
+</td>
+<td width="50%" valign="top">
+
+### 🔐 Needs an Anthropic API key
+
+| Feature | Command / Tool |
+|---|---|
+| Natural-language Q&A | `codegraph ask "how does X work?"` |
+| Architecture summary | `codegraph summarize` |
+| GraphRAG Q&A in-agent | `ask_codebase` MCP tool |
+
+Set `ANTHROPIC_API_KEY=<your key>` in your environment. You get ~$5 in free credits to start.
+
+Without the key, `ask_codebase` is **hidden from the tool list entirely** rather than
+advertised-but-broken — so it costs you no schema tokens.
+
+</td>
+</tr>
+</table>
+
+---
+
+## 🧰 MCP tools
+
+Kortex exposes **12 tools** over the [MCP](https://modelcontextprotocol.io) stdio protocol
+(11 when no API key is set). Every description is written to tell the agent *when to prefer
+it over reading files*.
+
+| Tool | What it does |
+|---|---|
+| 🏁 `project_brief` | **Call once, first.** Cheap session-start orientation: layers, hot-path entities by call fan-in, HTTP entry points. |
+| ⭐ `get_context` | **Start here for everything else.** Hybrid search + signatures + callers/callees, token-lean by default (`detail="full"` for bodies). Accepts a **list of up to 5 queries** in one call. Replaces 3–4 round-trips at ~10x fewer tokens. |
+| 🔎 `search_code` | Hybrid literal + semantic search → entities with `file:line` |
+| 📄 `get_entity_context` | Full source + neighbours (`depends_on`, `called_by`) for an `entity_id` |
+| 💥 `impact_analysis` | Reverse-call blast radius — what breaks if an entity changes |
+| 🧭 `trace_path` | Shortest call chain between two `entity_id`s (BFS), with readable labels |
+| 📋 `list_files` | All indexed files with language, LOC, entity count; filterable by language |
+| 📊 `index_status` | File / entity / edge / embedding / summary counts + staleness indicator |
+| 🔄 `reindex` | Refresh only files changed since the last index, no terminal needed |
+| 💬 `ask_codebase` | Natural-language question answered via GraphRAG with citations *(needs API key)* |
+| 📝 `get_unsummarized_entities` | Hand the agent a batch of entities that still lack a summary |
+| 💾 `store_summaries` | Write agent-authored summaries back + re-embed those entities *(no API key)* |
+
+`CODEGRAPH_DB` overrides the discovered/default DB path.
+
+<details>
+<summary><b>🆓 Free, agent-driven summaries (no API key)</b></summary>
+
+<br>
+
+`get_unsummarized_entities` + `store_summaries` let **Claude Code itself** write the
+per-entity "meaning" that powers semantic search, using your existing subscription instead of
+paid API tokens. Run the bundled `/codegraph-summarize` command and the agent loops through
+unsummarized entities, writes a one-line summary for each, stores them, and re-embeds just
+those entities so search improves immediately.
+
+The summary lives in the embed input, so a concept word that never appears in the code (e.g.
+"rate limiting") still finds the right entity. Entities without a summary are byte-identical
+to before; the feature adds **zero** overhead until you use it.
+
+To run the MCP server manually (e.g. for a custom agent config):
+
+```bash
+# Discovers the nearest .codegraph/graph.duckdb from the working directory
+python -m codegraph.server.mcp_server
+```
+
+</details>
+
+---
+
+## 🏗️ Architecture
+
+```mermaid
+flowchart LR
+    repo[Repo files] --> walker[Walker<br/>.gitignore + lang detect]
+    walker --> parsers[tree-sitter parsers<br/>22 languages]
+    parsers --> uir[UIR entities + edges]
+    uir --> store[(DuckDB<br/>entities · edges · embeddings)]
+    parsers --> resolver[Symbol resolver] --> store
+    embed[sentence-transformers<br/>all-MiniLM-L6-v2] --> store
+
+    store --> queries[Graph queries<br/>search · deps · impact · cycles · smells]
+    store --> rag[GraphRAG<br/>vector + graph retrieval]
+    rag --> llm[Anthropic<br/>claude-sonnet-4-6]
+
+    queries --> cli[Typer CLI]
+    rag --> cli
+    queries --> api[FastAPI]
+    rag --> api
+    api --> web[React + D3 web UI]
+    queries --> mcp[MCP server]
+    rag --> mcp
+    mcp --> agent[Claude Code / MCP agent]
+```
+
+<details>
+<summary><b>🧱 Stack</b></summary>
+
+<br>
+
+| Layer | Choice |
+|---|---|
+| Language / tooling | Python 3.11, [uv](https://github.com/astral-sh/uv), [ruff](https://docs.astral.sh/ruff/), pytest |
+| Parsing | [tree-sitter](https://tree-sitter.github.io/): 22 languages — Python, TS/JS, Go, Rust, Java, Ruby, PHP, C, C++, Kotlin, C#, Scala, Bash, Elixir, R, Julia, Haskell, OCaml, HTML, CSS, SQL |
+| Storage | [DuckDB](https://duckdb.org/): entities, edges, `FLOAT[384]` vectors, one file |
+| Embeddings | [sentence-transformers](https://www.sbert.net/) `all-MiniLM-L6-v2` (local, 384-d) |
+| LLM | [Anthropic](https://docs.anthropic.com/) `claude-sonnet-4-6` (prompt-cached) |
+| Freshness | [watchdog](https://github.com/gorakhargosh/watchdog): debounced file watcher |
+| CLI | [Typer](https://typer.tiangolo.com/) + [Rich](https://rich.readthedocs.io/) |
+| Web | [FastAPI](https://fastapi.tiangolo.com/) + React 19 + Vite + [D3](https://d3js.org/) |
+| Agent | [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) |
+
+</details>
+
+---
+
+## 🔬 Example queries
+
+**Semantic search** finds code by intent, even when the words don't match:
+
+```text
+$ codegraph search "user authentication"
+Type      Name          Location              Via              Doc
+function  authenticate  auth/login.py:9       literal+semantic Validate credentials...
+```
+
+**Impact analysis** shows the reverse-call blast radius:
+
+```text
+$ codegraph impact authenticate
+authenticate (function, auth/login.py:9)
++-- called by login_handler (method, api/users.py:26)
++-- called by submit (method, auth/login.py:38)
+`-- called by boot (function, main.py:15)
+Blast radius: 3 entities across 3 hop(s).
+```
+
+**Grounded Q&A** cites the actual entities it used:
+
+```text
+$ codegraph ask "how does login work?"
+Login is handled by [py:auth/login.py:authenticate], which validates credentials
+and is invoked by the API route [py:api/users.py:login_handler]...
+```
+
+---
+
+## 📈 Benchmarks
+
+Indexing [`tiangolo/fastapi`](https://github.com/tiangolo/fastapi) (1,122 files) on a laptop —
+**6,065 entities, 14,601 edges**:
+
+| Metric | Result |
+|---|---|
+| ❄️ Cold index (parse + resolve, graph only) | **~67 s** |
+| 🔥 Warm re-index (no changes, hash-skip) | **~1.9 s** |
+| ⚡ Literal search query | **<1 ms p50** / ~16 ms p95 (in-process) |
+| 🧮 Embedding throughput | **~690 entities/s** (`all-MiniLM-L6-v2`, CPU) |
+| 💾 Graph DB size on disk | **~34 MB** |
+
+`search get_swagger_ui_html` → `fastapi/openapi/docs.py:40`. Warm re-index is ~35x faster
+than cold thanks to per-file SHA-256 hash-skipping; embeddings re-compute only for entities
+whose input changed. `ask` latency depends on the Anthropic API.
+
+| | Result |
+|---|---|
+| **Dogfood** (Kortex indexing itself) | `get_context` returns **9.6x fewer tokens** than reading the matched files in full (1,108 vs 10,637 on one query). Across more queries: **101x average** (12x worst, 190x best). [Bench notes →](docs/QUALITY_REPORT_2026-07-01.md) · [Details →](docs/VERIFICATION.md) |
+| **Search quality** | Hit@1 = **7/7** on symbol queries where the function name doesn't appear in the query string at all. Warm query ~15 ms. |
+| **Real $ cost A/B** | On a ~1300-entity, 4-service repo: **14% cheaper overall** vs not using it. On a 47-file repo: break-even. [Full writeup →](docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md) |
+| **Tests** | **1240 passing**, 0 failures, 1 live-skip (needs an API key). Covers MCP tools, all 22 parsers, framework route resolution, receiver-type and inheritance-aware resolution, graph queries, CLI, all 8 installer targets. |
+| **Manual test pass** | Every user-facing surface — CLI, web UI, watch daemon, MCP server (install, live query, uninstall) — run by hand. 21/21 passed; 6 issues logged. [Report →](docs/MANUAL_TEST_REPORT.md) |
+
+---
+
+## 🔌 Agent installer
+
+`codegraph init` does everything; `codegraph install` wires just the MCP server into a
+specific agent — no manual JSON editing either way.
+
+```bash
+uv run codegraph init                        # one-shot: index + install + CLAUDE.md
+uv run codegraph install cursor              # wire a specific agent, no re-index
+uv run codegraph install claude --print-config   # dry-run, print the JSON
+uv run codegraph uninstall claude            # remove entry + CLAUDE.md block
+```
+
+| Target | Agent | Global config written |
+|---|---|---|
+| `claude` | Claude Code | `~/.claude.json` |
+| `cursor` | Cursor IDE | `~/.cursor/mcp.json` |
+| `codex` | OpenAI Codex CLI | `~/.codex/config.json` |
+| `gemini` | Google Gemini CLI | `~/.gemini/settings.json` |
+| `kiro` | Kiro | `~/.kiro/settings/mcp.json` |
+| `opencode` | opencode | `~/.config/opencode/opencode.jsonc` |
+| `hermes` | Hermes Agent | `~/.hermes/config.yaml` *(YAML, not JSON)* |
+| `antigravity` | Antigravity IDE | `~/.gemini/config/mcp_config.json` |
+
+**One install, every project.** By default no `--db` is written: the MCP server discovers the
+nearest `.codegraph/graph.duckdb` from its working directory, so a single global entry serves
+all your repos. Pass `--db <path>` to pin one. Use `--location local` for a project-scoped
+config (`.mcp.json`, `.cursor/mcp.json`), and `--yes`/`-y` in scripts.
+
+**Why Claude actually uses it.** Install also drops a managed block into your repo's
+`CLAUDE.md` (idempotent `BEGIN/END` markers, never clobbers the rest) telling the agent to
+call `project_brief` at session start and `get_context` *before* reading files. Without this,
+an agent ignores the tools and keeps re-reading your source — so it's on by default
+(`--no-guide` to skip).
+
+---
+
+## ✅ Before you start
+
+**You need:**
+
+| Requirement | Where to get it |
+|---|---|
+| Python 3.11 or newer | [python.org/downloads](https://python.org/downloads) |
+| `uv` (Python package manager) | `pip install uv` or `brew install uv` on Mac |
+| Git | [git-scm.com](https://git-scm.com) |
+| A supported agent (at least one) | Claude Code, Cursor, Codex, Gemini, Kiro, opencode, Hermes Agent, or Antigravity |
+
+**You do NOT need:** an Anthropic API key *(for the core features)*, any cloud account or
+subscription beyond what you already have, or Docker.
+
+---
+
+<a id="changelog"></a>
+
+<details>
+<summary><h2>📜 Changelog</h2></summary>
+
+<br>
 
 **Aug 2026**
 
@@ -30,6 +562,9 @@ repo size and question type, not a flat multiplier.
   scale-dependence claim this project has cited since its own competitor research, not an
   assumption borrowed from someone else's numbers.
   [Full writeup →](docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md)
+- MCP server now watches its own parent PID and self-exits if the parent dies, instead of
+  relying solely on stdio EOF — the root-cause fix for orphaned server processes holding the
+  DB lock, which stdio EOF misses when a parent process tree is killed abruptly.
 - `get_context` now accepts a list of up to 5 queries in one call — merged, deduped, fair
   round-robin across queries — instead of one call per name. The first fix aimed at cutting
   round-trip *count*, not just response size, which is what every earlier efficiency pass
@@ -48,7 +583,10 @@ repo size and question type, not a flat multiplier.
   file (extremely common) used to show a permanent "N file changed — re-index recommended"
   that no amount of re-indexing could ever clear, because the file was never given a row to
   begin with.
-- 1233 tests passing (up from 1114), zero regressions.
+- `ask_codebase` is now omitted from the advertised tool list entirely when no
+  `ANTHROPIC_API_KEY` is set, instead of being advertised-but-broken — measured ~9.7% off
+  total tool-schema overhead for the common case.
+- 1240 tests passing (up from 1114), zero regressions.
 
 **Jul 2026**
 
@@ -101,528 +639,14 @@ repo size and question type, not a flat multiplier.
   branch switch), and the staleness cache is keyed on git HEAD so a branch switch doesn't
   hide staleness for up to 5 minutes. Full suite: 892 passing.
 
----
+</details>
 
-## License & attribution
+<a id="roadmap"></a>
 
-**Kortex is source-available, not open-source.** It is licensed under the
-[PolyForm Noncommercial License 1.0.0](LICENSE).
+<details>
+<summary><h2>🗺️ Roadmap</h2></summary>
 
-**You may:**
-- Read the code, learn from it, and run it locally for your own work.
-- Modify it and contribute changes back via pull requests.
-- Use it personally, for research, hobby projects, study, or inside a nonprofit /
-  educational / public-sector organization.
-
-**You may NOT:**
-- Use it commercially: selling it, hosting it as a paid service, embedding it in a
-  product you sell, or shipping it as part of a for-profit offering.
-- Re-publish it under your own name, rebrand it, or claim it as your own work.
-
-**For commercial use,** contact me via my GitHub profile: [github.com/kunal202426](https://github.com/kunal202426).
-
-Built and maintained by **Kunal Mathur**. Every source file carries an attribution
-header. Please keep it intact in copies and forks.
-
----
-
-## In plain words
-
-This codebase is like a **huge library full of books** (each file is a book).
-
-- **Without Kortex:** every time you ask the AI a question, it grabs **armfuls of whole
-  books** and flips through all of them, every single time. Heavy, slow, and it still
-  struggles to see how one book references another.
-- **With Kortex:** a librarian has already read every book once and built a **card
-  catalog** (who mentions whom, who calls what). Now when you ask a question, the librarian
-  hands the AI just **the 2–3 exact pages that matter**, plus a sticky note saying "this
-  page connects to that one."
-
-So the AI reads a few index cards instead of hauling the whole library. That's the whole
-idea.
-
----
-
-## How the token saving actually works
-
-*(Read this, it's the honest version.)*
-
-There are **two different kinds of tokens**, and Kortex only touches one of them:
-
-| Token type | What it is | Does Kortex reduce it? |
-|---|---|---|
-| **Reading tokens** (input/context) | How much code the AI has to *read* to understand your project | ✅ **Yes, a lot.** This is the whole point. |
-| **Writing tokens** (output) | How much the AI *writes back* as its answer | ❌ **No.** That depends on your question, not on Kortex. |
-
-**Why this matters for what you see:** the little token counter ticking in your chat is
-mostly the AI's *thinking + writing*. Kortex does **not** shrink that. The saving
-happens in the **reading pile**, the code that gets stuffed into the AI's context to
-answer you, which you don't directly see on that counter.
-
-A real example from this repo, one question (*"how does symbol resolution work?"*):
-
-```
-Reading the relevant files in full : ~17,000 tokens   <- without Kortex
-Kortex's targeted context          : ~1,350 tokens   <- with Kortex
-                                       ~12x less READING
-```
-
-The AI still *wrote* the same ~1–1.5k-token answer either way; that part is unchanged.
-
-**So is it worth it? Be honest with yourself:**
-
-- **Tiny repo, one quick question** → meh. The saving is small and the answer's writing
-  cost dominates. You won't feel it.
-- **Big codebase, a long back-and-forth (10–20 questions in a session)** → **this is where
-  it pays off.** Without Kortex the AI re-reads huge files again and again, the cost
-  piles up, and the context window fills until it forgets earlier parts. Kortex keeps
-  every question at ~1–2k of reading instead.
-
-> **Note on the numbers:** the "Nx less" figures are Kortex's own estimate of
-> *reading/context* tokens (4-chars/token heuristic, baseline = reading the full files the
-> answer came from). They measure the reading pile, **not** your total turn, and **not**
-> your actual $ cost — that also depends on round-trip count (each tool call re-reads the
-> whole accumulated conversation from cache), which this estimate doesn't capture at all.
-> A real controlled A/B ([full writeup →](docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md)),
-> measuring actual session `/usage` cost rather than estimated tokens, first caught this:
-> a mandatory extra tool call and a bloated response payload made Kortex cost **34% more**
-> real money than not using it at all on a 47-file repo, despite the "Nx less" number
-> looking good the whole time. Both were implementation bugs, since fixed — a re-measurement
-> after fixing them landed within ~3% either way (noise, not a real gap) on that same repo.
-> Like the field's most mature comparable tool's own published numbers, $ cost savings are
-> genuinely scale-dependent: closer to break-even on a small/medium repo, a clear win once a
-> codebase (and the session count against it) gets large — and that's no longer just a claim
-> borrowed from someone else's benchmark. A follow-up A/B on a real ~1300-entity, 4-service
-> repo (JobHuntPro) measured Kortex **14% cheaper overall**, losing only the question a
-> well-written README already answered and winning the harder cross-file ones by a growing
-> margin — first-party evidence the scale-dependence holds, not just an assumption borrowed
-> from someone else's numbers. Broader user testing is ongoing.
-
----
-
-## Before you start
-
-**You need:**
-
-| Requirement | Where to get it |
-|---|---|
-| Python 3.11 or newer | [python.org/downloads](https://python.org/downloads) |
-| `uv` (Python package manager) | `pip install uv` or `brew install uv` on Mac |
-| Git | [git-scm.com](https://git-scm.com) |
-| A supported agent: Claude Code, Cursor, Codex, Gemini, Kiro, opencode, Hermes Agent, or Antigravity (at least one) | Their respective sites |
-
-**You do NOT need:**
-- An Anthropic API key *(for the core features, see the next section)*
-- Any cloud account or subscription beyond what you already have
-- Docker
-
----
-
-## Do I need an API key?
-
-**Short answer: No, for everything that matters.**
-
-There is an important distinction:
-
-| Product | What it is | Free? |
-|---|---|---|
-| **Claude.ai subscription** (Pro/Team) | The claude.ai web/app interface | You already have it |
-| **Anthropic API key** | Direct API access, billed per-token, from [console.anthropic.com](https://console.anthropic.com) | Separate, first ~$5 free |
-
-These are **two different products**. Having a Claude subscription does not give you an API
-key, and you do not need one to use Kortex's core features.
-
-### What works free (no API key)
-
-Everything in the table below works with zero API key. This includes the entire reason
-most people install Kortex:
-
-| Feature | Command / Tool |
-|---|---|
-| Index your codebase | `codegraph index`, `codegraph init` |
-| Search by meaning + text | `codegraph search`, `search_code` MCP tool |
-| Understand dependencies | `codegraph deps`, `codegraph impact` |
-| Find cycles, smells, dead code | `codegraph cycles`, `codegraph smells`, `codegraph deadcode` |
-| All 11 MCP tools (Claude Code queries your graph) | `get_context`, `trace_path`, `impact_analysis`, `list_files`, `index_status`, `reindex`, `search_code`, `get_entity_context`, `ask_codebase`, `get_unsummarized_entities`, `store_summaries` |
-| Auto-refresh as you code | `codegraph watch` |
-| Browser UI with D3 graph | `codegraph serve` |
-| One-shot setup | `codegraph init` |
-
-The **entire 9.6x token savings value proposition** (the core of the product) is free.
-
-### What needs an Anthropic API key
-
-| Feature | Command / Tool |
-|---|---|
-| Ask a natural-language question about your code | `codegraph ask "how does X work?"` |
-| Generate an architecture summary | `codegraph summarize` |
-| GraphRAG Q&A from within an agent | `ask_codebase` MCP tool |
-
-If you want these: go to [console.anthropic.com](https://console.anthropic.com), create an
-account, and set `ANTHROPIC_API_KEY=<your key>` in your environment. You get ~$5 in free
-credits to start.
-
----
-
-## What it does
-
-- **Understands your code as a graph**: tree-sitter parses 22 languages (Python,
-  TypeScript/JS, Go, Rust, Java, Ruby, PHP, C, C++, Kotlin, C#, Scala, Bash, Elixir,
-  R, Julia, Haskell, OCaml, HTML, CSS, SQL) into a unified entity/edge model (functions, classes,
-  methods, modules + `imports`/`calls` edges), stored in a single DuckDB file with
-  cross-file symbol resolution.
-- **Search by meaning, not just text**: local `all-MiniLM-L6-v2` embeddings + DuckDB
-  vector search, fused with literal search via Reciprocal Rank Fusion.
-- **Answers grounded questions**: GraphRAG retrieval (vector seeds + graph expansion)
-  feeds `claude-sonnet-4-6` to answer "how does X work?" with `file:line` citations.
-- **Analyzes structure**: dependency trees, reverse-call impact, import-cycle detection
-  (Tarjan SCC), code-smell heuristics, dead-code candidates, git-blame ownership, and
-  architectural layer analysis.
-- **Resolves `obj.method()` to the exact class, not just the name**: infers a call's receiver
-  type from a local variable's constructor/annotation, a typed parameter, `self`/`this`, or
-  a `self.attr`/`this.attr`/`@attr` tracked elsewhere in the class, across all 8 OO-capable
-  languages. Two unrelated classes sharing a method name no longer risk a call edge pointing
-  at the wrong one; falls back to today's name-only resolution whenever the type isn't clear.
-- **Follows inherited methods too**: if `method` isn't declared on `obj`'s own class, walks
-  its base classes/interfaces (or Go's embedded-struct method promotion) to find it, same-file
-  preferred when a name is ambiguous.
-- **Resolves framework routing to real calls**: Flask, FastAPI, Express, Django, Spring, and
-  Rails route handlers get real `calls` edges from their route registration, so a handler
-  invoked only through the framework's own routing doesn't show up as false-positive dead
-  code. A TS/JS `fetch`/`axios` call with a static URL resolves straight through to the
-  backend handler that serves it, across files and languages in one edge.
-- **Stays fresh automatically**: `codegraph watch` debounces filesystem events and
-  re-indexes only the changed files in ~300 ms, keeping the graph current as you code. An
-  opt-in git-hook fallback (`codegraph hooks install`) keeps the index fresh across commits,
-  pulls, and checkouts in environments where filesystem watching isn't reliable.
-- **Plugs into any MCP agent**: 11 MCP tools (search, context, trace, impact, status,
-  reindex, agent-driven summaries, ...) plus a one-command installer for 8 agents: Claude
-  Code, Cursor, Codex, Gemini, Kiro, opencode, Hermes Agent, and Antigravity.
-
----
-
-## What it cannot do
-
-Being honest about the limits:
-
-- **Not a code reviewer**: it surfaces what is *relevant* to a question, not what is
-  *correct*. It does not catch bugs or security issues.
-- **It does not reduce the AI's *writing* tokens**, only the *reading/context* tokens (see
-  [How the token saving actually works](#how-the-token-saving-actually-works)). On a single
-  small question the net difference can be marginal; the value compounds on large codebases
-  and long sessions.
-- **`codegraph ask` / `summarize` / `ask_codebase` are not free**: they call Anthropic's
-  API and require a separate API key. The CLI warns you clearly if the key is missing.
-- **No runtime understanding**: Kortex reads static structure (what calls what, what
-  imports what). It does not know what happens when the code actually runs.
-- **Inheritance walk has real edges but real limits**: `obj.method()` now resolves through a
-  base class/interface (Python, TS/JS, Java, PHP, Ruby, C++) or Go's embedded-struct method
-  promotion when `method` isn't declared on `obj`'s own type. Not covered: Ruby's `include`
-  mixins (only `< Base` superclass syntax is captured), Rust (no inheritance concept — traits
-  and default methods aren't walked), and multiple/diamond inheritance beyond a same-file or
-  unambiguous repo-wide base — an ambiguous chain falls back to name-only resolution rather
-  than guessing.
-- **Framework resolution covers routing, not every framework feature**: Flask, FastAPI,
-  Express, Django, Spring, and Rails route handlers resolve to real `calls` edges (same-file
-  and cross-file), and a static-URL `fetch`/`axios` call resolves cross-language to the
-  handler that serves it. Other framework-level relationships — Rails `has_many`
-  associations, dependency-injection wiring, ORM relationship traversal — are not resolved.
-  A route with a fully dynamic URL (built from string interpolation, not a literal) can't be
-  matched and still shows as external.
-- **Function-local imports**: if a function does `from X import Y` inside the function
-  body (rare but valid Python), that call may not trace through to the definition.
-- **One process per client, no shared daemon**: each connected agent window spawns its own
-  MCP server process. The local DuckDB index is single-writer, so running `codegraph watch`
-  and a heavy re-index simultaneously from two terminals may conflict. A shared multi-client
-  daemon was scoped and deliberately not built — see [STATUS.md](STATUS.md).
-- **Web UI is local-only**: `codegraph serve` opens a browser to `localhost`. It is not
-  hosted, shared, or deployed anywhere.
-- **22 languages**: Python, TypeScript, JavaScript, Go, Rust, Java, Ruby, PHP, C, C++,
-  Kotlin, C#, Scala, Bash, Elixir, R, Julia, Haskell, OCaml, HTML, CSS, SQL. Other
-  languages are silently skipped during indexing.
-
----
-
-## Quickstart
-
-### Step-by-step (first time)
-
-**Step 1: Clone Kortex** (one time, anywhere on your machine)
-
-```bash
-git clone https://github.com/kunal202426/CodeGraph-Intelligence.git
-cd CodeGraph-Intelligence
-```
-
-**Step 2: Install dependencies** (one time, takes ~2 minutes)
-
-```bash
-uv sync --extra dev
-```
-
-> The first time you index a project, Python will also download the `all-MiniLM-L6-v2`
-> embedding model (~80 MB). This is a one-time download. Kortex will tell you when
-> it starts.
-
-**Step 3: Set up a project** (once per project)
-
-```bash
-cd /path/to/your/project
-uv run codegraph init
-```
-
-`init` does three things automatically:
-- Indexes your code into `.codegraph/graph.duckdb` (~30 s for a medium project)
-- Registers Kortex as an MCP tool in your agent (Claude Code / Cursor / etc.)
-- Writes a `CLAUDE.md` guide that **requires** your agent to call Kortex before reading
-  files, and to report the token savings back to you
-
-It finishes by self-verifying the index (`Verified: N entities`).
-
-**Step 4: Confirm it's wired (optional but reassuring)**
-
-```bash
-uv run codegraph doctor
-```
-
-`doctor` prints a `PASS`/`FAIL` line for the index, MCP config, agent guide, and
-freshness, with the exact fix command for anything that needs attention.
-
-**Step 5: Restart your agent**
-
-Close and reopen Claude Code (or Cursor / Codex / Gemini). The MCP server is not loaded
-until the agent restarts. *(This is the #1 step people miss.)*
-
-**Step 6: Use it**
-
-Just ask Claude normally: *"explain how authentication works in this project"*
-
-Because of the guide, Claude calls `get_context` first (~500 tokens instead of reading your
-whole codebase) and tells you the savings, e.g. *"CodeGraph: ~480 vs ~6,200 tokens (13x
-less)"*. You don't need to remember any commands; it uses Kortex automatically.
-
----
-
-**One command**: index your repo, wire up Claude Code, and write the agent guide:
-
-```bash
-uv sync --extra dev
-cd /path/to/your/repo
-uv run codegraph init            # index + install MCP + CLAUDE.md, then restart Claude
-```
-
-After that, ask Claude *"use codegraph to explain how X works"* and it will query the
-graph instead of re-reading your files. `init --target cursor|codex|gemini|kiro|opencode|
-hermes|antigravity` wires a different agent.
-
-Prefer the pieces individually:
-
-```bash
-# Index a repo (writes .codegraph/graph.duckdb + embeddings)
-uv run codegraph index /path/to/repo
-
-# Search, explore, ask
-uv run codegraph search "user authentication"
-uv run codegraph impact authenticate
-uv run codegraph ask "how does login work?"      # needs ANTHROPIC_API_KEY
-
-# Browser UI: D3 graph + search + streaming AI chat
-uv run codegraph serve
-
-# Keep the index fresh as you edit
-uv run codegraph watch .
-```
-
-Full command list: `uv run codegraph --help`: `init`, `doctor`, `index`, `search`, `deps`,
-`impact`, `cycles`, `smells`, `deadcode`, `owner`, `layers`, `ask`, `summarize`,
-`context`, `trace`, `status`, `watch`, `serve`, `install`, `uninstall`.
-
-## Example queries
-
-**Semantic search** finds code by intent, even when the words don't match:
-
-```text
-$ codegraph search "user authentication"
-Type      Name          Location              Via              Doc
-function  authenticate  auth/login.py:9       literal+semantic Validate credentials...
-```
-
-**Impact analysis** shows the reverse-call blast radius:
-
-```text
-$ codegraph impact authenticate
-authenticate (function, auth/login.py:9)
-+-- called by login_handler (method, api/users.py:26)
-+-- called by submit (method, auth/login.py:38)
-`-- called by boot (function, main.py:15)
-Blast radius: 3 entities across 3 hop(s).
-```
-
-**Grounded Q&A** cites the actual entities it used:
-
-```text
-$ codegraph ask "how does login work?"
-Login is handled by [py:auth/login.py:authenticate], which validates credentials
-and is invoked by the API route [py:api/users.py:login_handler]...
-```
-
-## Architecture
-
-```mermaid
-flowchart LR
-    repo[Repo files] --> walker[Walker<br/>.gitignore + lang detect]
-    walker --> parsers[tree-sitter parsers<br/>22 languages]
-    parsers --> uir[UIR entities + edges]
-    uir --> store[(DuckDB<br/>entities · edges · embeddings)]
-    parsers --> resolver[Symbol resolver] --> store
-    embed[sentence-transformers<br/>all-MiniLM-L6-v2] --> store
-
-    store --> queries[Graph queries<br/>search · deps · impact · cycles · smells]
-    store --> rag[GraphRAG<br/>vector + graph retrieval]
-    rag --> llm[Anthropic<br/>claude-sonnet-4-6]
-
-    queries --> cli[Typer CLI]
-    rag --> cli
-    queries --> api[FastAPI]
-    rag --> api
-    api --> web[React + D3 web UI]
-    queries --> mcp[MCP server]
-    rag --> mcp
-    mcp --> agent[Claude Code / MCP agent]
-```
-
-## Agent installer
-
-`codegraph init` does everything; `codegraph install` wires just the MCP server into a
-specific agent, no manual JSON editing either way.
-
-```bash
-# One-shot: index + install + write CLAUDE.md (run inside your repo)
-uv run codegraph init
-
-# Or wire up a specific agent without re-indexing
-uv run codegraph install cursor
-
-# Dry-run: print the JSON snippet without writing
-uv run codegraph install claude --print-config
-
-# Remove the entry (and the CLAUDE.md block)
-uv run codegraph uninstall claude
-```
-
-**Supported targets:**
-
-| Target | Command | Global config written |
-|---|---|---|
-| `claude` | Claude Code | `~/.claude.json` |
-| `cursor` | Cursor IDE | `~/.cursor/mcp.json` |
-| `codex` | OpenAI Codex CLI | `~/.codex/config.json` |
-| `gemini` | Google Gemini CLI | `~/.gemini/settings.json` |
-| `kiro` | Kiro | `~/.kiro/settings/mcp.json` |
-| `opencode` | opencode | `~/.config/opencode/opencode.jsonc` (XDG path, all platforms) |
-| `hermes` | Hermes Agent | `~/.hermes/config.yaml` (YAML, not JSON) |
-| `antigravity` | Antigravity IDE | `~/.gemini/config/mcp_config.json` |
-
-**One install, every project.** By default no `--db` is written: the MCP server discovers
-the nearest `.codegraph/graph.duckdb` from its working directory, so a single global entry
-serves all your repos. Pass `--db <path>` to pin one. Use `--location local` for a
-project-scoped config (`.mcp.json`, `.cursor/mcp.json`), and `--yes`/`-y` in scripts.
-
-**Why Claude actually uses it.** Install also drops a managed block into your repo's
-`CLAUDE.md` (idempotent `BEGIN/END` markers, never clobbers the rest) that tells the agent
-to call `index_status` at session start and `get_context` *before* reading files. Without
-this, an agent ignores the tools and keeps re-reading your source, so it's on by default
-(`--no-guide` to skip).
-
-## MCP tools
-
-Kortex exposes 11 tools over the [MCP](https://modelcontextprotocol.io) stdio protocol.
-Every description is written to tell the agent *when to prefer it over reading files*.
-
-| Tool | What it does |
-|---|---|
-| `get_context` | **Start here.** Hybrid search + signatures + callers/callees, token-lean by default (`detail="full"` for bodies). Replaces 3-4 round-trips at ~10x fewer tokens. |
-| `search_code` | Hybrid literal + semantic search → entities with `file:line` |
-| `get_entity_context` | Full source + neighbours (`depends_on`, `called_by`) for an `entity_id` |
-| `impact_analysis` | Reverse-call blast radius — what breaks if an entity changes |
-| `trace_path` | Shortest call chain between two `entity_id`s (BFS), with readable labels |
-| `list_files` | All indexed files with language, LOC, and entity count; filterable by language |
-| `index_status` | File / entity / edge / embedding / summary counts + staleness indicator |
-| `reindex` | Refresh only the files changed since the last index, no terminal needed |
-| `ask_codebase` | Natural-language question answered via GraphRAG with citations |
-| `get_unsummarized_entities` | Hand the agent a batch of entities that still lack a summary |
-| `store_summaries` | Write agent-authored summaries back + re-embed those entities (no API key) |
-
-`ask_codebase` requires embeddings and `ANTHROPIC_API_KEY`; all others work on any index.
-`CODEGRAPH_DB` overrides the discovered/default DB path.
-
-### Free, agent-driven summaries (no API key)
-
-`get_unsummarized_entities` + `store_summaries` let **Claude Code itself** write the
-per-entity "meaning" that powers semantic search, using your existing subscription
-instead of paid API tokens. Run the bundled `/codegraph-summarize` command and the agent
-loops through unsummarized entities, writes a one-line summary for each, stores them, and
-re-embeds just those entities so search improves immediately. The summary lives in the
-embed input, so a concept word that never appears in the code (e.g. "rate limiting") still
-finds the right entity. Entities without a summary are byte-identical to before; the
-feature adds **zero** overhead until you use it.
-
-To run the MCP server manually (e.g. for a custom agent config):
-
-```bash
-# Discovers the nearest .codegraph/graph.duckdb from the working directory
-python -m codegraph.server.mcp_server
-```
-
-## Stack
-
-| Layer | Choice |
-|---|---|
-| Language / tooling | Python 3.11, [uv](https://github.com/astral-sh/uv), [ruff](https://docs.astral.sh/ruff/), pytest |
-| Parsing | [tree-sitter](https://tree-sitter.github.io/): 22 languages — Python, TS/JS, Go, Rust, Java, Ruby, PHP, C, C++, Kotlin, C#, Scala, Bash, Elixir, R, Julia, Haskell, OCaml, HTML, CSS, SQL |
-| Storage | [DuckDB](https://duckdb.org/): entities, edges, `FLOAT[384]` vectors, one file |
-| Embeddings | [sentence-transformers](https://www.sbert.net/) `all-MiniLM-L6-v2` (local, 384-d) |
-| LLM | [Anthropic](https://docs.anthropic.com/) `claude-sonnet-4-6` (prompt-cached) |
-| Freshness | [watchdog](https://github.com/gorakhargosh/watchdog): debounced file watcher |
-| CLI | [Typer](https://typer.tiangolo.com/) + [Rich](https://rich.readthedocs.io/) |
-| Web | [FastAPI](https://fastapi.tiangolo.com/) + React 19 + Vite + [D3](https://d3js.org/) |
-| Agent | [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) |
-
-## Benchmarks
-
-Indexing [`tiangolo/fastapi`](https://github.com/tiangolo/fastapi) (1,122 files) on a
-laptop: **6,065 entities, 14,601 edges**:
-
-| Metric | Result |
-|---|---|
-| Cold index (parse + resolve, graph only) | ~67 s |
-| Warm re-index (no changes, hash-skip) | ~1.9 s |
-| Literal search query | <1 ms p50 / ~16 ms p95 (in-process) |
-| Embedding throughput | ~690 entities/s (`all-MiniLM-L6-v2`, CPU) |
-| Graph DB size on disk | ~34 MB |
-
-`search get_swagger_ui_html` → `fastapi/openapi/docs.py:40`. Warm re-index is ~35x
-faster than cold thanks to per-file SHA-256 hash-skipping; embeddings re-compute only
-for entities whose input changed. `ask` latency depends on the Anthropic API.
-
-**Dogfood (Kortex indexing itself):** `get_context` returns **9.6x fewer tokens**
-than reading the matched files in full (1,108 vs 10,637 on one query). Tested across
-more queries: **101x average** (12x on small files at worst, 190x best).
-[Bench notes →](docs/QUALITY_REPORT_2026-07-01.md) | [Details →](docs/VERIFICATION.md)
-
-**Search:** Hit@1 = 7/7 on symbol queries where the function name doesn't appear in
-the query string at all. Warm query ~15ms.
-
-**Tests:** 1114 passing, 0 failures, 1 live-skip (needs an API key). Covers MCP tools,
-all 22 parsers, framework route resolution, receiver-type and inheritance-aware resolution,
-graph queries, CLI, and all 8 installer targets.
-
-**Manual test pass (2026-06-15):** every user-facing surface, CLI, web UI, watch
-daemon, and the MCP server (install, live query, uninstall), run by hand on this repo.
-21/21 surfaces passed; 6 quality-of-life / robustness issues logged. Full report:
-[docs/MANUAL_TEST_REPORT.md](docs/MANUAL_TEST_REPORT.md).
-
-## Roadmap
+<br>
 
 Phases 10-13 ("best of both"), 14-18 ("actually usable"), and the 19-22/24/26-28 competitive
 hardening pass are complete:
@@ -647,19 +671,24 @@ hardening pass are complete:
 Deliberately **deferred**: deep TypeScript type resolution via `tsc`, Ruby `include`-mixin
 inheritance and Rust trait default methods (receiver-type inference through inheritance
 covers the rest), and a shared multi-client MCP daemon (one process per agent window today,
-scoped and explicitly not
-built — a process-model change with more risk than the wins above). See [STATUS.md](STATUS.md).
+scoped and explicitly not built — a process-model change with more risk than the wins above).
+See [STATUS.md](STATUS.md).
 
----
+</details>
 
-## FAQ
+<a id="faq"></a>
+
+<details>
+<summary><h2>❓ FAQ</h2></summary>
+
+<br>
 
 **I have Claude Pro / Team. Do I need to pay extra?**
 
 No. Your Claude subscription covers the claude.ai interface. Kortex's MCP integration
 with Claude Code is completely separate and has no subscription cost. The only feature
 that charges you separately is `codegraph ask` / `ask_codebase`, which hits the Anthropic
-API directly, a different billing account at [console.anthropic.com](https://console.anthropic.com).
+API directly — a different billing account at [console.anthropic.com](https://console.anthropic.com).
 
 **Will it slow down Claude?**
 
@@ -678,8 +707,7 @@ on first use, then works offline.
 
 You don't have to think about it. Run `codegraph watch .` in a terminal while you code;
 it re-indexes only the file you just saved, in ~300 ms. Or skip it: if you forget, the
-agent sees a `stale` warning in `index_status` and can call the `reindex` tool itself
-without you doing anything.
+agent sees a `stale` warning and can call the `reindex` tool itself without you doing anything.
 
 **Do I run `init` every time I open the project?**
 
@@ -693,13 +721,13 @@ Claude Code, Cursor, OpenAI Codex CLI, Google Gemini CLI, Kiro, opencode, Hermes
 and Antigravity. One command each:
 
 ```bash
-codegraph install claude    # Claude Code
-codegraph install cursor    # Cursor
-codegraph install codex     # OpenAI Codex CLI
-codegraph install gemini    # Google Gemini CLI
-codegraph install kiro      # Kiro
-codegraph install opencode  # opencode
-codegraph install hermes    # Hermes Agent
+codegraph install claude       # Claude Code
+codegraph install cursor       # Cursor
+codegraph install codex        # OpenAI Codex CLI
+codegraph install gemini       # Google Gemini CLI
+codegraph install kiro         # Kiro
+codegraph install opencode     # opencode
+codegraph install hermes       # Hermes Agent
 codegraph install antigravity  # Antigravity
 ```
 
@@ -707,27 +735,60 @@ codegraph install antigravity  # Antigravity
 
 Yes. Install once (`codegraph install claude`), and it works across every project. The
 MCP server discovers the nearest `.codegraph/graph.duckdb` from wherever your agent is
-running, no `--db` needed, no per-project config.
+running — no `--db` needed, no per-project config.
 
 **Something went wrong during indexing. What do I do?**
 
 The most common issues:
-- *"Downloading embedding model..."* and it seems stuck, it's downloading ~80 MB, give
+- *"Downloading embedding model..."* and it seems stuck — it's downloading ~80 MB, give
   it a minute. On slow/corporate networks this can take a while or fail; run
   `codegraph index . --no-embed` to skip it (you lose semantic search, keep literal).
-- *"No graph database at..."*: run `codegraph index .` (or `codegraph init`) first.
-- *Agent not using Kortex*: make sure you restarted the agent after `init`. Check
+- *"No graph database at..."* — run `codegraph index .` (or `codegraph init`) first.
+- *Agent not using Kortex* — make sure you restarted the agent after `init`. Check
   that `CLAUDE.md` exists in your repo root with the `<!-- BEGIN CODEGRAPH -->` block.
+
+</details>
 
 ---
 
-## Acknowledgments
+## ⚖️ License & attribution
 
-Built on [tree-sitter](https://tree-sitter.github.io/), [DuckDB](https://duckdb.org/),
-[sentence-transformers](https://www.sbert.net/), and the
-[Anthropic API](https://docs.anthropic.com/). Progress tracked in [STATUS.md](STATUS.md).
+> [!WARNING]
+> **Kortex is source-available, not open-source.** It is licensed under the
+> [PolyForm Noncommercial License 1.0.0](LICENSE).
 
-## Research
+<table>
+<tr>
+<td width="50%" valign="top">
+
+### ✅ You may
+
+- Read the code, learn from it, and run it locally for your own work.
+- Modify it and contribute changes back via pull requests.
+- Use it personally, for research, hobby projects, study, or inside a nonprofit /
+  educational / public-sector organization.
+
+</td>
+<td width="50%" valign="top">
+
+### ❌ You may NOT
+
+- Use it commercially: selling it, hosting it as a paid service, embedding it in a
+  product you sell, or shipping it as part of a for-profit offering.
+- Re-publish it under your own name, rebrand it, or claim it as your own work.
+
+</td>
+</tr>
+</table>
+
+**For commercial use,** contact me via my GitHub profile: [github.com/kunal202426](https://github.com/kunal202426).
+
+Built and maintained by **Kunal Mathur**. Every source file carries an attribution header.
+Please keep it intact in copies and forks.
+
+---
+
+## 🔭 Research
 
 Comparable open-source tools tend to build a structural call graph without a semantic
 layer, which caps how much re-reading and re-explaining they can actually save — and
@@ -738,3 +799,14 @@ search, aiming for a larger, more reliable token reduction than graph-only tools
 This specific combination — a codebase graph plus a semantic layer, evaluated on token
 reduction — isn't something existing research covers directly, which is part of the
 motivation for building it as a standalone tool.
+
+## 🙏 Acknowledgments
+
+Built on [tree-sitter](https://tree-sitter.github.io/), [DuckDB](https://duckdb.org/),
+[sentence-transformers](https://www.sbert.net/), and the
+[Anthropic API](https://docs.anthropic.com/). Progress tracked in [STATUS.md](STATUS.md).
+
+<div align="center">
+<br>
+<sub>Built by <a href="https://github.com/kunal202426">Kunal Mathur</a> · <a href="STATUS.md">STATUS.md</a> · <a href="docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md">Cost findings</a> · <a href="docs/MANUAL_TEST_REPORT.md">Manual test report</a></sub>
+</div>
