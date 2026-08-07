@@ -300,6 +300,57 @@ tested. Consistent with round 3's finding that codegraph is closest to break-eve
 clear win) on a repo LedgerGuard's size — `project_brief` nudges that break-even point
 further in codegraph's favor rather than transforming it.
 
+## Round 6 (2026-08-07): first test on a genuinely large repo — JobHuntPro (1321 entities, 187 files)
+
+Every round before this one ran on LedgerGuard — 47 files, 244 entities. The scale-dependence
+claim this whole report leans on (round 1's competitor research: near-parity on small/medium
+repos, a clear win only once a codebase gets large) had never actually been tested with our
+own data on a large repo. JobHuntPro is ~5.4x LedgerGuard's entity count and genuinely
+cross-language: a Chrome MV3 extension (JS), a Node/Express backend, a separate Python/FastAPI
+backend, and a React frontend — four sub-apps, two backend languages.
+
+**Methodology, corrected mid-run (logged honestly, not smoothed over):** the original plan
+called for 3 fresh, isolated sessions per side. In practice all 3 questions were asked as
+follow-ups in one continuous session per side (matching how a real developer actually works,
+and matching every earlier round's actual methodology) — caught when a "fresh session" cost
+figure turned out to be a cumulative total including the prior question. Recomputed every
+number below as per-question deltas from the cumulative total, not standalone figures.
+Also confirmed via the `/usage` panel's model breakdown that both sides ran 100% Sonnet, 0%
+Haiku throughout — not a confound between conditions.
+
+**Real methodological wrinkle worth keeping:** the without-codegraph session dispatched
+Claude Code's own built-in **Explore subagent** for the two harder questions (visible in the
+usage panel as 71-79% of that session's cost). This is an honest, representative baseline —
+Explore is a native capability every Claude Code user has with zero setup — but it means
+"without codegraph" here measures against Claude Code's own agentic exploration tooling, not
+a naive grep-and-read loop. Worth remembering when comparing this number to any published
+benchmark that assumes a dumber baseline.
+
+| Question | With codegraph | Without codegraph | Delta |
+|---|---|---|---|
+| Architecture overview | $0.46 (90% cache hit) | $0.38 (91% cache hit) | Without −$0.08 |
+| Cross-service data flow (Node → Python) | $0.56 (94% cache hit) | $0.71 (93% cache hit) | With −$0.15 |
+| Impact/blast-radius of a shared data shape | $0.80 (96% cache hit) | $1.03 (94% cache hit) | With −$0.23 |
+| **Total** | **$1.82** | **$2.12** | **With −$0.30 (−14%)** |
+
+**With codegraph wins overall, and the pattern is directional, not noise.** Without-codegraph
+won only the easy question — and the answer's own opening line explained why: *"This
+README/PROGRESS gives a very solid picture already"* — JobHuntPro has an unusually complete
+hand-written README with an architecture table, so reading two docs was genuinely competitive
+with walking the graph for that specific question. Codegraph won both harder questions
+(cross-service trace, blast-radius) by a **growing margin** as the tracing got deeper — exactly
+the shape the competitor research predicted: the advantage shows up on hard, cross-cutting
+questions on a large repo, not on ones a good README already answers. Answer quality was
+comparable on all 3 questions on both sides (same core findings, similarly precise file:line
+citations) — this is a real cost result, not a quality tradeoff dressed up as one.
+
+**This is the first data point at this scale, not a settled conclusion** — same caveat every
+earlier round has carried: one repo, 3 questions, real but limited. It does, however, mark the
+first time in this whole cost-efficiency investigation that codegraph won on total $ cost
+against a real, unmodified baseline (round 5's `project_brief` win was isolated to one
+feature, not the whole with/without-codegraph question) — consistent with, not just assumed
+from, the scale-dependence claim this report has cited since round 1.
+
 ## What this report is NOT saying
 
 - Not saying CodeGraph's core graph/search/analysis features are wrong — cycles, smells,
