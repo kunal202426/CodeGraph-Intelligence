@@ -252,14 +252,23 @@ def tool_definitions() -> list[Tool]:
             name="impact_analysis",
             description="Use this before editing an entity to see what would break -- the "
             "reverse-call blast radius (transitive callers). Prefer this over manually "
-            "grepping for usages; it follows the resolved call graph across files.",
+            "grepping for usages; it follows the resolved call graph across files. Pass "
+            "entity_id if already known, or query (a name or short phrase) to resolve and "
+            "analyze in one call -- collapses search_code + impact_analysis into one round-trip.",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "entity_id": {"type": "string"},
+                    "entity_id": {
+                        "type": "string",
+                        "description": "Known entity_id. Alternative to query.",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Name or phrase to resolve first. Alternative to entity_id.",
+                    },
                     "depth": {"type": "integer", "default": 3},
                 },
-                "required": ["entity_id"],
+                "required": [],
             },
         ),
         Tool(
@@ -280,20 +289,30 @@ def tool_definitions() -> list[Tool]:
             name="trace_path",
             description=(
                 "Use this to answer 'how does A reach B?' -- the shortest call chain "
-                "between two entity_ids via BFS over directed call edges (max 7 hops by "
-                "default). Returns the labeled sequence from source to destination. "
-                "Prefer this over manually following calls through files."
+                "between two entities via BFS over directed call edges (max 7 hops by "
+                "default). Pass from_id/to_id if already known, or from_query/to_query "
+                "(name or short phrase, either end independently) to resolve first -- "
+                "collapses search_code x2 + trace_path into one round-trip. Returns the "
+                "labeled sequence from source to destination."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "from_id": {
                         "type": "string",
-                        "description": "Source entity_id (start of the call chain).",
+                        "description": "Known source entity_id. Alternative to from_query.",
+                    },
+                    "from_query": {
+                        "type": "string",
+                        "description": "Resolve the source from this. Alternative to from_id.",
                     },
                     "to_id": {
                         "type": "string",
-                        "description": "Destination entity_id (end of the call chain).",
+                        "description": "Known destination entity_id. Alternative to to_query.",
+                    },
+                    "to_query": {
+                        "type": "string",
+                        "description": "Resolve the destination from this. Alternative to to_id.",
                     },
                     "max_hops": {
                         "type": "integer",
@@ -301,7 +320,7 @@ def tool_definitions() -> list[Tool]:
                         "description": "Maximum call chain length to search.",
                     },
                 },
-                "required": ["from_id", "to_id"],
+                "required": [],
             },
         ),
         Tool(
@@ -736,27 +755,64 @@ def _get_entity_context(args: dict[str, Any]) -> str:
     )
 
 
+def _resolve_query_to_entity(store: GraphStore, query: str) -> tuple[str | None, str | None]:
+    """Resolve a name/phrase to its single best-matching entity_id.
+
+    Reuses the same hybrid_search path as search_code/get_context, so
+    impact_analysis and trace_path can take a query instead of requiring the
+    caller to already have an entity_id -- collapsing a search_code round-trip
+    into the same call. Returns (entity_id, warning); entity_id is None only
+    when nothing matched at all. warning (entity_id still set) mirrors
+    get_context's low-confidence heuristic instead of silently guessing wrong.
+    """
+    vector = _maybe_embed(query) if store.count_embedded() > 0 else None
+    hits = hybrid_search(store.conn, query, vector, limit=5)
+    if not hits:
+        return None, None
+    top = hits[0]
+    warning = None
+    if not _has_confident_match(query, [h.name for h in hits], [h.file for h in hits]):
+        warning = (
+            f"Low-confidence match for query {query!r}: resolved to {top.entity_id}, "
+            "but no result strongly corroborates it -- verify this is the right entity."
+        )
+    return top.entity_id, warning
+
+
 def _impact_analysis(args: dict[str, Any]) -> str:
-    entity_id = str(args["entity_id"])
+    entity_id = args.get("entity_id")
+    query = args.get("query")
     depth = int(args.get("depth", 3))
+    warnings: list[str] = []
     store = _open_store()
     try:
+        if entity_id:
+            entity_id = str(entity_id)
+        else:
+            if not query:
+                return json.dumps({"error": "Provide entity_id or query."})
+            entity_id, warning = _resolve_query_to_entity(store, str(query))
+            if entity_id is None:
+                return json.dumps({"error": f"No entity found for query {query!r}."})
+            if warning:
+                warnings.append(warning)
         tree = find_callers(store.conn, entity_id, depth=depth)
     finally:
         store.close()
-    return json.dumps(
-        {
-            "root": tree.root,
-            "total": tree.total,
-            "truncated": tree.truncated,
-            # name and file are both embedded in entity_id ({lang}:{file}:{qname});
-            # repeating them per caller doubled every node of a deep impact tree.
-            "callers": {
-                callee: [{"entity_id": c.entity_id, "type": c.type} for c in callers]
-                for callee, callers in tree.callers.items()
-            },
-        }
-    )
+    result = {
+        "root": tree.root,
+        "total": tree.total,
+        "truncated": tree.truncated,
+        # name and file are both embedded in entity_id ({lang}:{file}:{qname});
+        # repeating them per caller doubled every node of a deep impact tree.
+        "callers": {
+            callee: [{"entity_id": c.entity_id, "type": c.type} for c in callers]
+            for callee, callers in tree.callers.items()
+        },
+    }
+    if warnings:
+        result["warnings"] = warnings
+    return json.dumps(result)
 
 
 def _ask_codebase(args: dict[str, Any]) -> str:
@@ -781,15 +837,40 @@ def _ask_codebase(args: dict[str, Any]) -> str:
 
 
 def _trace_path(args: dict[str, Any]) -> str:
-    """Shortest call chain between two entity_ids."""
-    from_id = str(args["from_id"])
-    to_id = str(args["to_id"])
+    """Shortest call chain between two entities, given directly or by query."""
+    from_id = args.get("from_id")
+    to_id = args.get("to_id")
+    from_query = args.get("from_query")
+    to_query = args.get("to_query")
     max_hops = max(1, min(int(args.get("max_hops", 7)), 20))
 
     from codegraph.analysis.traversal import find_shortest_path
 
+    warnings: list[str] = []
     store = _open_store()
     try:
+        if from_id:
+            from_id = str(from_id)
+        else:
+            if not from_query:
+                return json.dumps({"error": "Provide from_id or from_query."})
+            from_id, warning = _resolve_query_to_entity(store, str(from_query))
+            if from_id is None:
+                return json.dumps({"error": f"No entity found for from_query {from_query!r}."})
+            if warning:
+                warnings.append(warning)
+
+        if to_id:
+            to_id = str(to_id)
+        else:
+            if not to_query:
+                return json.dumps({"error": "Provide to_id or to_query."})
+            to_id, warning = _resolve_query_to_entity(store, str(to_query))
+            if to_id is None:
+                return json.dumps({"error": f"No entity found for to_query {to_query!r}."})
+            if warning:
+                warnings.append(warning)
+
         path = find_shortest_path(store.conn, from_id, to_id, max_hops=max_hops)
         # Resolve readable labels while the store is open (path is short, <= max_hops).
         label_map = _labels_for(store.conn, path) if path else {}
@@ -797,19 +878,17 @@ def _trace_path(args: dict[str, Any]) -> str:
         store.close()
 
     if path is None:
-        return json.dumps(
-            {
-                "from_id": from_id,
-                "to_id": to_id,
-                "found": False,
-                "hops": None,
-                "path": [],
-                "labels": [],
-                "message": f"No call path found within {max_hops} hops.",
-            }
-        )
-    return json.dumps(
-        {
+        result = {
+            "from_id": from_id,
+            "to_id": to_id,
+            "found": False,
+            "hops": None,
+            "path": [],
+            "labels": [],
+            "message": f"No call path found within {max_hops} hops.",
+        }
+    else:
+        result = {
             "from_id": from_id,
             "to_id": to_id,
             "found": True,
@@ -817,7 +896,9 @@ def _trace_path(args: dict[str, Any]) -> str:
             "path": path,
             "labels": [label_map.get(eid, eid) for eid in path],
         }
-    )
+    if warnings:
+        result["warnings"] = warnings
+    return json.dumps(result)
 
 
 def _merge_query_hits(conn, queries: list[str], limit: int, has_vectors: bool) -> list:

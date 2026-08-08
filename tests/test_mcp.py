@@ -72,10 +72,14 @@ def test_each_tool_has_object_schema_with_required(monkeypatch: pytest.MonkeyPat
     by_name = {t.name: t for t in tool_definitions()}
     assert by_name["search_code"].inputSchema["required"] == ["query"]
     assert by_name["get_entity_context"].inputSchema["required"] == ["entity_id"]
-    assert by_name["impact_analysis"].inputSchema["required"] == ["entity_id"]
+    # entity_id/query are alternatives (either resolves the target) -- neither
+    # is unconditionally required at the schema level; _impact_analysis
+    # validates at runtime that at least one was given.
+    assert by_name["impact_analysis"].inputSchema["required"] == []
     assert by_name["ask_codebase"].inputSchema["required"] == ["query"]
     assert by_name["get_context"].inputSchema["required"] == ["query"]
-    assert by_name["trace_path"].inputSchema["required"] == ["from_id", "to_id"]
+    # Same story: from_id/from_query and to_id/to_query are each alternatives.
+    assert by_name["trace_path"].inputSchema["required"] == []
     assert by_name["store_summaries"].inputSchema["required"] == ["items"]
     assert by_name["get_unsummarized_entities"].inputSchema["required"] == []
     for tool in by_name.values():
@@ -181,6 +185,49 @@ def test_impact_analysis_tool(indexed_db: Path) -> None:
     assert data["total"] >= 1
 
 
+def test_impact_analysis_tool_definition_has_query_property() -> None:
+    tool = {t.name: t for t in tool_definitions()}["impact_analysis"]
+    assert "query" in tool.inputSchema["properties"]
+    assert "entity_id" in tool.inputSchema["properties"]
+
+
+def test_impact_analysis_by_query_resolves_and_analyzes(indexed_db: Path) -> None:
+    """query is an alternative to entity_id -- collapses search_code + impact_analysis
+    (2 round-trips) into one call."""
+    eid = next(r["entity_id"] for r in _call("search_code", {"query": "authenticate"}))
+    data = _call("impact_analysis", {"query": "authenticate"})
+    assert data["root"] == eid
+    assert data["total"] >= 1
+
+
+def test_impact_analysis_entity_id_wins_when_both_given(indexed_db: Path) -> None:
+    eid = next(r["entity_id"] for r in _call("search_code", {"query": "authenticate"}))
+    data = _call("impact_analysis", {"entity_id": eid, "query": "totally unrelated nonsense"})
+    assert data["root"] == eid
+
+
+def test_impact_analysis_missing_entity_id_and_query_errors(indexed_db: Path) -> None:
+    data = _call("impact_analysis", {})
+    assert "error" in data
+
+
+def test_impact_analysis_query_no_match_errors(
+    indexed_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(mcp_server, "hybrid_search", lambda *a, **k: [])
+    data = _call("impact_analysis", {"query": "anything"})
+    assert "error" in data
+
+
+def test_impact_analysis_query_low_confidence_gets_warning(
+    indexed_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(mcp_server, "_has_confident_match", lambda *a, **k: False)
+    data = _call("impact_analysis", {"query": "authenticate"})
+    assert data.get("warnings")
+    assert any("low-confidence" in w.lower() for w in data["warnings"])
+
+
 def test_ask_codebase_without_embeddings(indexed_db: Path) -> None:
     # Indexed with --no-embed → ask should report the missing embeddings, no API call.
     data = _call("ask_codebase", {"query": "how does login work?"})
@@ -210,7 +257,9 @@ def test_trace_path_tool_definition() -> None:
     tool = by_name["trace_path"]
     assert "from_id" in tool.inputSchema["properties"]
     assert "to_id" in tool.inputSchema["properties"]
-    assert tool.inputSchema["required"] == ["from_id", "to_id"]
+    assert "from_query" in tool.inputSchema["properties"]
+    assert "to_query" in tool.inputSchema["properties"]
+    assert tool.inputSchema["required"] == []
 
 
 def test_trace_path_direct_call(indexed_db: Path) -> None:
@@ -274,6 +323,66 @@ def test_trace_path_not_found(indexed_db: Path) -> None:
     data = _call("trace_path", {"from_id": auth_id, "to_id": caller_id})
     assert data["found"] is False
     assert data["path"] == []
+
+
+def test_trace_path_by_query_resolves_and_traces(indexed_db: Path) -> None:
+    """from_query/to_query are alternatives to from_id/to_id -- collapses
+    search_code x2 + trace_path (3 round-trips) into one call. main.py's
+    boot() calls authenticate() directly (see tests/fixtures/sample_repo_py)."""
+    auth_id = next(
+        h["entity_id"]
+        for h in _call("search_code", {"query": "authenticate"})
+        if h["name"] == "authenticate"
+    )
+    boot_id = next(
+        h["entity_id"] for h in _call("search_code", {"query": "boot"}) if h["name"] == "boot"
+    )
+
+    data = _call("trace_path", {"from_query": "boot", "to_query": "authenticate"})
+    assert data["found"] is True
+    assert data["from_id"] == boot_id
+    assert data["to_id"] == auth_id
+    assert data["hops"] == 1
+
+
+def test_trace_path_mixes_id_and_query(indexed_db: Path) -> None:
+    """One side pre-resolved, the other given as a query."""
+    auth_id = next(
+        h["entity_id"]
+        for h in _call("search_code", {"query": "authenticate"})
+        if h["name"] == "authenticate"
+    )
+    data = _call("trace_path", {"from_query": "boot", "to_id": auth_id})
+    assert data["found"] is True
+    assert data["to_id"] == auth_id
+
+
+def test_trace_path_missing_from_errors(indexed_db: Path) -> None:
+    auth_id = next(
+        h["entity_id"]
+        for h in _call("search_code", {"query": "authenticate"})
+        if h["name"] == "authenticate"
+    )
+    data = _call("trace_path", {"to_id": auth_id})
+    assert "error" in data
+
+
+def test_trace_path_missing_to_errors(indexed_db: Path) -> None:
+    auth_id = next(
+        h["entity_id"]
+        for h in _call("search_code", {"query": "authenticate"})
+        if h["name"] == "authenticate"
+    )
+    data = _call("trace_path", {"from_id": auth_id})
+    assert "error" in data
+
+
+def test_trace_path_query_no_match_errors(
+    indexed_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(mcp_server, "hybrid_search", lambda *a, **k: [])
+    data = _call("trace_path", {"from_query": "anything", "to_query": "anything"})
+    assert "error" in data
 
 
 # ---------- T12.3: list_files ----------
