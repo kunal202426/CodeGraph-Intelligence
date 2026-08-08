@@ -315,6 +315,24 @@ def test_uninstall_purge_noop_when_nothing_to_purge(tmp_path: Path, patched_clau
     assert result.exit_code == 0, result.output
 
 
+def test_uninstall_purge_leaves_a_foreign_claude_md_untouched(
+    tmp_path: Path, patched_claude
+) -> None:
+    """Regression: a CLAUDE.md that predates codegraph (no managed block) must
+    survive `uninstall --purge` byte-for-byte -- only .codegraph/ and hooks are
+    unambiguously codegraph-owned; CLAUDE.md is a shared, generically-named file
+    that could belong to the project itself."""
+    original = "# This Project's Own Agent Instructions\n\nDo not touch.\n"
+    (tmp_path / "CLAUDE.md").write_text(original, encoding="utf-8")
+    db = tmp_path / "g.duckdb"
+    runner.invoke(app, ["install", "claude", "--db", str(db), "--yes", "--no-guide"])
+    (tmp_path / ".codegraph").mkdir()
+
+    result = runner.invoke(app, ["uninstall", "claude", "--yes", "--purge"])
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "CLAUDE.md").read_text(encoding="utf-8") == original
+
+
 def test_uninstall_purge_respects_confirm_n(tmp_path: Path, patched_claude) -> None:
     db = tmp_path / "g.duckdb"
     runner.invoke(app, ["install", "claude", "--db", str(db), "--yes"])

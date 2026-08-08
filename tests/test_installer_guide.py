@@ -177,6 +177,22 @@ def test_remove_noop_when_no_block(tmp_path: Path) -> None:
     assert remove_agent_guide(tmp_path) is False
 
 
+def test_remove_leaves_a_foreign_claude_md_byte_for_byte_untouched(tmp_path: Path) -> None:
+    """Regression: a CLAUDE.md that predates codegraph and was never written by
+    write_agent_guide (no BEGIN marker) must survive `codegraph uninstall`
+    (with or without --purge) completely untouched -- not just "return False",
+    but the file must still exist with identical content. Real project CLAUDE.md
+    files (e.g. a large open-source repo's own agent instructions) look nothing
+    like an empty/managed file and must never be deleted by uninstall cleanup."""
+    path = tmp_path / GUIDE_FILENAME
+    original = "# Project Agent Instructions\n\nThis repo has its own conventions.\n"
+    path.write_text(original, encoding="utf-8")
+
+    assert remove_agent_guide(tmp_path) is False
+    assert path.exists()
+    assert path.read_text(encoding="utf-8") == original
+
+
 def test_write_remove_roundtrip_restores_original(tmp_path: Path) -> None:
     path = tmp_path / GUIDE_FILENAME
     original = "# My Project\n\nSome existing instructions.\n"

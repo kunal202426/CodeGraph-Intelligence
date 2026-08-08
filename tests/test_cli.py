@@ -64,6 +64,53 @@ def test_unknown_encoding_name_degrades_instead_of_raising() -> None:
     assert ok.isascii()
 
 
+# ---------- non-terminal progress fallback ----------
+#
+# Regression: Rich's Progress/Live rendering silently produces zero output
+# when the console isn't attached to a real terminal (piped, redirected, or
+# captured by another process) -- confirmed by direct repro. A `codegraph
+# index` run watched through a log file or a background process looked
+# completely frozen for 11+ minutes on a large repo even though it was
+# actively working, because the whole progress bar was invisible outside a
+# real terminal. `_should_emit_plain_progress` throttles a plain-text
+# fallback so those contexts still show something.
+
+
+def test_should_emit_plain_progress_always_true_on_completion() -> None:
+    from codegraph.cli import _should_emit_plain_progress
+
+    assert _should_emit_plain_progress(5, 5, 0.0) is True
+
+
+def test_should_emit_plain_progress_zero_total_counts_as_complete() -> None:
+    from codegraph.cli import _should_emit_plain_progress
+
+    assert _should_emit_plain_progress(0, 0, 0.0) is True
+
+
+def test_should_emit_plain_progress_false_before_interval() -> None:
+    from codegraph.cli import _should_emit_plain_progress
+
+    assert _should_emit_plain_progress(2, 10, 0.5, min_interval=2.0) is False
+
+
+def test_should_emit_plain_progress_true_after_interval() -> None:
+    from codegraph.cli import _should_emit_plain_progress
+
+    assert _should_emit_plain_progress(2, 10, 2.5, min_interval=2.0) is True
+
+
+def test_index_prints_a_plain_progress_line_when_not_a_terminal(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """CliRunner's captured stdout isn't a real terminal, so this exercises the
+    same non-terminal path a piped/logged `codegraph index` run hits."""
+    db = tmp_path / "graph.duckdb"
+    result = runner.invoke(app, ["index", str(SAMPLE_REPO), "--db", str(db)])
+    assert result.exit_code == 0, result.stdout
+    assert "Parsing... 7/7 (100%)" in result.stdout
+
+
 # ---------- index ----------
 
 

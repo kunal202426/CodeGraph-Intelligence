@@ -8,6 +8,7 @@ from __future__ import annotations
 import contextlib
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import typer
@@ -19,6 +20,7 @@ from rich.progress import (
     TaskProgressColumn,
     TextColumn,
     TimeElapsedColumn,
+    TimeRemainingColumn,
 )
 from rich.table import Table
 from rich.tree import Tree
@@ -102,6 +104,46 @@ def _pick_glyphs(encoding: str | None) -> tuple[bool, str, str, str]:
 # them, plain ASCII everywhere else. Same information either way.
 _FANCY, OK_GLYPH, WARN_GLYPH, RULE_CHAR = _pick_glyphs(getattr(sys.stdout, "encoding", None))
 
+
+def _should_emit_plain_progress(
+    completed: int, total: int, elapsed_since_last: float, min_interval: float = 2.0
+) -> bool:
+    """Whether a non-terminal progress fallback line should print now.
+
+    Rich's Progress/Live rendering silently produces zero output when the
+    console isn't attached to a real terminal -- it can't redraw in place
+    without one, so it skips every intermediate frame rather than spamming
+    full reprints. A `codegraph index` run piped to a log file or watched
+    through a background process therefore looks completely frozen even
+    while it's actively working. This throttles a plain-text fallback to
+    roughly every *min_interval* seconds so long runs stay legible without
+    spamming a line per file, while always firing once progress is complete
+    so the final state is never missed.
+    """
+    if completed >= total:
+        return True
+    return elapsed_since_last >= min_interval
+
+
+def _make_plain_embed_reporter(start: float) -> Callable[[int, int], None]:
+    """Build an `_embed_changed(on_progress=...)` callback that prints a
+    throttled plain-text line -- the embedding-phase counterpart to the
+    Parsing loop's `_advance()` fallback, for the same non-terminal reason."""
+    last_print = time.monotonic()
+
+    def _report(done: int, total: int) -> None:
+        nonlocal last_print
+        now = time.monotonic()
+        if _should_emit_plain_progress(done, total, now - last_print):
+            pct = round(100 * done / total) if total else 100
+            console.print(
+                f"[dim]Embedding... {done}/{total} ({pct}%), {now - start:.0f}s elapsed[/dim]"
+            )
+            last_print = now
+
+    return _report
+
+
 # Box-drawing wordmark shown once on `init` (the first-run moment). Kept to
 # three short lines so it reads as a product header, not an ASCII-art banner
 # that eats half the terminal.
@@ -155,7 +197,11 @@ _LANGUAGE_PARSERS = {
 }
 
 
-def _embed_changed(store: GraphStore, batch_size: int = 256) -> tuple[int, str | None]:
+def _embed_changed(
+    store: GraphStore,
+    batch_size: int = 256,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> tuple[int, str | None]:
     """(Re-)embed entities whose embedding input changed.
 
     An entity needs embedding when it has no vector yet OR its stored
@@ -163,6 +209,11 @@ def _embed_changed(store: GraphStore, batch_size: int = 256) -> tuple[int, str |
     This makes embeddings self-healing: editing a docstring re-embeds just that
     entity, and changing the `build_embed_input` recipe re-embeds everything,
     while an unchanged re-index re-embeds nothing.
+
+    *on_progress*, if given, is called (embedded_so_far, total) after each
+    batch -- the caller's hook for a non-terminal fallback, since this
+    function's own Progress bar is as invisible outside a real terminal as
+    the one in `index()`.
 
     Returns (count_reembedded, error_message). Model load/encode failures are
     returned (not raised) so indexing still succeeds with literal search.
@@ -205,6 +256,7 @@ def _embed_changed(store: GraphStore, batch_size: int = 256) -> tuple[int, str |
         BarColumn(),
         TextColumn("{task.completed}/{task.total}"),
         TimeElapsedColumn(),
+        TimeRemainingColumn(),
     )
     try:
         with Progress(*progress_cols, console=console, transient=True) as progress:
@@ -217,6 +269,8 @@ def _embed_changed(store: GraphStore, batch_size: int = 256) -> tuple[int, str |
                 )
                 embedded += len(chunk)
                 progress.advance(task, len(chunk))
+                if on_progress is not None:
+                    on_progress(embedded, len(pending))
     except Exception as exc:  # noqa: BLE001 - model download/encode failure mid-run
         return embedded, f"{type(exc).__name__}: {exc}"
     return embedded, None
@@ -332,15 +386,36 @@ def index(
         TaskProgressColumn(),
         TextColumn("[dim]{task.completed}/{task.total}[/dim]"),
         TimeElapsedColumn(),
+        TimeRemainingColumn(),
         TextColumn("[dim]{task.fields[current]}[/dim]"),
     )
+    parsed_so_far = 0
+    last_plain_print = time.monotonic()
+
+    def _advance() -> None:
+        # Rich's bar handles the real terminal; a real terminal never sees
+        # this branch's output since is_terminal short-circuits it below.
+        nonlocal parsed_so_far, last_plain_print
+        progress.advance(task)
+        if console.is_terminal:
+            return
+        parsed_so_far += 1
+        now = time.monotonic()
+        if _should_emit_plain_progress(parsed_so_far, len(files), now - last_plain_print):
+            pct = round(100 * parsed_so_far / len(files)) if files else 100
+            console.print(
+                f"[dim]Parsing... {parsed_so_far}/{len(files)} ({pct}%), "
+                f"{now - start:.0f}s elapsed[/dim]"
+            )
+            last_plain_print = now
+
     with Progress(*progress_cols, console=console, transient=True) as progress:
         task = progress.add_task("Parsing", total=len(files), current="")
         for path, lang in files:
             parser = _LANGUAGE_PARSERS.get(lang)
             if parser is None:
                 skipped_lang += 1
-                progress.advance(task)
+                _advance()
                 continue
 
             try:
@@ -348,7 +423,7 @@ def index(
             except OSError as exc:
                 console.print(f"[red]Skipping unreadable file {path}: {exc}[/red]")
                 parse_errors += 1
-                progress.advance(task)
+                _advance()
                 continue
 
             rel_path = path.relative_to(repo).as_posix()
@@ -372,13 +447,13 @@ def index(
                     if prev_hash is not None:
                         pending_stale_paths.append(rel_path)
                     pending_file_rows.append((rel_path, lang, current_hash, source.count("\n") + 1))
-                progress.advance(task)
+                _advance()
                 continue
 
             # T2.3: skip re-parse when hash hasn't changed (unless --force).
             if prev_hash == current_hash and not force:
                 unchanged_files += 1
-                progress.advance(task)
+                _advance()
                 continue
 
             try:
@@ -386,7 +461,7 @@ def index(
             except Exception as exc:  # noqa: BLE001 - log unexpected parser errors then continue
                 console.print(f"[red]Parser error on {rel_path}: {exc}[/red]")
                 parse_errors += 1
-                progress.advance(task)
+                _advance()
                 continue
 
             # Drop stale rows only when the file was indexed before (changed
@@ -398,7 +473,7 @@ def index(
             pending_entities.extend(result.entities)
             pending_edges.extend(result.edges)
             parsed_files += 1
-            progress.advance(task)
+            _advance()
 
             if len(pending_file_rows) >= _FLUSH_CHUNK_SIZE:
                 _flush()
@@ -409,16 +484,29 @@ def index(
     # Both this and embedding below used to run with no output at all -- on a
     # real repo that's tens of seconds of a seemingly-hung terminal right after
     # the progress bar disappears. A live spinner costs nothing and turns dead
-    # air into visible progress.
-    with console.status("[cyan]Resolving cross-file symbols...", spinner="dots"):
+    # air into visible progress. console.status is itself Live-based and is
+    # just as invisible outside a real terminal as the Parsing bar above, so
+    # non-terminal runs (piped, redirected, or watched via a background
+    # process) get a plain print instead.
+    if console.is_terminal:
+        with console.status("[cyan]Resolving cross-file symbols...", spinner="dots"):
+            stats = resolve_symbols(store, repo)
+    else:
+        console.print("[dim]Resolving cross-file symbols...[/dim]")
         stats = resolve_symbols(store, repo)
 
     # Semantic embeddings (T3.3/T3.5): (re-)embed entities whose input changed.
     embedded = 0
     embed_error: str | None = None
     if not no_embed:
-        with console.status("[cyan]Computing semantic embeddings...", spinner="dots"):
-            embedded, embed_error = _embed_changed(store)
+        if console.is_terminal:
+            with console.status("[cyan]Computing semantic embeddings...", spinner="dots"):
+                embedded, embed_error = _embed_changed(store)
+        else:
+            console.print("[dim]Computing semantic embeddings...[/dim]")
+            embedded, embed_error = _embed_changed(
+                store, on_progress=_make_plain_embed_reporter(start)
+            )
 
     elapsed = time.monotonic() - start
     n_entities = store.count_entities()
