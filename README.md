@@ -541,6 +541,7 @@ uv run codegraph init                        # one-shot: index + install + CLAUD
 uv run codegraph install cursor              # wire a specific agent, no re-index
 uv run codegraph install claude --print-config   # dry-run, print the JSON
 uv run codegraph uninstall claude            # remove entry + CLAUDE.md block
+uv run codegraph uninstall claude --purge    # also delete .codegraph/ + git hooks
 ```
 
 | Target | Agent | Global config written |

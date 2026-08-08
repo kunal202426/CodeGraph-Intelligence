@@ -256,6 +256,78 @@ def test_uninstall_no_guide_leaves_claude_md(tmp_path: Path, patched_claude) -> 
 
 
 # ---------------------------------------------------------------------------
+# uninstall — --purge
+# ---------------------------------------------------------------------------
+
+
+def test_uninstall_purge_removes_codegraph_dir(tmp_path: Path, patched_claude) -> None:
+    db = tmp_path / "g.duckdb"
+    runner.invoke(app, ["install", "claude", "--db", str(db), "--yes"])
+    codegraph_dir = tmp_path / ".codegraph"
+    codegraph_dir.mkdir()
+    (codegraph_dir / "graph.duckdb").write_text("fake", encoding="utf-8")
+
+    result = runner.invoke(app, ["uninstall", "claude", "--yes", "--purge"])
+    assert result.exit_code == 0, result.output
+    assert not codegraph_dir.exists()
+
+
+def test_uninstall_without_purge_leaves_codegraph_dir(tmp_path: Path, patched_claude) -> None:
+    db = tmp_path / "g.duckdb"
+    runner.invoke(app, ["install", "claude", "--db", str(db), "--yes"])
+    codegraph_dir = tmp_path / ".codegraph"
+    codegraph_dir.mkdir()
+    (codegraph_dir / "graph.duckdb").write_text("fake", encoding="utf-8")
+
+    result = runner.invoke(app, ["uninstall", "claude", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert codegraph_dir.exists()
+
+
+def test_uninstall_purge_removes_git_hooks(tmp_path: Path, patched_claude) -> None:
+    from codegraph.sync.git_hooks import has_git_hooks, install_git_hooks
+
+    (tmp_path / ".git" / "hooks").mkdir(parents=True)
+    db = tmp_path / "g.duckdb"
+    runner.invoke(app, ["install", "claude", "--db", str(db), "--yes"])
+    install_git_hooks(tmp_path)
+    assert has_git_hooks(tmp_path)
+
+    result = runner.invoke(app, ["uninstall", "claude", "--yes", "--purge"])
+    assert result.exit_code == 0, result.output
+    assert not has_git_hooks(tmp_path)
+
+
+def test_uninstall_purge_prints_summary(tmp_path: Path, patched_claude) -> None:
+    db = tmp_path / "g.duckdb"
+    runner.invoke(app, ["install", "claude", "--db", str(db), "--yes"])
+    (tmp_path / ".codegraph").mkdir()
+
+    result = runner.invoke(app, ["uninstall", "claude", "--yes", "--purge"])
+    assert "Removed .codegraph" in _plain(result.output)
+
+
+def test_uninstall_purge_noop_when_nothing_to_purge(tmp_path: Path, patched_claude) -> None:
+    """No .codegraph/ dir and no hooks -- --purge must not error."""
+    db = tmp_path / "g.duckdb"
+    runner.invoke(app, ["install", "claude", "--db", str(db), "--yes"])
+    result = runner.invoke(app, ["uninstall", "claude", "--yes", "--purge"])
+    assert result.exit_code == 0, result.output
+
+
+def test_uninstall_purge_respects_confirm_n(tmp_path: Path, patched_claude) -> None:
+    db = tmp_path / "g.duckdb"
+    runner.invoke(app, ["install", "claude", "--db", str(db), "--yes"])
+    codegraph_dir = tmp_path / ".codegraph"
+    codegraph_dir.mkdir()
+
+    result = runner.invoke(app, ["uninstall", "claude", "--purge"], input="n\n")
+    assert result.exit_code == 0
+    assert "Aborted" in _plain(result.output)
+    assert codegraph_dir.exists()
+
+
+# ---------------------------------------------------------------------------
 # T16.2 — discovery default (no --db) vs pinned (--db)
 # ---------------------------------------------------------------------------
 

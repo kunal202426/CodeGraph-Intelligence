@@ -1488,6 +1488,11 @@ def uninstall(
     no_guide: bool = typer.Option(
         False, "--no-guide", help="Leave the CLAUDE.md agent guide in place."
     ),
+    purge: bool = typer.Option(
+        False,
+        "--purge",
+        help="Also delete the .codegraph/ index directory and any installed git hooks.",
+    ),
 ) -> None:
     """Remove CodeGraph MCP entry from a supported agent config. [T13.3]"""
     from codegraph.installer import get_target  # also triggers auto-registration
@@ -1514,7 +1519,13 @@ def uninstall(
         )
         return
 
-    if not yes and not typer.confirm(f"Remove CodeGraph from {t.display_name}?", default=False):
+    prompt = f"Remove CodeGraph from {t.display_name}?"
+    if purge:
+        prompt = (
+            f"Remove CodeGraph from {t.display_name} and delete .codegraph/ "
+            "(index) plus any git hooks?"
+        )
+    if not yes and not typer.confirm(prompt, default=False):
         console.print("Aborted.")
         raise typer.Exit()
 
@@ -1523,6 +1534,21 @@ def uninstall(
 
     if not no_guide and remove_agent_guide(Path(".")):
         console.print("[dim]Removed the CodeGraph block from CLAUDE.md.[/dim]")
+
+    if purge:
+        import shutil
+
+        from codegraph.sync.git_hooks import uninstall_git_hooks
+
+        codegraph_dir = Path(".codegraph")
+        if codegraph_dir.exists():
+            shutil.rmtree(codegraph_dir)
+            console.print("[dim]Removed .codegraph/ (index and embeddings).[/dim]")
+
+        touched = uninstall_git_hooks(Path("."))
+        if touched:
+            noun = "file" if len(touched) == 1 else "files"
+            console.print(f"[dim]Removed CodeGraph sync hooks ({len(touched)} {noun}).[/dim]")
 
 
 hooks_app = typer.Typer(
