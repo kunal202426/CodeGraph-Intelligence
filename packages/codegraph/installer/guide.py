@@ -34,12 +34,12 @@ surface cross-file edges files can't show. Use them by default.
 
 **Rules (every task):**
 1. First message? Skim README/docs for a broad question -- often already answers it. Then
-   `project_brief()` once. For anything deeper, `get_context(...)` before a file/grep/
+   `project_brief()` once. For anything deeper, `get_context(...)` before a file/grep/skill/
    explore-subagent -- skip `index_status`; `get_context` reports staleness via `warnings`,
-   run `reindex` only if it appears.
+   run `reindex` if it appears.
 2. Use `detail="full"` when you'll need real code -- a second round-trip costs more than the
    larger response. Summary mode is for browsing candidates.
-3. Editing? Locate it, then Read + Edit -- Edit needs a fresh Read either way.
+3. Editing? Locate it, then Read + Edit -- Edit needs a fresh Read anyway.
 4. After `get_context`, report: `CodeGraph: ~<tokens_estimated> vs ~<tokens_if_read> tokens
    (<savings_ratio>x less)` -- response size, not $ cost.
 

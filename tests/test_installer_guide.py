@@ -68,6 +68,21 @@ def test_guide_tells_agent_not_to_dispatch_explore_subagent(tmp_path: Path) -> N
     assert "explore-subagent" in text
 
 
+def test_guide_tells_agent_to_use_codegraph_even_when_a_skill_fires_first(
+    tmp_path: Path,
+) -> None:
+    """Real finding, live on Grafana: an unrelated skill (superpowers:brainstorming,
+    invoked for an editing task under its own "invoke if even 1% relevant" policy)
+    took over the agent's flow and it fell back to manual grep/Read entirely,
+    skipping codegraph tools -- twice reproduced, never happened on any pure Q&A
+    test that never triggered a skill. Universal, not brainstorming-specific: any
+    skill/plugin can grab the flow the same way, so the guide names "skill"
+    generically in the same before-this-list as grep/explore-subagent, not just
+    the one skill that happened to trigger it live."""
+    text = write_agent_guide(tmp_path).read_text(encoding="utf-8")
+    assert "before a file/grep/skill" in text
+
+
 def test_guide_is_strong_mandate_with_savings_instruction(tmp_path: Path) -> None:
     """The guide must (a) require CodeGraph before reading files and (b) tell the
     agent to report the token savings — the two levers behind 'auto-use'."""
