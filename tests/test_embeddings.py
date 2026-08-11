@@ -7,10 +7,14 @@ an external dependency we don't want gating CI on a flaky HF download.
 
 from __future__ import annotations
 
+import threading
+import time
+
 import numpy as np
 import pytest
 from codegraph.embeddings.pipeline import (
     EMBEDDING_DIM,
+    _acquire_with_breadcrumb,
     _hf_cache_has_model,
     embed_batch,
     embed_one,
@@ -26,6 +30,49 @@ def test_hf_cache_has_model_detects_presence(tmp_path, monkeypatch) -> None:
     assert _hf_cache_has_model("all-MiniLM-L6-v2") is False
     (tmp_path / "models--sentence-transformers--all-MiniLM-L6-v2").mkdir()
     assert _hf_cache_has_model("all-MiniLM-L6-v2") is True
+
+
+# ---------- lock-wait visibility ----------
+#
+# Regression: a concurrent caller used to block on `_model_lock` with zero
+# feedback while another thread (the background boot warmup, or a second
+# concurrent MCP request) was already loading the model -- indistinguishable
+# from a hang from the caller's side. Confirmed live: the first real
+# `get_context` after server startup can wait on this lock for 40+ seconds
+# with nothing printed anywhere. `_acquire_with_breadcrumb` makes that wait
+# observable on stderr instead of silent.
+
+
+def test_acquire_with_breadcrumb_uncontended_acquires_silently(capsys) -> None:
+    lock = threading.Lock()
+    _acquire_with_breadcrumb(lock, "should not print", poll_timeout=0.05)
+    try:
+        assert capsys.readouterr().err == ""
+    finally:
+        lock.release()
+
+
+def test_acquire_with_breadcrumb_prints_while_waiting_on_a_held_lock(capsys) -> None:
+    lock = threading.Lock()
+    lock.acquire()  # simulate another thread already holding it
+
+    done = threading.Event()
+
+    def _waiter() -> None:
+        _acquire_with_breadcrumb(lock, "CodeGraph: waiting for it", poll_timeout=0.05)
+        lock.release()
+        done.set()
+
+    t = threading.Thread(target=_waiter, daemon=True)
+    t.start()
+    time.sleep(0.2)  # well past poll_timeout, before the main thread releases
+
+    assert not done.is_set(), "waiter should still be blocked on the held lock"
+    assert "CodeGraph: waiting for it" in capsys.readouterr().err
+
+    lock.release()
+    t.join(timeout=2.0)
+    assert done.is_set()
 
 
 @pytest.fixture(scope="module", autouse=True)

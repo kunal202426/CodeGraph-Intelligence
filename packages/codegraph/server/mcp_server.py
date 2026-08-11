@@ -1492,21 +1492,25 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> list[TextCon
 
 
 def _warm_embedding_model() -> None:
-    """Load the embedding model in the MAIN thread at startup.
+    """Load the embedding model in the MAIN thread at startup, synchronously.
 
     ``get_context`` embeds its query for semantic search. Sync MCP handlers run
-    via ``anyio.to_thread``, so a lazy first load would import the heavy
-    sentence-transformers / torch / scikit-learn stack inside a worker thread
-    while the asyncio stdio loop runs in the main thread -- and a first-time
-    import of that stack off the main thread can deadlock or stall for minutes,
-    making the first ``get_context`` appear frozen. Pre-loading here, in the main
-    thread before the serve loop starts, makes the first call fast and reliable.
+    via ``anyio.to_thread``, so loading the heavy sentence-transformers / torch
+    stack off the main thread -- a background thread, or an anyio worker
+    thread handling a real request -- while the asyncio stdio loop is running
+    on the main thread DEADLOCKS THE WHOLE SERVER. This isn't a theoretical
+    risk: confirmed by direct reproduction against a real 97k-entity index --
+    this exact warmup code completes in ~31s called synchronously, but hangs
+    indefinitely (280s+, still alive, zero progress) when the same call is
+    dispatched through anyio.to_thread instead. An earlier version of this
+    function ran on a background thread with a timeout-and-abandon fallback
+    to avoid blocking the MCP handshake; that reintroduced exactly this
+    deadlock, because "abandon" left the import still in flight on a non-main
+    thread once serving started. There is no safe way to background this --
+    call it here, synchronously, before anyio.run, every time.
 
     Skipped when the index has no embeddings. Non-fatal: any failure just falls
     back to lazy loading + literal-only search (handlers already handle that).
-
-    Called via `_warm_embedding_model_with_timeout` below, never directly from
-    `main()` -- see that function for why.
     """
     import sys
 
@@ -1523,45 +1527,6 @@ def _warm_embedding_model() -> None:
         print("CodeGraph: embedding model ready.", file=sys.stderr)
     except Exception:  # noqa: BLE001 — warmup is best-effort; lazy load still works
         pass
-
-
-# Generous but bounded: the dev-machine baseline for this import is well under
-# 1s, so this only ever engages on a genuinely slow environment (antivirus
-# scanning a freshly-written venv, a cold disk, a first-time model download).
-_WARM_UP_TIMEOUT_SEC = 8.0
-
-
-def _warm_embedding_model_with_timeout(timeout: float = _WARM_UP_TIMEOUT_SEC) -> None:
-    """Run `_warm_embedding_model` with a hard wall-clock budget.
-
-    `_warm_embedding_model` runs in the main thread deliberately (see its
-    docstring) -- but that means an unusually slow environment blocks not
-    just the first `get_context`, it blocks the MCP stdio handshake itself,
-    so the *whole server* looks stuck "connecting" to an agent that gives up
-    waiting. Found live: a freshly-reinstalled venv with active antivirus
-    scanning took ~12.5s to become ready vs. ~0.1s on a warm one.
-
-    Runs on a dedicated daemon thread (not the shared `anyio.to_thread` pool
-    real tool calls use, and not a `ThreadPoolExecutor`, whose non-daemon
-    workers would otherwise block process exit if still running) so it can
-    be walked away from cleanly. If it doesn't finish within `timeout`, the
-    server starts serving anyway: the import may still complete in the
-    background and be ready for a later call, or the first real embedding
-    call falls back to the model's own lazy-load path -- already non-fatal
-    by design, just no longer able to also stall the handshake.
-    """
-    import sys
-    import threading
-
-    thread = threading.Thread(target=_warm_embedding_model, daemon=True, name="codegraph-warmup")
-    thread.start()
-    thread.join(timeout=timeout)
-    if thread.is_alive():
-        print(
-            f"CodeGraph: embedding warm-up still running after {timeout:.0f}s -- "
-            "starting the server anyway (first semantic search may be slower).",
-            file=sys.stderr,
-        )
 
 
 def _breadcrumb(msg: str) -> None:
@@ -1673,18 +1638,20 @@ async def _serve() -> None:
         await server.run(read_stream, write_stream, server.create_initialization_options())
 
 
-def _start_boot_diagnostics() -> threading.Thread:
-    """Run the staleness check + embedding warm-up on a background thread.
+def _start_staleness_check_in_background() -> threading.Thread:
+    """Run the staleness check on a background thread.
 
-    Both are best-effort (staleness is an early stderr warning; warm-up just
-    pre-loads the embedding model so the first real call isn't slow) --
-    neither is required to serve requests. They used to run before
-    stdio_server() started, blocking the MCP handshake itself: on a large
-    repo (tens of thousands of files) the staleness scan alone can take
-    several seconds, and a real 16k-file repo pushed total boot past 13s --
-    long enough for Claude Code's own MCP connect timeout to give up and
-    report "Failed to connect" even though the server was working fine.
-    Running them here instead means the handshake is never gated on repo size.
+    Best-effort (an early stderr warning if source files changed since last
+    index) and not required to serve requests -- unlike embedding warmup
+    (see `_warm_embedding_model`), it only runs DuckDB queries, no native-
+    threading-sensitive imports, so backgrounding it carries none of that
+    deadlock risk. It used to run before stdio_server() started, blocking the
+    MCP handshake itself: on a large repo (tens of thousands of files) the
+    scan alone can take several seconds, and a real 16k-file repo pushed
+    total boot past 13s -- long enough for Claude Code's own MCP connect
+    timeout to give up and report "Failed to connect" even though the server
+    was working fine. Running it here instead means the handshake is never
+    gated on repo size.
     """
     import time
 
@@ -1706,17 +1673,9 @@ def _start_boot_diagnostics() -> threading.Thread:
         except Exception:  # noqa: BLE001 — staleness check is best-effort
             pass
         stale_secs = time.monotonic() - stale_start
+        _breadcrumb(f"background staleness check done ({stale_secs:.1f}s)")
 
-        warm_start = time.monotonic()
-        _warm_embedding_model_with_timeout()
-        warm_secs = time.monotonic() - warm_start
-
-        _breadcrumb(
-            f"background boot diagnostics done (staleness {stale_secs:.1f}s, "
-            f"warmup {warm_secs:.1f}s)"
-        )
-
-    thread = threading.Thread(target=_run, daemon=True, name="codegraph-boot-diagnostics")
+    thread = threading.Thread(target=_run, daemon=True, name="codegraph-staleness-check")
     thread.start()
     return thread
 
@@ -1733,7 +1692,11 @@ def main() -> None:
         _db_path = args.db
     _breadcrumb(f"starting (db: {get_db_path()})")
     _start_ppid_watchdog(os.getppid())
-    _start_boot_diagnostics()
+    _start_staleness_check_in_background()
+
+    # Must run synchronously, here, before anyio.run below -- see
+    # _warm_embedding_model's docstring for why backgrounding this deadlocks.
+    _warm_embedding_model()
 
     _breadcrumb(f"serving (boot {time.monotonic() - boot_start:.1f}s)")
 

@@ -61,6 +61,32 @@ if _hf_cache_has_model(DEFAULT_MODEL):
 _model_lock = threading.Lock()
 _model_cache: dict[str, SentenceTransformer] = {}
 
+# Generous but bounded: the common (uncontended) case must pay nothing for
+# this check, so it only ever engages when another thread is genuinely
+# already holding the lock.
+_LOCK_BREADCRUMB_POLL_SEC = 2.0
+
+
+def _acquire_with_breadcrumb(
+    lock: threading.Lock, waiting_message: str, poll_timeout: float = _LOCK_BREADCRUMB_POLL_SEC
+) -> None:
+    """Acquire *lock*, printing *waiting_message* to stderr if it's already held.
+
+    A plain blocking `lock.acquire()` gives zero feedback while a caller waits
+    on another thread's in-progress work. That's exactly what made the first
+    real `get_context` after server startup look silently frozen: it blocked
+    on `_model_lock` waiting for the background boot-warmup thread's embedding
+    model load, which took 40+ seconds on a real slow environment, with
+    nothing printed anywhere the whole time. Tries a short non-blocking
+    window first so the common (uncontended) case pays nothing.
+    """
+    if lock.acquire(timeout=poll_timeout):
+        return
+    import sys
+
+    print(waiting_message, file=sys.stderr)
+    lock.acquire()
+
 
 def model_is_cached(model_name: str = DEFAULT_MODEL) -> bool:
     """Best-effort check: is the model already in the local HuggingFace cache?
@@ -85,7 +111,12 @@ def _get_model(model_name: str = DEFAULT_MODEL) -> SentenceTransformer:
     model = _model_cache.get(model_name)
     if model is not None:
         return model
-    with _model_lock:
+    _acquire_with_breadcrumb(
+        _model_lock,
+        "CodeGraph: waiting for the embedding model to finish loading "
+        "(first use in this session, can take up to a minute on a slow disk)...",
+    )
+    try:
         model = _model_cache.get(model_name)
         if model is None:
             # Quiet the Windows "symlinks unsupported" cache warning from HF.
@@ -94,6 +125,8 @@ def _get_model(model_name: str = DEFAULT_MODEL) -> SentenceTransformer:
 
             model = SentenceTransformer(model_name)
             _model_cache[model_name] = model
+    finally:
+        _model_lock.release()
     return model
 
 

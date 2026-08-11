@@ -988,21 +988,21 @@ def test_main_does_not_block_on_slow_staleness_check(
     assert elapsed < 0.1, f"main() blocked for {elapsed:.2f}s on the staleness check"
 
 
-def test_boot_diagnostics_run_in_background_and_report_when_done(
+def test_staleness_check_runs_in_background_and_reports_when_done(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
 ) -> None:
-    """The backgrounded staleness+warmup work must still leave its own
-    breadcrumb once it finishes, preserving the debugging value of the old
-    (blocking) combined line -- just off the handshake's critical path."""
+    """Staleness (plain DB queries, no native-threading-sensitive imports) is
+    safe to background and still leaves its own breadcrumb once it finishes.
+    Unlike embedding warmup (see test_main_warms_embedding_model_
+    synchronously_before_serving), it never touches torch/sentence-
+    transformers, so it doesn't carry the same off-main-thread deadlock risk."""
     monkeypatch.setattr(mcp_server, "_db_path", tmp_path / "nope.duckdb")
 
-    thread = mcp_server._start_boot_diagnostics()
+    thread = mcp_server._start_staleness_check_in_background()
     thread.join(timeout=5.0)
     assert not thread.is_alive()
 
-    captured = capsys.readouterr()
-    assert "staleness" in captured.err
-    assert "warmup" in captured.err
+    assert "staleness" in capsys.readouterr().err
 
 
 def test_process_alive_true_for_current_process() -> None:
@@ -1053,40 +1053,29 @@ def test_start_ppid_watchdog_spawns_a_named_daemon_thread() -> None:
     assert thread.daemon is True
 
 
-def test_warm_embedding_model_with_timeout_waits_for_a_fast_warmup(
-    monkeypatch: pytest.MonkeyPatch,
+def test_main_warms_embedding_model_synchronously_before_serving(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The common case: warmup finishes well within budget, so the call
-    blocks until it's actually done (same behavior as calling it directly)."""
-    called = {"n": 0}
-    monkeypatch.setattr(mcp_server, "_warm_embedding_model", lambda: called.__setitem__("n", 1))
-    mcp_server._warm_embedding_model_with_timeout(timeout=5.0)
-    assert called["n"] == 1
+    """Regression: loading sentence-transformers/torch off the main thread
+    while the asyncio event loop is running deadlocks the whole server --
+    confirmed live by direct reproduction (same warmup code: ~31s called
+    synchronously vs. indefinite hang dispatched via anyio.to_thread, twice
+    reproduced against a real 97k-entity index). A background-thread or
+    timeout-and-abandon warmup (the previous design) can leave that import
+    still in flight on a non-main thread once the event loop starts -- the
+    exact unsafe state. Warmup must complete on the main thread, before
+    anyio.run, no exceptions."""
+    import anyio
 
+    order: list[str] = []
+    monkeypatch.setattr(mcp_server, "_db_path", tmp_path / "nope.duckdb")
+    monkeypatch.setattr("sys.argv", ["codegraph-mcp"])
+    monkeypatch.setattr(mcp_server, "_warm_embedding_model", lambda: order.append("warm"))
+    monkeypatch.setattr(anyio, "run", lambda fn: order.append("serve"))
 
-def test_warm_embedding_model_with_timeout_does_not_block_past_budget(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Regression test: a slow environment (antivirus scanning a freshly
-    installed venv, a cold disk) used to block the MCP handshake itself for
-    however long the import took -- an agent that gives up waiting saw the
-    whole server as stuck "connecting". Found live: ~12.5s on a freshly
-    reinstalled venv vs. ~0.1s on a warm one. Must now return at the timeout
-    regardless of how long the underlying warmup actually takes."""
-    import threading
-    import time
+    mcp_server.main()
 
-    release = threading.Event()
-
-    def _slow_warmup() -> None:
-        release.wait(timeout=5.0)  # would hang the test if not released
-
-    monkeypatch.setattr(mcp_server, "_warm_embedding_model", _slow_warmup)
-    start = time.monotonic()
-    mcp_server._warm_embedding_model_with_timeout(timeout=0.2)
-    elapsed = time.monotonic() - start
-    release.set()  # let the background thread finish so it doesn't linger
-    assert elapsed < 1.0, f"blocked for {elapsed:.2f}s, expected to return near the 0.2s timeout"
+    assert order == ["warm", "serve"]
 
 
 def test_get_context_respects_token_budget(indexed_db: Path) -> None:
