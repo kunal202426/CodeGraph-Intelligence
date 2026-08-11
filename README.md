@@ -52,13 +52,10 @@ lookup, instead of a pile of file reads.
 **Who it's for:** anyone using Claude Code, Cursor, Codex, Gemini, or another MCP agent on a
 codebase big enough that "just read the files" has started to hurt.
 
-**The honest version:** on a small repo this is roughly break-even — the agent could have just
-read the files. It pays off as the codebase grows and the questions get more cross-cutting.
-Measured on a real ~1300-entity, 4-service repo: **14% cheaper overall**. On a 97,000-entity
-repo (Grafana), the full round came back close to a tie — until it surfaced a real capability
-gap, which got fixed the same day and turned the exact question that exposed it into a
-**58% cheaper** win on re-test. Full numbers, including rounds where it came out worse, are in
-[the cost findings](docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md) — nothing swept under the rug.
+**Real numbers:** **58% cheaper** on Grafana (97,000 entities) for the deep blast-radius
+question that matters most in real engineering work. **14% cheaper overall** on a ~1300-entity
+repo. Roughly break-even on a small one. It pays off as the codebase grows and the questions
+get more cross-cutting. [Full data + the honest story behind these numbers →](docs/DECISIONS.md)
 
 <br>
 
@@ -136,39 +133,13 @@ you don't directly see on that counter.
 | 🚀 Big codebase, long back-and-forth (10–20 questions) | **This is where it pays off.** Without Kortex the AI re-reads huge files again and again, cost piles up, and the context window fills until it forgets earlier parts. Kortex keeps every question at ~1–2k of reading. |
 
 > [!IMPORTANT]
-> **Note on the numbers.** The "Nx less" figures are Kortex's own estimate of
-> *reading/context* tokens (4-chars/token heuristic, baseline = reading the full files the
-> answer came from). They measure the reading pile, **not** your total turn, and **not**
-> your actual $ cost — that also depends on round-trip count (each tool call re-reads the
-> whole accumulated conversation from cache), which this estimate doesn't capture at all.
->
-> A real controlled A/B ([full writeup →](docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md)),
-> measuring actual session `/usage` cost rather than estimated tokens, first caught this:
-> a mandatory extra tool call and a bloated response payload made Kortex cost **34% more**
-> real money than not using it at all on a 47-file repo, despite the "Nx less" number
-> looking good the whole time. Both were implementation bugs, since fixed — a re-measurement
-> after fixing them landed within ~3% either way (noise, not a real gap) on that same repo.
->
-> Like the field's most mature comparable tool's own published numbers, $ cost savings are
-> genuinely **scale-dependent**: closer to break-even on a small/medium repo, a clear win once
-> a codebase (and the session count against it) gets large — and that's no longer just a claim
-> borrowed from someone else's benchmark. A follow-up A/B on a real ~1300-entity, 4-service
-> repo measured Kortex **14% cheaper overall**, losing only the question a well-written README
-> already answered and winning the harder cross-file ones by a growing margin — first-party
-> evidence the scale-dependence holds.
->
-> A second, much larger test on Grafana (97,239 entities, 16,046 files — ~73x the repo above)
-> came back close to a **tie** (-2.8%, inside noise for a 3-question sample) — Grafana ships
-> unusually good per-directory `AGENTS.md` files already, so the without-Kortex baseline was
-> stronger than usual. Digging into *why* one question lost surfaced a real gap: `impact_analysis`
-> only walked the call graph, so asking "what breaks if I change this struct's shape" always
-> returned zero results — correct given what it tracked, but easy to misread as "safe to
-> change" when it actually meant "invisible to this tool." Fixed the same day: `impact_analysis`
-> now searches for type usages (signature-text, word-boundary match over the same indexed data)
-> when the resolved entity has no call-graph callers at all. Re-testing the exact question that
-> exposed the gap, fresh session both sides: **58% cheaper** with Kortex, comparable answer
-> quality either way. [Full story →](docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md) — the near-tie
-> is logged too, not just the number after the fix. Broader user testing is ongoing.
+> **Note on the numbers.** "Nx less" measures *reading/context* tokens, not your actual $ cost
+> — that also depends on round-trip count, which this estimate doesn't capture. A real
+> controlled A/B measuring actual session `/usage` confirmed real $ savings anyway: **58%
+> cheaper** on Grafana (97,000 entities) for deep blast-radius questions, **14% cheaper
+> overall** on a ~1300-entity repo, roughly break-even on a 47-file one — genuinely
+> **scale-dependent**, same shape the field's most mature comparable tool reports.
+> [Full methodology, round-by-round history, and the cases where it didn't win →](docs/DECISIONS.md)
 
 ---
 
@@ -539,7 +510,7 @@ whose input changed. `ask` latency depends on the Anthropic API.
 |---|---|
 | **Dogfood** (Kortex indexing itself) | `get_context` returns **9.6x fewer tokens** than reading the matched files in full (1,108 vs 10,637 on one query). Across more queries: **101x average** (12x worst, 190x best). [Bench notes →](docs/QUALITY_REPORT_2026-07-01.md) · [Details →](docs/VERIFICATION.md) |
 | **Search quality** | Hit@1 = **7/7** on symbol queries where the function name doesn't appear in the query string at all. Warm query ~15 ms. |
-| **Real $ cost A/B** | On a ~1300-entity, 4-service repo: **14% cheaper overall**. On a 97,000-entity repo (Grafana): near-tie overall, but **58% cheaper** on the specific question that exposed a real gap and got a same-day fix. On a 47-file repo: break-even. [Full writeup →](docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md) |
+| **Real $ cost A/B** | **58% cheaper** on Grafana (97,000 entities) for deep blast-radius questions. **14% cheaper overall** on a ~1300-entity repo. Break-even on a 47-file one. [Full data →](docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md) · [the story →](docs/DECISIONS.md) |
 | **Tests** | **1276 passing**, 0 failures, 1 live-skip (needs an API key). Covers MCP tools, all 22 parsers, framework route resolution, receiver-type and inheritance-aware resolution, graph queries, CLI, all 8 installer targets. |
 | **Manual test pass** | Every user-facing surface — CLI, web UI, watch daemon, MCP server (install, live query, uninstall) — run by hand. 21/21 passed; 6 issues logged. [Report →](docs/MANUAL_TEST_REPORT.md) |
 
@@ -598,161 +569,12 @@ subscription beyond what you already have, or Docker.
 
 ---
 
-<a id="changelog"></a>
+## 📜 Changelog & 🗺️ Roadmap
 
-<details>
-<summary><h2>📜 Changelog</h2></summary>
+Moved to **[DECISIONS.md](docs/DECISIONS.md)** — full dated changelog and the phase-by-phase
+roadmap, kept out of the README so this stays a quick read.
 
-<br>
-
-**Aug 2026**
-
-- Real, controlled A/B on an even bigger repo — Grafana (97,239 entities, 16,046 files). The
-  round came back a near-tie (-2.8%) until digging into *why* one question lost surfaced a real
-  gap: `impact_analysis` only walked the call graph, so a struct/interface (no callers, only
-  field/type references) always reported `total: 0` — correct given what it tracked, but easy
-  to misread as "safe to change." Fixed the same day: `impact_analysis` now searches for type
-  usages when the resolved entity has no callers at all. Re-testing the exact question that
-  exposed the gap: **58% cheaper** with codegraph, comparable answer quality both sides.
-  [Full writeup →](docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md)
-- Fixed a genuine deadlock: loading the embedding model off the main thread while the MCP
-  server's own event loop was running could freeze the whole process indefinitely — confirmed
-  by direct reproduction (~31s completing synchronously vs. hanging 280s+ with zero progress
-  dispatched through the real request-handling path). Now always loads synchronously before
-  the event loop starts; the server no longer blocks its own handshake on a large repo's
-  staleness scan either (backgrounded), so connecting doesn't time out just because the repo
-  is big.
-- `impact_analysis` and `trace_path` now accept a plain-text query instead of requiring a
-  pre-resolved `entity_id` on both tools — collapses a `search_code` round-trip into the same
-  call for the exact "what breaks" / "how does A reach B" questions that cost the most on a
-  large, unfamiliar repo.
-- `codegraph index` shows real progress — file-scan count, parse percentage, embedding ETA —
-  instead of going silent for minutes on a large repo. Previously invisible outside a real
-  terminal: a piped or logged run looked completely frozen even while it was actively working.
-- `codegraph uninstall --purge` also removes `.codegraph/` and any installed git hooks, not
-  just the MCP registration and guide — the cleanup a real test pass on someone else's repo
-  actually needs, verified to never touch a foreign `CLAUDE.md` that predates codegraph.
-- Real, controlled A/B on a genuinely large repo — JobHuntPro (1321 entities, 187 files, 4
-  sub-apps, cross-language: JS Chrome extension + Node/Express + Python/FastAPI + React) —
-  instead of the 47-file repo every earlier cost measurement used: **codegraph won overall,
-  -14% $ cost**. It lost only the one question a well-written README already answered, and
-  won both harder cross-file questions by a growing margin. First real evidence for the
-  scale-dependence claim this project has cited since its own competitor research, not an
-  assumption borrowed from someone else's numbers.
-  [Full writeup →](docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md)
-- MCP server now watches its own parent PID and self-exits if the parent dies, instead of
-  relying solely on stdio EOF — the root-cause fix for orphaned server processes holding the
-  DB lock, which stdio EOF misses when a parent process tree is killed abruptly.
-- `get_context` now accepts a list of up to 5 queries in one call — merged, deduped, fair
-  round-robin across queries — instead of one call per name. The first fix aimed at cutting
-  round-trip *count*, not just response size, which is what every earlier efficiency pass
-  had been optimizing.
-- New `project_brief` tool: a cheap, one-call session-start orientation summary (architecture
-  layers, hot-path entities by call fan-in, HTTP entry points) — measured as a real, if
-  modest, ~7% cost win in its own isolated A/B, with a higher cache-hit rate across the board.
-- tsconfig/jsconfig `paths` alias resolution (`@/foo` imports) — previously an explicitly
-  deferred TODO in this project's own resolver, silently losing cross-file edges on every
-  Next/Nuxt/Vite-scaffolded repo indexed.
-- Search re-ranked with identifier segmentation (`OrderStateMachine` now matches "state
-  machine"), multi-term co-occurrence boosting, and down-ranking of test/fixture and
-  generated files on a name collision — plus a bounded fuzzy-match fallback so a typo'd
-  symbol name still finds its target instead of returning nothing.
-- Fixed a real staleness bug found via manual testing: a repo with any vendored/minified
-  file (extremely common) used to show a permanent "N file changed — re-index recommended"
-  that no amount of re-indexing could ever clear, because the file was never given a row to
-  begin with.
-- `ask_codebase` is now omitted from the advertised tool list entirely when no
-  `ANTHROPIC_API_KEY` is set, instead of being advertised-but-broken — measured ~9.7% off
-  total tool-schema overhead for the common case.
-- 1276 tests passing (up from 1114), zero regressions.
-
-**Jul 2026**
-
-- Battle hardening against real-world failure patterns (each confirmed reproducible before
-  fixing): C++ forward declarations no longer indexed as duplicate classes; methods returning
-  a reference (`const X& Get() const`) and conversion operators (`operator Type()`) — both
-  previously dropped from the index entirely — now indexed correctly; `git blame` bounded by
-  a timeout so a wedged git can't hang `codegraph owner`; the watcher quarantines a file
-  after 3 consecutive re-index failures instead of retrying forever; generated/minified
-  files (any source line over 10k chars) are skipped by both index paths.
-- Inheritance-aware method resolution: `obj.method()` now also resolves when `method` is
-  declared only on a base class/interface, not `obj`'s own type — a base-class edge per
-  class (`extends`/`implements`/`< Base`/`: public Base`, plus Go's embedded-struct method
-  promotion) resolved before calls, then a same-file-preferred walk up the chain. Covers the
-  6 languages with real inheritance syntax plus Go; Rust has no inheritance concept.
-- Receiver-type inference: `obj.method()` now resolves to the exact declared method instead
-  of matching on the callee name alone, across all 8 OO-capable languages (Python, TS/JS,
-  Java, Go, Rust, PHP, Ruby, C/C++). Infers the receiver's type from a local variable's
-  constructor call or annotation, a typed parameter, `self`/`this`, or a tracked
-  `self.attr`/`this.attr`/`@attr` — so two unrelated classes sharing a method name no longer
-  risk a call edge pointing at the wrong one. Falls back to the old name-only resolution
-  whenever the type can't be confidently inferred, so this never makes a result worse.
-- 1114 tests passing (up from 1001), zero regressions across the pass — verified on both
-  local runs and GitHub Actions (Linux), which caught and led to a fix for a genuine
-  cross-platform ordering bug in multi-base inheritance resolution.
-- Framework-aware call resolution: a route handler invoked only through Flask, FastAPI,
-  Express, Django, Spring, or Rails routing now has a real `calls` edge instead of showing
-  up as false-positive dead code with zero callers in `impact_analysis`. Resolves same-file
-  and cross-file (the common case — `routes.rb` → a controller file, `urls.py` → `views.py`).
-- Cross-language HTTP edges: a TS/JS `fetch()`/`axios.*()` call with a statically-known URL
-  now resolves straight through to the backend handler that serves it, across both files and
-  languages in one edge.
-- `codegraph hooks install` adds an opt-in git-hook fallback (`post-commit`/`post-merge`/
-  `post-checkout`) that re-indexes in the background, for environments where filesystem-watch
-  events aren't reliable (mounted network drives, some WSL2 `/mnt` paths).
-- Agent installer support doubled: 4 → 8 targets, adding Kiro, opencode, Hermes Agent, and
-  Antigravity alongside Claude Code, Cursor, Codex, and Gemini.
-- 1001 tests passing (up from 778), zero regressions across the pass.
-- `get_context` now warns when your index is stale, and tells you how many files changed and
-  to run `reindex` before trusting results. Previously you had to call `index_status`
-  yourself to find this out, which most agents skip.
-- 778 tests, 0 failures. Added 4 tests for the stale warning.
-- Ran proper token savings numbers across queries on this repo: **101x average**
-  (12x on a tiny single-function file at worst, 190x best case). One example:
-  1,108 vs 10,637 tokens. [Bench notes →](docs/QUALITY_REPORT_2026-07-01.md)
-- Hit@1 was 7/7 on symbol lookups where the function name doesn't appear in the
-  query at all (pure semantic match).
-- Warm query latency ~15ms; stale check is <1ms once the TTL cache is warm.
-- `reindex` now cleans up entities for files deleted outside of `watch` (a plain `rm`, a
-  branch switch), and the staleness cache is keyed on git HEAD so a branch switch doesn't
-  hide staleness for up to 5 minutes. Full suite: 892 passing.
-
-</details>
-
-<a id="roadmap"></a>
-
-<details>
-<summary><h2>🗺️ Roadmap</h2></summary>
-
-<br>
-
-Phases 10-13 ("best of both"), 14-18 ("actually usable"), and the 19-22/24/26-28 competitive
-hardening pass are complete:
-
-- **Phase 10**: 9 languages: Go, Rust, Java, Ruby, PHP, C, C++ added to Python + TS/JS; extended to 19 with Kotlin, C#, Scala, Bash, Elixir, R, Julia, Haskell, OCaml; further to 22 with HTML, CSS, SQL
-- **Phase 11**: `codegraph watch`: debounced file watcher re-indexes in ~300 ms; staleness guard on `serve`/MCP startup
-- **Phase 12**: richer MCP tools + CLI mirrors (`context`, `trace`, `status`)
-- **Phase 13**: agent installer for Claude Code, Cursor, Codex, Gemini
-- **Phase 14**: *adoption gate*, directive tool descriptions + auto-written `CLAUDE.md` so agents actually use the tools
-- **Phase 15**: *value gate*, token-lean `get_context` (summaries + token budget), readable labels; calling it is genuinely cheaper than reading files
-- **Phase 16**: multi-project: walk-up DB discovery so one install serves every repo
-- **Phase 17**: self-healing: a `reindex` MCP tool the agent can call to refresh a stale index from the chat
-- **Phase 18**: first-run legibility (model-download notice), `codegraph init` one-shot, PyPI metadata
-- **Phase 19**: precise per-file staleness signal in `get_context`, plus a real DuckDB connection-conflict fix
-- **Phase 20-21**: framework-aware call resolution (Flask/FastAPI/Express/Django/Spring/Rails), cross-file route resolution, and cross-language HTTP edges (`fetch`/`axios` → backend handler)
-- **Phase 22**: git-hook fallback (`codegraph hooks install`) for environments where filesystem watching isn't reliable
-- **Phase 24**: agent installer breadth doubled, 4 → 8 targets (added Kiro, opencode, Hermes Agent, Antigravity)
-- **Phase 26**: receiver-type inference — `obj.method()` resolves to the exact declared method (not just callee name) across all 8 OO-capable languages
-- **Phase 27**: inheritance-aware method resolution — walks base classes/interfaces (or Go's embedded-struct promotion) when a method isn't declared on the receiver's own type
-- **Phase 28**: battle hardening — C++ forward-decl/reference-return/conversion-operator index corruption fixed, git-blame timeout, watcher failure quarantine, generated/minified file skip
-
-Deliberately **deferred**: deep TypeScript type resolution via `tsc`, Ruby `include`-mixin
-inheritance and Rust trait default methods (receiver-type inference through inheritance
-covers the rest), and a shared multi-client MCP daemon (one process per agent window today,
-scoped and explicitly not built — a process-model change with more risk than the wins above).
-See [STATUS.md](STATUS.md).
-
-</details>
+---
 
 <a id="faq"></a>
 
@@ -886,5 +708,5 @@ Built on [tree-sitter](https://tree-sitter.github.io/), [DuckDB](https://duckdb.
 
 <div align="center">
 <br>
-<sub>Built by <a href="https://github.com/kunal202426">Kunal Mathur</a> · <a href="STATUS.md">STATUS.md</a> · <a href="docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md">Cost findings</a> · <a href="docs/MANUAL_TEST_REPORT.md">Manual test report</a></sub>
+<sub>Built by <a href="https://github.com/kunal202426">Kunal Mathur</a> · <a href="STATUS.md">STATUS.md</a> · <a href="docs/DECISIONS.md">Decisions &amp; changelog</a> · <a href="docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md">Cost findings</a> · <a href="docs/MANUAL_TEST_REPORT.md">Manual test report</a></sub>
 </div>
