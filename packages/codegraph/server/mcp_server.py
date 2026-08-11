@@ -251,10 +251,11 @@ def tool_definitions() -> list[Tool]:
         Tool(
             name="impact_analysis",
             description="Use this before editing an entity to see what would break -- the "
-            "reverse-call blast radius (transitive callers). Prefer this over manually "
-            "grepping for usages; it follows the resolved call graph across files. Pass "
-            "entity_id if already known, or query (a name or short phrase) to resolve and "
-            "analyze in one call -- collapses search_code + impact_analysis into one round-trip.",
+            "reverse-call blast radius (transitive callers) via the resolved call graph. "
+            "Only tracks call edges (functions/methods) -- a struct/type has no callers, so "
+            "0 results there means 'not visible to this tool', not 'safe to change'; for a "
+            "type-shape change check field usages separately. Pass entity_id if already "
+            "known, or query (a name or short phrase) to resolve and analyze in one call.",
             inputSchema={
                 "type": "object",
                 "properties": {

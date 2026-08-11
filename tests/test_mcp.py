@@ -91,6 +91,15 @@ def test_tools_have_descriptions() -> None:
     assert all(len(t.description or "") > 10 for t in tool_definitions())
 
 
+def test_impact_analysis_description_clarifies_call_edges_only() -> None:
+    """Found via real manual testing on Grafana: impact_analysis only tracks
+    call edges, so a struct/type (which has no callers, only field
+    references) always resolves to total=0 -- correct, but easy to
+    misread as "safe to change" rather than "not visible to this tool"."""
+    tool = {t.name: t for t in tool_definitions()}["impact_analysis"]
+    assert "no callers" in tool.description or "call edges" in tool.description
+
+
 def test_tool_descriptions_are_directive() -> None:
     """Each tool must tell the agent WHEN to use it / to prefer it over file reads."""
     import re
