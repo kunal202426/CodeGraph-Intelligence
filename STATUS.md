@@ -8,8 +8,12 @@
   spec, `plan/`) moved out of the public repo into a local, gitignored `.internal/` folder.
 - **Phase:** Maintenance & hardening (post-audit fixes, usability, repo hygiene). No phase
   currently in progress — safe to start a new session cold from this file.
-- **Tests:** 1114 passing, 1 live-skip (needs `ANTHROPIC_API_KEY`), 0 failing. Verified both
-  locally and on GitHub Actions (`gh run list`) as of the last commit below.
+- **Tests:** 1276 passing, 1 live-skip (needs `ANTHROPIC_API_KEY`), 0 failing. Verified both
+  locally and on GitHub Actions (`gh run list`) as of the last commit below. (This file's
+  "Next task" list and phase history below predate the 2026-08-11 Grafana stress test and its
+  fixes — see the README changelog and
+  [docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md](docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md)
+  for what shipped since; not yet reconciled into this file's own history below.)
 - **Next task (all optional, none blocking):**
   - JSX/React component usage (`<Component />`) isn't a call edge — confirmed the
     second-largest dead-code false-positive source on a real React frontend, see

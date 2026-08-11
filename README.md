@@ -10,7 +10,7 @@
 
 <br>
 
-![tests](https://img.shields.io/badge/tests-1246_passing-22c55e?style=flat-square&labelColor=0d1424)
+![tests](https://img.shields.io/badge/tests-1276_passing-22c55e?style=flat-square&labelColor=0d1424)
 ![languages](https://img.shields.io/badge/languages-22-38bdf8?style=flat-square&labelColor=0d1424)
 ![mcp](https://img.shields.io/badge/MCP_tools-12-a5b4fc?style=flat-square&labelColor=0d1424)
 ![python](https://img.shields.io/badge/python-3.11+-3776ab?style=flat-square&labelColor=0d1424)
@@ -54,16 +54,17 @@ codebase big enough that "just read the files" has started to hurt.
 
 **The honest version:** on a small repo this is roughly break-even — the agent could have just
 read the files. It pays off as the codebase grows and the questions get more cross-cutting.
-Measured on a real ~1300-entity, 4-service repo: **14% cheaper overall**, winning the hard
-cross-file questions by a growing margin. Full numbers, including a round where it came out
-*worse*, are in [the cost findings](docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md) — nothing
-swept under the rug.
+Measured on a real ~1300-entity, 4-service repo: **14% cheaper overall**. On a 97,000-entity
+repo (Grafana), the full round came back close to a tie — until it surfaced a real capability
+gap, which got fixed the same day and turned the exact question that exposed it into a
+**58% cheaper** win on re-test. Full numbers, including rounds where it came out worse, are in
+[the cost findings](docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md) — nothing swept under the rug.
 
 <br>
 
 > [!NOTE]
 > **Status: active development.** Core indexing, search, and MCP tools are stable.
-> 1246 tests passing. Every user-facing surface manually tested: 21/21 passed, 6 issues fixed.
+> 1276 tests passing. Every user-facing surface manually tested: 21/21 passed, 6 issues fixed.
 > [Manual test →](docs/MANUAL_TEST_REPORT.md) · [Bench notes →](docs/QUALITY_REPORT_2026-07-01.md)
 > The MCP server works but is still preview, not production-ready.
 
@@ -154,7 +155,20 @@ you don't directly see on that counter.
 > borrowed from someone else's benchmark. A follow-up A/B on a real ~1300-entity, 4-service
 > repo measured Kortex **14% cheaper overall**, losing only the question a well-written README
 > already answered and winning the harder cross-file ones by a growing margin — first-party
-> evidence the scale-dependence holds. Broader user testing is ongoing.
+> evidence the scale-dependence holds.
+>
+> A second, much larger test on Grafana (97,239 entities, 16,046 files — ~73x the repo above)
+> came back close to a **tie** (-2.8%, inside noise for a 3-question sample) — Grafana ships
+> unusually good per-directory `AGENTS.md` files already, so the without-Kortex baseline was
+> stronger than usual. Digging into *why* one question lost surfaced a real gap: `impact_analysis`
+> only walked the call graph, so asking "what breaks if I change this struct's shape" always
+> returned zero results — correct given what it tracked, but easy to misread as "safe to
+> change" when it actually meant "invisible to this tool." Fixed the same day: `impact_analysis`
+> now searches for type usages (signature-text, word-boundary match over the same indexed data)
+> when the resolved entity has no call-graph callers at all. Re-testing the exact question that
+> exposed the gap, fresh session both sides: **58% cheaper** with Kortex, comparable answer
+> quality either way. [Full story →](docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md) — the near-tie
+> is logged too, not just the number after the fix. Broader user testing is ongoing.
 
 ---
 
@@ -390,8 +404,8 @@ it over reading files*.
 | ⭐ `get_context` | **Start here for everything else.** Hybrid search + signatures + callers/callees, token-lean by default (`detail="full"` for bodies). Accepts a **list of up to 5 queries** in one call. Replaces 3–4 round-trips at ~10x fewer tokens. |
 | 🔎 `search_code` | Hybrid literal + semantic search → entities with `file:line` |
 | 📄 `get_entity_context` | Full source + neighbours (`depends_on`, `called_by`) for an `entity_id` |
-| 💥 `impact_analysis` | Reverse-call blast radius — what breaks if an entity changes |
-| 🧭 `trace_path` | Shortest call chain between two `entity_id`s (BFS), with readable labels |
+| 💥 `impact_analysis` | For a function/method: reverse-call blast radius. For a struct/interface/type_alias (no callers, only field/param/return-type references): usages of that type instead. Resolves from an `entity_id` or a plain-text query. |
+| 🧭 `trace_path` | Shortest call chain between two entities (BFS), by `entity_id` or plain-text query on either end, with readable labels |
 | 📋 `list_files` | All indexed files with language, LOC, entity count; filterable by language |
 | 📊 `index_status` | File / entity / edge / embedding / summary counts + staleness indicator |
 | 🔄 `reindex` | Refresh only files changed since the last index, no terminal needed |
@@ -525,8 +539,8 @@ whose input changed. `ask` latency depends on the Anthropic API.
 |---|---|
 | **Dogfood** (Kortex indexing itself) | `get_context` returns **9.6x fewer tokens** than reading the matched files in full (1,108 vs 10,637 on one query). Across more queries: **101x average** (12x worst, 190x best). [Bench notes →](docs/QUALITY_REPORT_2026-07-01.md) · [Details →](docs/VERIFICATION.md) |
 | **Search quality** | Hit@1 = **7/7** on symbol queries where the function name doesn't appear in the query string at all. Warm query ~15 ms. |
-| **Real $ cost A/B** | On a ~1300-entity, 4-service repo: **14% cheaper overall** vs not using it. On a 47-file repo: break-even. [Full writeup →](docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md) |
-| **Tests** | **1246 passing**, 0 failures, 1 live-skip (needs an API key). Covers MCP tools, all 22 parsers, framework route resolution, receiver-type and inheritance-aware resolution, graph queries, CLI, all 8 installer targets. |
+| **Real $ cost A/B** | On a ~1300-entity, 4-service repo: **14% cheaper overall**. On a 97,000-entity repo (Grafana): near-tie overall, but **58% cheaper** on the specific question that exposed a real gap and got a same-day fix. On a 47-file repo: break-even. [Full writeup →](docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md) |
+| **Tests** | **1276 passing**, 0 failures, 1 live-skip (needs an API key). Covers MCP tools, all 22 parsers, framework route resolution, receiver-type and inheritance-aware resolution, graph queries, CLI, all 8 installer targets. |
 | **Manual test pass** | Every user-facing surface — CLI, web UI, watch daemon, MCP server (install, live query, uninstall) — run by hand. 21/21 passed; 6 issues logged. [Report →](docs/MANUAL_TEST_REPORT.md) |
 
 ---
@@ -593,6 +607,31 @@ subscription beyond what you already have, or Docker.
 
 **Aug 2026**
 
+- Real, controlled A/B on an even bigger repo — Grafana (97,239 entities, 16,046 files). The
+  round came back a near-tie (-2.8%) until digging into *why* one question lost surfaced a real
+  gap: `impact_analysis` only walked the call graph, so a struct/interface (no callers, only
+  field/type references) always reported `total: 0` — correct given what it tracked, but easy
+  to misread as "safe to change." Fixed the same day: `impact_analysis` now searches for type
+  usages when the resolved entity has no callers at all. Re-testing the exact question that
+  exposed the gap: **58% cheaper** with codegraph, comparable answer quality both sides.
+  [Full writeup →](docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md)
+- Fixed a genuine deadlock: loading the embedding model off the main thread while the MCP
+  server's own event loop was running could freeze the whole process indefinitely — confirmed
+  by direct reproduction (~31s completing synchronously vs. hanging 280s+ with zero progress
+  dispatched through the real request-handling path). Now always loads synchronously before
+  the event loop starts; the server no longer blocks its own handshake on a large repo's
+  staleness scan either (backgrounded), so connecting doesn't time out just because the repo
+  is big.
+- `impact_analysis` and `trace_path` now accept a plain-text query instead of requiring a
+  pre-resolved `entity_id` on both tools — collapses a `search_code` round-trip into the same
+  call for the exact "what breaks" / "how does A reach B" questions that cost the most on a
+  large, unfamiliar repo.
+- `codegraph index` shows real progress — file-scan count, parse percentage, embedding ETA —
+  instead of going silent for minutes on a large repo. Previously invisible outside a real
+  terminal: a piped or logged run looked completely frozen even while it was actively working.
+- `codegraph uninstall --purge` also removes `.codegraph/` and any installed git hooks, not
+  just the MCP registration and guide — the cleanup a real test pass on someone else's repo
+  actually needs, verified to never touch a foreign `CLAUDE.md` that predates codegraph.
 - Real, controlled A/B on a genuinely large repo — JobHuntPro (1321 entities, 187 files, 4
   sub-apps, cross-language: JS Chrome extension + Node/Express + Python/FastAPI + React) —
   instead of the 47-file repo every earlier cost measurement used: **codegraph won overall,
@@ -625,7 +664,7 @@ subscription beyond what you already have, or Docker.
 - `ask_codebase` is now omitted from the advertised tool list entirely when no
   `ANTHROPIC_API_KEY` is set, instead of being advertised-but-broken — measured ~9.7% off
   total tool-schema overhead for the common case.
-- 1246 tests passing (up from 1114), zero regressions.
+- 1276 tests passing (up from 1114), zero regressions.
 
 **Jul 2026**
 
