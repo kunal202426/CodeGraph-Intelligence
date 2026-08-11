@@ -250,12 +250,12 @@ def tool_definitions() -> list[Tool]:
         ),
         Tool(
             name="impact_analysis",
-            description="Use this before editing an entity to see what would break -- the "
-            "reverse-call blast radius (transitive callers) via the resolved call graph. "
-            "Only tracks call edges (functions/methods) -- a struct/type has no callers, so "
-            "0 results there means 'not visible to this tool', not 'safe to change'; for a "
-            "type-shape change check field usages separately. Pass entity_id if already "
-            "known, or query (a name or short phrase) to resolve and analyze in one call.",
+            description="Use this before editing an entity to see what would break. For a "
+            "function/method: the reverse-call blast radius (transitive callers) via the "
+            "resolved call graph. For a struct/interface/type_alias (which has no callers, "
+            "only field/param/return-type references): usages of that type instead -- check "
+            "response 'mode' ('callers' vs 'type_usages') to tell which you got. Pass "
+            "entity_id if already known, or query (a name or short phrase) to resolve first.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -780,6 +780,38 @@ def _resolve_query_to_entity(store: GraphStore, query: str) -> tuple[str | None,
     return top.entity_id, warning
 
 
+# Entity kinds with no call-graph callers at all -- only field/param/return-
+# type references, which find_callers structurally cannot see (it walks
+# `calls` edges, and nothing "calls" a type). Matches uir.EntityType's non-
+# callable kinds.
+_TYPE_LIKE_ENTITY_KINDS = frozenset({"class", "interface", "type_alias"})
+
+
+def _find_type_usages(conn, entity_id: str, type_name: str, limit: int = 200) -> list[dict]:
+    """Entities whose signature references *type_name* as a param/return/field type.
+
+    A signature-text search (word-boundary regex) over the same indexed data
+    -- not a new graph edge. Found via real manual testing: impact_analysis
+    on a struct/interface always reported total=0 (correctly, per its own
+    call-graph semantics), which read as "safe to change" when it just meant
+    "this tool can't see type usages", exactly the case a shape-change
+    question ("what would break if I changed X's fields") needs answered.
+    """
+    import re
+
+    pattern = r"\b" + re.escape(type_name) + r"\b"
+    rows = conn.execute(
+        "SELECT entity_id, type, name, file, start_line FROM entities "
+        "WHERE entity_id != ? AND signature IS NOT NULL AND regexp_matches(signature, ?) "
+        "LIMIT ?",
+        [entity_id, pattern, limit],
+    ).fetchall()
+    return [
+        {"entity_id": r[0], "type": r[1], "name": r[2], "file": r[3], "start_line": r[4]}
+        for r in rows
+    ]
+
+
 def _impact_analysis(args: dict[str, Any]) -> str:
     entity_id = args.get("entity_id")
     query = args.get("query")
@@ -797,11 +829,32 @@ def _impact_analysis(args: dict[str, Any]) -> str:
                 return json.dumps({"error": f"No entity found for query {query!r}."})
             if warning:
                 warnings.append(warning)
+
+        row = store.conn.execute(
+            "SELECT type, name FROM entities WHERE entity_id = ?", [entity_id]
+        ).fetchone()
+        if row is None:
+            return json.dumps({"error": f"No entity {entity_id!r}."})
+        entity_kind, entity_name = row
+
+        if entity_kind in _TYPE_LIKE_ENTITY_KINDS:
+            usages = _find_type_usages(store.conn, entity_id, entity_name)
+            result = {
+                "root": entity_id,
+                "mode": "type_usages",
+                "total": len(usages),
+                "usages": usages,
+            }
+            if warnings:
+                result["warnings"] = warnings
+            return json.dumps(result)
+
         tree = find_callers(store.conn, entity_id, depth=depth)
     finally:
         store.close()
     result = {
         "root": tree.root,
+        "mode": "callers",
         "total": tree.total,
         "truncated": tree.truncated,
         # name and file are both embedded in entity_id ({lang}:{file}:{qname});

@@ -192,6 +192,7 @@ def test_impact_analysis_tool(indexed_db: Path) -> None:
     data = _call("impact_analysis", {"entity_id": eid})
     assert data["root"] == eid
     assert data["total"] >= 1
+    assert data["mode"] == "callers"
 
 
 def test_impact_analysis_tool_definition_has_query_property() -> None:
@@ -226,6 +227,24 @@ def test_impact_analysis_query_no_match_errors(
     monkeypatch.setattr(mcp_server, "hybrid_search", lambda *a, **k: [])
     data = _call("impact_analysis", {"query": "anything"})
     assert "error" in data
+
+
+def test_impact_analysis_on_a_type_returns_usages_not_callers(indexed_db: Path) -> None:
+    """A struct/class/interface has no call-graph callers -- find_callers only
+    walks call edges, so it's structurally blind to field/param/return-type
+    references. Regression for the real gap found via manual testing on
+    Grafana: a 0-callers result on a type read as "safe to change" when it
+    just meant "not visible to this tool". validators.py's validate_form
+    takes a LoginForm param, so LoginForm now resolves to real usages."""
+    login_form_id = next(
+        h["entity_id"]
+        for h in _call("search_code", {"query": "LoginForm"})
+        if h["name"] == "LoginForm"
+    )
+    data = _call("impact_analysis", {"entity_id": login_form_id})
+    assert data["mode"] == "type_usages"
+    assert data["total"] >= 1
+    assert any(u["name"] == "validate_form" for u in data["usages"])
 
 
 def test_impact_analysis_query_low_confidence_gets_warning(

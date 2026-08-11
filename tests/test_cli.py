@@ -108,7 +108,7 @@ def test_index_prints_a_plain_progress_line_when_not_a_terminal(
     db = tmp_path / "graph.duckdb"
     result = runner.invoke(app, ["index", str(SAMPLE_REPO), "--db", str(db)])
     assert result.exit_code == 0, result.stdout
-    assert "Parsing... 7/7 (100%)" in result.stdout
+    assert "Parsing... 8/8 (100%)" in result.stdout
 
 
 def test_index_prints_scan_complete_when_not_a_terminal(runner: CliRunner, tmp_path: Path) -> None:
@@ -119,7 +119,7 @@ def test_index_prints_scan_complete_when_not_a_terminal(runner: CliRunner, tmp_p
     db = tmp_path / "graph.duckdb"
     result = runner.invoke(app, ["index", str(SAMPLE_REPO), "--db", str(db)])
     assert result.exit_code == 0, result.stdout
-    assert "Scan complete: 7 files found" in result.stdout
+    assert "Scan complete: 8 files found" in result.stdout
 
 
 # ---------- index ----------
