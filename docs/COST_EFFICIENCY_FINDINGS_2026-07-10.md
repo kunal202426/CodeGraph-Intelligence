@@ -1,76 +1,280 @@
 # Cost/efficiency A/B findings — and what it means for the product
 
-**Date:** 2026-07-10
-**What this is:** a real, controlled A/B test — same 5 questions (understanding, search,
-impact, a code edit, and a follow-up), same codebase (LedgerGuard), same clean git baseline,
-one Claude Code session with the CodeGraph MCP tool connected and one without — comparing
-actual `/usage` cost, not estimated tokens.
+**What this is:** a running log of controlled cost/quality A/B tests comparing CodeGraph on
+vs. off, across multiple codebases and dates — **newest first.** Every round reports real
+`/usage` cost, not estimated tokens, including the rounds where it came out worse.
 
-**Bottom line, stated plainly: in this test, using CodeGraph cost 34% *more* than not using
-it, for equivalent-quality output.** That's the opposite of the tool's stated value
-proposition, and it deserves to be reported exactly this bluntly, not softened.
+## Round 7 (2026-08-11): Grafana (97,239 entities, 16,046 files) — a near-tie, and why
 
-## The data
+The biggest repo tested yet by a wide margin — ~73x JobHuntPro's entity count, ~344x
+LedgerGuard's. Getting here required fixing two real bugs first, not just running the
+comparison: a server boot sequence that blocked the MCP handshake on a large repo's staleness
+scan (fixed by backgrounding it), and — more seriously — a genuine deadlock where loading the
+embedding model off the main thread while the asyncio event loop was running froze the server
+indefinitely (confirmed by direct reproduction: the identical warmup call completed in ~31s run
+synchronously vs. hanging 280s+ with zero progress dispatched through the server's real
+`anyio.to_thread` path). Both are logged in the codebase's own commit history, not repeated
+here — relevant context for why this round's numbers include a real, if large, one-time
+first-connect cost (70-90s+) that smaller-repo rounds never paid.
 
-| | Without codegraph ($) | With codegraph ($) | Difference |
+**Methodology:** same continuous-session, cumulative-delta protocol as round 6. Both sides ran
+the identical 3 questions in one session each; MCP genuinely removed (`claude mcp remove
+codegraph`) for the without-side, not prompt-suppressed.
+
+| Question | With codegraph | Without codegraph | Delta |
 |---|---|---|---|
-| Q1 (understanding) | $0.53 | $0.48 | −$0.05 |
-| Q2 (understanding) | $0.68 | $0.71 | +$0.03 |
-| Q3 (search) | $0.80 | $0.91 | +$0.11 |
-| Q4 (code edit) | $0.97 | $1.28 | **+$0.31** |
-| Q5 (impact question) | $1.05 | $1.41 | **+$0.36** |
-| **Total** | **$1.05** | **$1.41** | **+$0.36 (+34%)** |
+| Architecture overview | $0.26 (81% cache hit) | $0.26 (84% cache hit) | Tie |
+| Dashboard alerting trace | $0.57 (93% cache hit) | $0.58 (93% cache hit) | Without −$0.01 |
+| Dashboard model shape/blast-radius | $1.03 (96% cache hit) | $1.06 (96% cache hit) | With −$0.03 |
+| **Total** | **$1.03** | **$1.06** | **With −$0.03 (−2.8%)** |
 
-Both sessions produced a **correct, functionally-equivalent edit** at Q4 (verified by diff:
-both added `WelfordStats.relativeDeviation(x)` and routed `AnomalyScorer.zScore()` through
-it, same `Z_CAP` behavior preserved). So this isn't "cheaper but worse" on either side —
-quality was a wash. The cost difference is real, not a proxy for a quality difference.
+**Honest read: this is a tie, not a win.** A 2.8% margin is inside measurement noise for a
+3-question sample. Two real reasons, not excuses:
 
-Cumulative cache-read tokens by Q5: without-codegraph 1.9M, with-codegraph 4.4M — more than
-double. That's the number that actually explains the gap, not the individual retrieval
-sizes CodeGraph reports about itself.
+1. **Grafana's own docs are unusually strong.** Nearly every major subsystem has a
+   directory-scoped `AGENTS.md` (alerting, unified storage, docs, journeys) plus a normal
+   README — this repo is already pre-optimized for AI-agent navigation in a way neither
+   LedgerGuard nor JobHuntPro was. Grep-on-a-well-documented-repo is a much stronger baseline
+   than grep-on-an-undocumented-one; the scale-dependence advantage this report has tracked
+   since round 1 assumes the baseline has to work harder than that.
+2. **Question 3 was shaped exactly wrong for what `impact_analysis` tracked at the time.**
+   "What would break if I changed the Dashboard *data model's shape*" is a type/struct-shape
+   question; `impact_analysis` only walked the call graph (transitive callers), and a
+   struct/interface has no callers — only field/param/return-type references. It correctly
+   returned `total: 0` on every type query, which reads as "safe to change" but actually meant
+   "invisible to this tool." The without-side's plain grep for the type name found real answers
+   `impact_analysis` structurally couldn't produce, and won that specific question because of
+   it — not because grep is better at scale, but because the tool was blind to the exact shape
+   of the question asked.
 
-## Root cause: the tool's own "Nx less tokens" metric measures the wrong thing
+**Fixed the same day, then re-measured:** `impact_analysis` now checks the resolved entity's
+kind — functions/methods still get the call-graph blast radius; a class/interface/type_alias
+gets a signature-text usage search instead (word-boundary match over the same indexed data, no
+re-index required). Verified directly against this exact Grafana index before re-testing:
+`DashboardDTO` went from `total: 0` to 30 real usages (`BackendSrv.getDashboardByUid`,
+`getDashboardFolderTitle`, and 28 others).
 
-`get_context` reports something like *"~1288 vs ~4519 tokens (3.5x less)"* — comparing what
-it returned against a hypothetical "read the whole file" baseline. That comparison is
-internally correct, but it silently ignores:
+### Question 3, re-run standalone (fresh session each side, not a continuation)
 
-1. **MCP tool-schema overhead.** Measured directly: all 11 tool schemas together are ~1.6k
-   tokens, present in context the moment the server connects, regardless of how many you
-   actually use. Small on its own, but non-zero on every message once connected.
-2. **Round-trip count, not round-trip size, is what drives cost here.** Every tool call is
-   a separate turn; Claude Code's caching re-reads the *entire accumulated context* on each
-   turn. A session that makes more, smaller tool calls pays a compounding cache-read cost
-   that a session making fewer, larger direct file reads doesn't — even if each individual
-   codegraph call is "more efficient" in isolation.
-3. **The agent guide itself was mandating an unnecessary round-trip.** Confirmed in code:
-   `get_context` already calls `_get_stale_count()` internally and returns a `warnings`
-   field if the index is stale. But the guide's Rule 1 said *"Call `index_status` once"* as
-   an unconditional first step on every task — a guaranteed extra round-trip providing
-   information `get_context` was already going to give for free. This is the single most
-   concrete, provable contributor found in this pass.
+| | Cost | Notes |
+|---|---|---|
+| With codegraph | **$0.43** | 5 `impact_analysis` calls, 89% cache hit. Found two real blast radii: legacy frontend `DashboardModel` (49 usages) and backend spec types across all 5 API versions (62 usages, incl. codegen/deepcopy/OpenAPI implications). |
+| Without codegraph | **$1.03** | Dispatched Claude Code's own Explore subagent (77% of session cost) running multiple background searches. Found comparable depth (schema version freeze, conversion functions, unified-storage compat contract, 38 alerting files referencing `DashboardUID`). |
+| **Delta** | **With −$0.60 (−58%)** | |
 
-## Fixed this pass
+**This is the win the near-tie was missing, on the exact question that exposed the gap.** Both
+answers were genuinely good quality — this isn't a quality tradeoff, codegraph got comparable
+depth for less than half the cost. The mechanism matches JobHuntPro round 6's pattern exactly:
+the harder/deeper the question, the more the gap grows in codegraph's favor, and it grows
+sharply once the without-side is forced to dispatch Claude Code's Explore subagent to compensate
+for a capability the graph tool didn't have. Note this specific re-test used fresh standalone
+sessions per side (not the continuous-session protocol every other number in this report uses)
+to isolate the one changed variable — not directly poolable with the round's own $1.03/$1.06
+continuous-session totals above, but the before/after contrast (tool blind to the question →
+tool answers it directly) is the real finding here, not the exact dollar figure.
 
-[`installer/guide.py`](../packages/codegraph/installer/guide.py) — the managed `CLAUDE.md`
-block:
-- Rule 1 no longer mandates a separate `index_status` call. The agent now goes straight to
-  `get_context` and only calls `reindex` if that call's own `warnings` field flags
-  staleness.
-- Rule 2 (new): if the agent already knows it needs full source for a small, specific set
-  of entities (an edit task, not exploration), call `get_context(..., detail="full")`
-  directly instead of a summary call followed by a second full-detail call — collapsing a
-  common 2-round-trip pattern (confirmed happening in the transcripts: "let me search" then
-  "let me get the full source") into one.
-- Kept the block under its existing ~400-token budget (had to trim wording twice to fit —
-  worth noting the budget constraint itself is in tension with wanting to explain *why* a
-  rule exists; ended up shorter and more directive instead).
+## Round 6 (2026-08-07): first test on a genuinely large repo — JobHuntPro (1321 entities, 187 files)
 
-1 new regression test in `test_installer_guide.py`. This fix has **not yet been
-re-measured empirically** — the honest next step is rerunning the same 5-question A/B with
-the updated guide to see how much of the 34% gap it actually closes. Don't claim it's fixed
-until that's done.
+Every round before this one ran on LedgerGuard — 47 files, 244 entities. The scale-dependence
+claim this whole report leans on (round 1's competitor research: near-parity on small/medium
+repos, a clear win only once a codebase gets large) had never actually been tested with our
+own data on a large repo. JobHuntPro is ~5.4x LedgerGuard's entity count and genuinely
+cross-language: a Chrome MV3 extension (JS), a Node/Express backend, a separate Python/FastAPI
+backend, and a React frontend — four sub-apps, two backend languages.
+
+**Methodology, corrected mid-run (logged honestly, not smoothed over):** the original plan
+called for 3 fresh, isolated sessions per side. In practice all 3 questions were asked as
+follow-ups in one continuous session per side (matching how a real developer actually works,
+and matching every earlier round's actual methodology) — caught when a "fresh session" cost
+figure turned out to be a cumulative total including the prior question. Recomputed every
+number below as per-question deltas from the cumulative total, not standalone figures.
+Also confirmed via the `/usage` panel's model breakdown that both sides ran 100% Sonnet, 0%
+Haiku throughout — not a confound between conditions.
+
+**Real methodological wrinkle worth keeping:** the without-codegraph session dispatched
+Claude Code's own built-in **Explore subagent** for the two harder questions (visible in the
+usage panel as 71-79% of that session's cost). This is an honest, representative baseline —
+Explore is a native capability every Claude Code user has with zero setup — but it means
+"without codegraph" here measures against Claude Code's own agentic exploration tooling, not
+a naive grep-and-read loop. Worth remembering when comparing this number to any published
+benchmark that assumes a dumber baseline.
+
+| Question | With codegraph | Without codegraph | Delta |
+|---|---|---|---|
+| Architecture overview | $0.46 (90% cache hit) | $0.38 (91% cache hit) | Without −$0.08 |
+| Cross-service data flow (Node → Python) | $0.56 (94% cache hit) | $0.71 (93% cache hit) | With −$0.15 |
+| Impact/blast-radius of a shared data shape | $0.80 (96% cache hit) | $1.03 (94% cache hit) | With −$0.23 |
+| **Total** | **$1.82** | **$2.12** | **With −$0.30 (−14%)** |
+
+**With codegraph wins overall, and the pattern is directional, not noise.** Without-codegraph
+won only the easy question — and the answer's own opening line explained why: *"This
+README/PROGRESS gives a very solid picture already"* — JobHuntPro has an unusually complete
+hand-written README with an architecture table, so reading two docs was genuinely competitive
+with walking the graph for that specific question. Codegraph won both harder questions
+(cross-service trace, blast-radius) by a **growing margin** as the tracing got deeper — exactly
+the shape the competitor research predicted: the advantage shows up on hard, cross-cutting
+questions on a large repo, not on ones a good README already answers. Answer quality was
+comparable on all 3 questions on both sides (same core findings, similarly precise file:line
+citations) — this is a real cost result, not a quality tradeoff dressed up as one.
+
+**This is the first data point at this scale, not a settled conclusion** — same caveat every
+earlier round has carried: one repo, 3 questions, real but limited. It does, however, mark the
+first time in this whole cost-efficiency investigation that codegraph won on total $ cost
+against a real, unmodified baseline (round 5's `project_brief` win was isolated to one
+feature, not the whole with/without-codegraph question) — consistent with, not just assumed
+from, the scale-dependence claim this report has cited since round 1.
+
+## Round 5 (2026-07-13, same day): properly isolated `project_brief` A/B — a real, modest win
+
+Redid round 4 with the discipline it was missing: 3 different cold-start questions (not 1),
+each run twice in a fresh session — once letting `project_brief` fire normally, once with an
+explicit instruction to skip it while still allowing `get_context`/other codegraph tools.
+Every session's actual tool calls were confirmed from the in-transcript tool log (not
+reconstructed after the fact from a usage-panel side effect) — the first attempt at the
+"without" prompt (`"Do not call project_brief for this question"`) turned out to make the
+agent avoid the whole codegraph toolset, not just that one tool, which would have silently
+reproduced round 3's already-answered with/without-codegraph question instead of isolating
+`project_brief`; caught via the tool log showing zero MCP activity, fixed by making the
+prompt explicit that other codegraph tools were still expected.
+
+| Question | With `project_brief` | Without (codegraph tools still used) | Delta |
+|---|---|---|---|
+| Architecture overview | $0.37 (85% cache hit) | $0.48 (77% cache hit) | With −23% |
+| Transaction flow walkthrough | $0.70 (91% cache hit) | $0.67 (90% cache hit) | Without −4% |
+| Core abstractions/entry points | $0.48 (87% cache hit) | $0.52 (82% cache hit) | With −8% |
+| **Total** | **$1.55** | **$1.67** | **With −7%** |
+
+**`project_brief` wins.** 2 of 3 questions favor it on raw $ cost, the third is a near-wash
+slightly against it, and — more consistently than the $ number — **cache hit rate is higher
+with `project_brief` on all 3 questions**, including the one it lost on cost. A modest,
+real, properly-isolated improvement: not the dramatic win a from-scratch feature sometimes
+promises, but a genuine one, and importantly not a regression on any of the 3 questions
+tested. Consistent with round 3's finding that codegraph is closest to break-even (not a
+clear win) on a repo LedgerGuard's size — `project_brief` nudges that break-even point
+further in codegraph's favor rather than transforming it.
+
+## Round 4 (2026-07-13, same day): a single-question `project_brief` sanity check — inconclusive, not a real measurement
+
+After shipping `project_brief`, ran one cold-start question ("what's the architecture, what
+should I know before changing it") on LedgerGuard, once with codegraph (`project_brief` +
+`get_context` confirmed via the `codegraph MCP` usage indicator and the tool's savings line
+in the response) and once without (confirmed by the *absence* of both). **With: $0.48, 87%
+cache hit. Without: $0.29, 78% cache hit** — codegraph cost ~66% more on this single
+question, the opposite direction from what `project_brief` was built to achieve.
+
+**Not treated as a real finding.** A single question is exactly the kind of sample round 3
+already showed can't be trusted alone — individual questions in that 5-question run swung
+2-3x in either direction while the *total* landed within noise of parity. This round also had
+a session-labeling mix-up (which run was "with" vs "without" got confused mid-test and had to
+be reconstructed from the `codegraph MCP` usage indicator after the fact), which is its own
+signal that the test wasn't run cleanly enough to trust. Logged rather than acted on: a
+proper isolation of `project_brief`'s effect needs the same discipline as round 3 (multiple
+questions, verified-clean session labeling throughout, not just at the end) — deferred until
+the next full validation pass rather than burning more of this session re-running it now,
+since `project_brief` is a low-risk additive tool (one bounded call, not a replacement of
+anything round 1-3 already validated) and not an active regression that needs urgent
+confirmation either way.
+
+## Round 3 (2026-07-13): re-measured after the guide + payload + resolver/search fixes — gap closed
+
+Between round 2 and this measurement, three more things shipped: the guide now defaults
+`get_context` to `detail="full"` on understanding questions (not just known edit targets),
+plus this session's resolver fixes (tsconfig path aliases, ambiguous-name ceiling) and
+search-ranking rewrite (identifier segmentation, multi-term boost, test/generated-file
+down-ranking, low-confidence warning, diversity cap) — see
+[COMPETITOR_ANALYSIS_2026-07-11.md](COMPETITOR_ANALYSIS_2026-07-11.md) for what those are and
+why. Re-ran the same 5-question shape on LedgerGuard, clean git baseline verified before each
+session, `codegraph mcp remove`/re-`add` used to get a genuinely MCP-disconnected baseline
+(confirmed in-transcript: *"CodeGraph's MCP tools aren't connected in this session, so I'll
+explore the source directly instead"*).
+
+| Q | With codegraph | Without codegraph | Delta |
+|---|---|---|---|
+| Q1 (understanding) | $0.48 | $0.41 | without −$0.07 |
+| Q2 (config lookup) | +$0.06 → $0.54 | +$0.10 → $0.51 | with −$0.04 |
+| Q3 (impact analysis) | +$0.18 → $0.72 | +$0.09 → $0.60 | without −$0.09 |
+| Q4 (code edit)* | +$0.51 → $1.23 | +$0.74 → $1.34 | with −$0.23 |
+| Q5 (trace) | +$0.32 → $1.55 | +$0.16 → $1.50 | without −$0.16 |
+| **Total** | **$1.55** | **$1.50** | **without −$0.05 (≈3%)** |
+
+\*Q4 is confounded, not clean: the without-codegraph run independently decided to check the
+Hibernate `ddl-auto: validate` constraint, add `@Transient` correctly, write and run 2 new
+unit tests, and do a full `mvn compile` — real extra engineering the with-codegraph run
+simply didn't do. Backing that out puts codegraph's Q4 roughly on par or ahead, and the
+total flips to codegraph winning. Answer quality (correctness, depth, citing real line
+numbers) was comparable across all 5 questions on both sides in both this round and round 1
+— this was never a quality difference, only a cost one.
+
+**Bottom line: the 34% cost increase from round 1 is gone — round 3 lands within ~3% either
+way, statistical noise, not a real gap.** The fixes that closed it, in order of estimated
+contribution: (1) removing the mandatory `index_status` round-trip [round 1], (2) the
+`detail="full"`-by-default guide change removing a second round-trip on understanding
+questions [round 2 guide fix, round 3 measurement], (3) the ~36% response-payload slimming
+[round 2]. The round-3-specific resolver/ranking fixes (tsconfig aliases, search re-ranking)
+don't directly move $ cost — they're correctness/precision fixes — but they matter for
+*trusting* the numbers this report relies on: a wrong resolver edge or a test-file-polluted
+search result would make `impact_analysis`/`get_context` answers wrong regardless of cost.
+
+This does **not** mean cost parity is now permanent or repo-size-independent — round 1's own
+literature review (the competitor's published 7-repo benchmark) says $ cost is genuinely
+scale-dependent, roughly break-even on a repo LedgerGuard's size (47 files) and only a clear
+win on much larger ones. What round 3 shows is that our *implementation* is no longer leaving
+cost on the table for reasons that were fixable (redundant calls, bloated payloads) — the
+remaining ~break-even result is closer to the honest floor for a repo this size, not a bug.
+
+## Not fixed this pass — prioritized ideas for real improvement
+
+Ranked by confidence × leverage, not implemented blind — each needs either more design
+thought or its own empirical validation before landing. Written after round 2, before round 3;
+some items below carry their own later shipped-date once acted on.
+
+### 1. Multi-query `get_context` -- SHIPPED 2026-07-13
+`get_context`'s `query` param now also accepts a list of up to 5 strings: each is run
+through `hybrid_search` independently, merged round-robin (query1's top hit, query2's top
+hit, ... before either gets a second slot) so no single query's results crowd out the
+others, deduped by `entity_id`, then diversity-capped and token-budget-truncated exactly
+like the single-query path. Fully backward compatible -- a plain string behaves
+byte-identical to before. Motivated directly by a real transcript: the round-5
+"transaction flow" question burned 7 separate `get_context` calls, one per pipeline stage,
+when the agent knew all 7 names by the second call. This is the first change this session
+that reduces round-trip *count* for a known multi-lookup pattern, rather than shrinking
+response size or removing one fixed redundant call -- everything shipped through round 5
+closed the round-1 regression back to parity; this is the first genuine attempt to push
+below parity. Not yet empirically re-measured (see the open question this raises below).
+
+### 2. Make the token-savings metric honest about what it measures (high confidence, low effort, high trust value)
+`tokens_estimated`/`tokens_if_read`/`savings_ratio` should either be relabeled to make clear
+they measure *retrieval size vs. a full-file-read baseline*, not *session cost*, or a
+disclaimer should sit next to every reported number. Continuing to report "Nx less tokens"
+in a way a reasonable person reads as "Nx cheaper" — when today's own controlled test showed
+the opposite for real session cost — is a trust problem waiting to surface the moment
+someone else runs this same experiment. The README's headline "101x average" claim
+[README.md:62](../README.md) uses the identical estimation methodology and inherits the
+same honesty gap; worth revisiting once the metric itself is fixed.
+
+### 3. A genuinely calibrated cost model (medium confidence, high effort)
+The right long-term fix isn't a smarter static formula, it's empirical: instrument real
+session `/usage` deltas (opt-in, anonymized) around codegraph tool calls, and use *that* to
+report real expected $ impact instead of an estimated-tokens proxy. This is what actually
+closes the gap between "the tool claims savings" and "the tool has measured savings" — this
+report is a first, manual instance of exactly that kind of measurement.
+
+### 4. Teach the guide when *not* to reach for the tool (medium confidence, low effort)
+Right now the guide unconditionally says "do not open a source file before calling
+`get_context`." For a small, single-file, already-well-understood question, a direct read
+may genuinely be cheaper than a round-trip through an MCP tool call — today's Q1 (understanding
+question) actually came out *slightly cheaper with* codegraph ($0.48 vs $0.53), so this
+isn't always true, but it likely depends on question shape (multi-file/cross-cutting
+questions favor the tool; single-file/local questions may not). Worth a follow-up test
+specifically isolating question *type* as the variable, not just question *count*.
+
+### 5. Reduce per-turn overhead architecturally, not just per-call count (low confidence, needs research)
+If Claude Code's caching genuinely re-reads the full accumulated context on every turn
+(the working hypothesis behind the 2x cache-read gap), the ceiling on how much guide/tool
+tweaks alone can fix is real — the fundamental fix would be reducing turns, and there may be
+a hard floor on how few turns any agentic tool-use pattern can achieve versus a
+single-shot direct read. This needs someone with visibility into Claude Code's actual
+caching internals to confirm or refute, not more speculation from token counts alone.
 
 ## Round 2 (same day): re-measured after the guide fix — still not worth it, so went deeper
 
@@ -149,276 +353,78 @@ before anything else." Not yet re-measured in its own controlled A/B — the hon
 step is a round-4 test isolating this specific tool's effect on a fresh-session cold-start
 question, the way round 3 isolated the resolver/ranking fixes.
 
-## Not fixed this pass — prioritized ideas for real improvement
+## Round 1 (2026-07-10): initial A/B on LedgerGuard — CodeGraph cost 34% more
 
-Ranked by confidence × leverage, not implemented blind — each needs either more design
-thought or its own empirical validation before landing.
+A real, controlled A/B test — same 5 questions (understanding, search, impact, a code edit,
+and a follow-up), same codebase (LedgerGuard), same clean git baseline, one Claude Code
+session with the CodeGraph MCP tool connected and one without — comparing actual `/usage`
+cost, not estimated tokens.
 
-### 1. Multi-query `get_context` -- SHIPPED 2026-07-13
-`get_context`'s `query` param now also accepts a list of up to 5 strings: each is run
-through `hybrid_search` independently, merged round-robin (query1's top hit, query2's top
-hit, ... before either gets a second slot) so no single query's results crowd out the
-others, deduped by `entity_id`, then diversity-capped and token-budget-truncated exactly
-like the single-query path. Fully backward compatible -- a plain string behaves
-byte-identical to before. Motivated directly by a real transcript: the round-5
-"transaction flow" question burned 7 separate `get_context` calls, one per pipeline stage,
-when the agent knew all 7 names by the second call. This is the first change this session
-that reduces round-trip *count* for a known multi-lookup pattern, rather than shrinking
-response size or removing one fixed redundant call -- everything shipped through round 5
-closed the round-1 regression back to parity; this is the first genuine attempt to push
-below parity. Not yet empirically re-measured (see the open question this raises below).
+**Bottom line, stated plainly: in this test, using CodeGraph cost 34% *more* than not using
+it, for equivalent-quality output.** That's the opposite of the tool's stated value
+proposition, and it deserves to be reported exactly this bluntly, not softened.
 
-### 2. Make the token-savings metric honest about what it measures (high confidence, low effort, high trust value)
-`tokens_estimated`/`tokens_if_read`/`savings_ratio` should either be relabeled to make clear
-they measure *retrieval size vs. a full-file-read baseline*, not *session cost*, or a
-disclaimer should sit next to every reported number. Continuing to report "Nx less tokens"
-in a way a reasonable person reads as "Nx cheaper" — when today's own controlled test showed
-the opposite for real session cost — is a trust problem waiting to surface the moment
-someone else runs this same experiment. The README's headline "101x average" claim
-[README.md:62](../README.md) uses the identical estimation methodology and inherits the
-same honesty gap; worth revisiting once the metric itself is fixed.
+### The data
 
-### 3. A genuinely calibrated cost model (medium confidence, high effort)
-The right long-term fix isn't a smarter static formula, it's empirical: instrument real
-session `/usage` deltas (opt-in, anonymized) around codegraph tool calls, and use *that* to
-report real expected $ impact instead of an estimated-tokens proxy. This is what actually
-closes the gap between "the tool claims savings" and "the tool has measured savings" — this
-report is a first, manual instance of exactly that kind of measurement.
-
-### 4. Teach the guide when *not* to reach for the tool (medium confidence, low effort)
-Right now the guide unconditionally says "do not open a source file before calling
-`get_context`." For a small, single-file, already-well-understood question, a direct read
-may genuinely be cheaper than a round-trip through an MCP tool call — today's Q1 (understanding
-question) actually came out *slightly cheaper with* codegraph ($0.48 vs $0.53), so this
-isn't always true, but it likely depends on question shape (multi-file/cross-cutting
-questions favor the tool; single-file/local questions may not). Worth a follow-up test
-specifically isolating question *type* as the variable, not just question *count*.
-
-### 5. Reduce per-turn overhead architecturally, not just per-call count (low confidence, needs research)
-If Claude Code's caching genuinely re-reads the full accumulated context on every turn
-(the working hypothesis behind the 2x cache-read gap), the ceiling on how much guide/tool
-tweaks alone can fix is real — the fundamental fix would be reducing turns, and there may be
-a hard floor on how few turns any agentic tool-use pattern can achieve versus a
-single-shot direct read. This needs someone with visibility into Claude Code's actual
-caching internals to confirm or refute, not more speculation from token counts alone.
-
-## Round 3 (2026-07-13): re-measured after the guide + payload + resolver/search fixes — gap closed
-
-Between round 2 and this measurement, three more things shipped: the guide now defaults
-`get_context` to `detail="full"` on understanding questions (not just known edit targets),
-plus this session's resolver fixes (tsconfig path aliases, ambiguous-name ceiling) and
-search-ranking rewrite (identifier segmentation, multi-term boost, test/generated-file
-down-ranking, low-confidence warning, diversity cap) — see
-[COMPETITOR_ANALYSIS_2026-07-11.md](COMPETITOR_ANALYSIS_2026-07-11.md) for what those are and
-why. Re-ran the same 5-question shape on LedgerGuard, clean git baseline verified before each
-session, `codegraph mcp remove`/re-`add` used to get a genuinely MCP-disconnected baseline
-(confirmed in-transcript: *"CodeGraph's MCP tools aren't connected in this session, so I'll
-explore the source directly instead"*).
-
-| Q | With codegraph | Without codegraph | Delta |
+| | Without codegraph ($) | With codegraph ($) | Difference |
 |---|---|---|---|
-| Q1 (understanding) | $0.48 | $0.41 | without −$0.07 |
-| Q2 (config lookup) | +$0.06 → $0.54 | +$0.10 → $0.51 | with −$0.04 |
-| Q3 (impact analysis) | +$0.18 → $0.72 | +$0.09 → $0.60 | without −$0.09 |
-| Q4 (code edit)* | +$0.51 → $1.23 | +$0.74 → $1.34 | with −$0.23 |
-| Q5 (trace) | +$0.32 → $1.55 | +$0.16 → $1.50 | without −$0.16 |
-| **Total** | **$1.55** | **$1.50** | **without −$0.05 (≈3%)** |
+| Q1 (understanding) | $0.53 | $0.48 | −$0.05 |
+| Q2 (understanding) | $0.68 | $0.71 | +$0.03 |
+| Q3 (search) | $0.80 | $0.91 | +$0.11 |
+| Q4 (code edit) | $0.97 | $1.28 | **+$0.31** |
+| Q5 (impact question) | $1.05 | $1.41 | **+$0.36** |
+| **Total** | **$1.05** | **$1.41** | **+$0.36 (+34%)** |
 
-\*Q4 is confounded, not clean: the without-codegraph run independently decided to check the
-Hibernate `ddl-auto: validate` constraint, add `@Transient` correctly, write and run 2 new
-unit tests, and do a full `mvn compile` — real extra engineering the with-codegraph run
-simply didn't do. Backing that out puts codegraph's Q4 roughly on par or ahead, and the
-total flips to codegraph winning. Answer quality (correctness, depth, citing real line
-numbers) was comparable across all 5 questions on both sides in both this round and round 1
-— this was never a quality difference, only a cost one.
+Both sessions produced a **correct, functionally-equivalent edit** at Q4 (verified by diff:
+both added `WelfordStats.relativeDeviation(x)` and routed `AnomalyScorer.zScore()` through
+it, same `Z_CAP` behavior preserved). So this isn't "cheaper but worse" on either side —
+quality was a wash. The cost difference is real, not a proxy for a quality difference.
 
-**Bottom line: the 34% cost increase from round 1 is gone — round 3 lands within ~3% either
-way, statistical noise, not a real gap.** The fixes that closed it, in order of estimated
-contribution: (1) removing the mandatory `index_status` round-trip [round 1], (2) the
-`detail="full"`-by-default guide change removing a second round-trip on understanding
-questions [round 2 guide fix, round 3 measurement], (3) the ~36% response-payload slimming
-[round 2]. The round-3-specific resolver/ranking fixes (tsconfig aliases, search re-ranking)
-don't directly move $ cost — they're correctness/precision fixes — but they matter for
-*trusting* the numbers this report relies on: a wrong resolver edge or a test-file-polluted
-search result would make `impact_analysis`/`get_context` answers wrong regardless of cost.
+Cumulative cache-read tokens by Q5: without-codegraph 1.9M, with-codegraph 4.4M — more than
+double. That's the number that actually explains the gap, not the individual retrieval
+sizes CodeGraph reports about itself.
 
-This does **not** mean cost parity is now permanent or repo-size-independent — round 1's own
-literature review (the competitor's published 7-repo benchmark) says $ cost is genuinely
-scale-dependent, roughly break-even on a repo LedgerGuard's size (47 files) and only a clear
-win on much larger ones. What round 3 shows is that our *implementation* is no longer leaving
-cost on the table for reasons that were fixable (redundant calls, bloated payloads) — the
-remaining ~break-even result is closer to the honest floor for a repo this size, not a bug.
+### Root cause: the tool's own "Nx less tokens" metric measures the wrong thing
 
-## Round 4 (2026-07-13, same day): a single-question `project_brief` sanity check — inconclusive, not a real measurement
+`get_context` reports something like *"~1288 vs ~4519 tokens (3.5x less)"* — comparing what
+it returned against a hypothetical "read the whole file" baseline. That comparison is
+internally correct, but it silently ignores:
 
-After shipping `project_brief`, ran one cold-start question ("what's the architecture, what
-should I know before changing it") on LedgerGuard, once with codegraph (`project_brief` +
-`get_context` confirmed via the `codegraph MCP` usage indicator and the tool's savings line
-in the response) and once without (confirmed by the *absence* of both). **With: $0.48, 87%
-cache hit. Without: $0.29, 78% cache hit** — codegraph cost ~66% more on this single
-question, the opposite direction from what `project_brief` was built to achieve.
+1. **MCP tool-schema overhead.** Measured directly: all 11 tool schemas together are ~1.6k
+   tokens, present in context the moment the server connects, regardless of how many you
+   actually use. Small on its own, but non-zero on every message once connected.
+2. **Round-trip count, not round-trip size, is what drives cost here.** Every tool call is
+   a separate turn; Claude Code's caching re-reads the *entire accumulated context* on each
+   turn. A session that makes more, smaller tool calls pays a compounding cache-read cost
+   that a session making fewer, larger direct file reads doesn't — even if each individual
+   codegraph call is "more efficient" in isolation.
+3. **The agent guide itself was mandating an unnecessary round-trip.** Confirmed in code:
+   `get_context` already calls `_get_stale_count()` internally and returns a `warnings`
+   field if the index is stale. But the guide's Rule 1 said *"Call `index_status` once"* as
+   an unconditional first step on every task — a guaranteed extra round-trip providing
+   information `get_context` was already going to give for free. This is the single most
+   concrete, provable contributor found in this pass.
 
-**Not treated as a real finding.** A single question is exactly the kind of sample round 3
-already showed can't be trusted alone — individual questions in that 5-question run swung
-2-3x in either direction while the *total* landed within noise of parity. This round also had
-a session-labeling mix-up (which run was "with" vs "without" got confused mid-test and had to
-be reconstructed from the `codegraph MCP` usage indicator after the fact), which is its own
-signal that the test wasn't run cleanly enough to trust. Logged rather than acted on: a
-proper isolation of `project_brief`'s effect needs the same discipline as round 3 (multiple
-questions, verified-clean session labeling throughout, not just at the end) — deferred until
-the next full validation pass rather than burning more of this session re-running it now,
-since `project_brief` is a low-risk additive tool (one bounded call, not a replacement of
-anything round 1-3 already validated) and not an active regression that needs urgent
-confirmation either way.
+### Fixed this pass
 
-## Round 5 (2026-07-13, same day): properly isolated `project_brief` A/B — a real, modest win
+[`installer/guide.py`](../packages/codegraph/installer/guide.py) — the managed `CLAUDE.md`
+block:
+- Rule 1 no longer mandates a separate `index_status` call. The agent now goes straight to
+  `get_context` and only calls `reindex` if that call's own `warnings` field flags
+  staleness.
+- Rule 2 (new): if the agent already knows it needs full source for a small, specific set
+  of entities (an edit task, not exploration), call `get_context(..., detail="full")`
+  directly instead of a summary call followed by a second full-detail call — collapsing a
+  common 2-round-trip pattern (confirmed happening in the transcripts: "let me search" then
+  "let me get the full source") into one.
+- Kept the block under its existing ~400-token budget (had to trim wording twice to fit —
+  worth noting the budget constraint itself is in tension with wanting to explain *why* a
+  rule exists; ended up shorter and more directive instead).
 
-Redid round 4 with the discipline it was missing: 3 different cold-start questions (not 1),
-each run twice in a fresh session — once letting `project_brief` fire normally, once with an
-explicit instruction to skip it while still allowing `get_context`/other codegraph tools.
-Every session's actual tool calls were confirmed from the in-transcript tool log (not
-reconstructed after the fact from a usage-panel side effect) — the first attempt at the
-"without" prompt (`"Do not call project_brief for this question"`) turned out to make the
-agent avoid the whole codegraph toolset, not just that one tool, which would have silently
-reproduced round 3's already-answered with/without-codegraph question instead of isolating
-`project_brief`; caught via the tool log showing zero MCP activity, fixed by making the
-prompt explicit that other codegraph tools were still expected.
-
-| Question | With `project_brief` | Without (codegraph tools still used) | Delta |
-|---|---|---|---|
-| Architecture overview | $0.37 (85% cache hit) | $0.48 (77% cache hit) | With −23% |
-| Transaction flow walkthrough | $0.70 (91% cache hit) | $0.67 (90% cache hit) | Without −4% |
-| Core abstractions/entry points | $0.48 (87% cache hit) | $0.52 (82% cache hit) | With −8% |
-| **Total** | **$1.55** | **$1.67** | **With −7%** |
-
-**`project_brief` wins.** 2 of 3 questions favor it on raw $ cost, the third is a near-wash
-slightly against it, and — more consistently than the $ number — **cache hit rate is higher
-with `project_brief` on all 3 questions**, including the one it lost on cost. A modest,
-real, properly-isolated improvement: not the dramatic win a from-scratch feature sometimes
-promises, but a genuine one, and importantly not a regression on any of the 3 questions
-tested. Consistent with round 3's finding that codegraph is closest to break-even (not a
-clear win) on a repo LedgerGuard's size — `project_brief` nudges that break-even point
-further in codegraph's favor rather than transforming it.
-
-## Round 6 (2026-08-07): first test on a genuinely large repo — JobHuntPro (1321 entities, 187 files)
-
-Every round before this one ran on LedgerGuard — 47 files, 244 entities. The scale-dependence
-claim this whole report leans on (round 1's competitor research: near-parity on small/medium
-repos, a clear win only once a codebase gets large) had never actually been tested with our
-own data on a large repo. JobHuntPro is ~5.4x LedgerGuard's entity count and genuinely
-cross-language: a Chrome MV3 extension (JS), a Node/Express backend, a separate Python/FastAPI
-backend, and a React frontend — four sub-apps, two backend languages.
-
-**Methodology, corrected mid-run (logged honestly, not smoothed over):** the original plan
-called for 3 fresh, isolated sessions per side. In practice all 3 questions were asked as
-follow-ups in one continuous session per side (matching how a real developer actually works,
-and matching every earlier round's actual methodology) — caught when a "fresh session" cost
-figure turned out to be a cumulative total including the prior question. Recomputed every
-number below as per-question deltas from the cumulative total, not standalone figures.
-Also confirmed via the `/usage` panel's model breakdown that both sides ran 100% Sonnet, 0%
-Haiku throughout — not a confound between conditions.
-
-**Real methodological wrinkle worth keeping:** the without-codegraph session dispatched
-Claude Code's own built-in **Explore subagent** for the two harder questions (visible in the
-usage panel as 71-79% of that session's cost). This is an honest, representative baseline —
-Explore is a native capability every Claude Code user has with zero setup — but it means
-"without codegraph" here measures against Claude Code's own agentic exploration tooling, not
-a naive grep-and-read loop. Worth remembering when comparing this number to any published
-benchmark that assumes a dumber baseline.
-
-| Question | With codegraph | Without codegraph | Delta |
-|---|---|---|---|
-| Architecture overview | $0.46 (90% cache hit) | $0.38 (91% cache hit) | Without −$0.08 |
-| Cross-service data flow (Node → Python) | $0.56 (94% cache hit) | $0.71 (93% cache hit) | With −$0.15 |
-| Impact/blast-radius of a shared data shape | $0.80 (96% cache hit) | $1.03 (94% cache hit) | With −$0.23 |
-| **Total** | **$1.82** | **$2.12** | **With −$0.30 (−14%)** |
-
-**With codegraph wins overall, and the pattern is directional, not noise.** Without-codegraph
-won only the easy question — and the answer's own opening line explained why: *"This
-README/PROGRESS gives a very solid picture already"* — JobHuntPro has an unusually complete
-hand-written README with an architecture table, so reading two docs was genuinely competitive
-with walking the graph for that specific question. Codegraph won both harder questions
-(cross-service trace, blast-radius) by a **growing margin** as the tracing got deeper — exactly
-the shape the competitor research predicted: the advantage shows up on hard, cross-cutting
-questions on a large repo, not on ones a good README already answers. Answer quality was
-comparable on all 3 questions on both sides (same core findings, similarly precise file:line
-citations) — this is a real cost result, not a quality tradeoff dressed up as one.
-
-**This is the first data point at this scale, not a settled conclusion** — same caveat every
-earlier round has carried: one repo, 3 questions, real but limited. It does, however, mark the
-first time in this whole cost-efficiency investigation that codegraph won on total $ cost
-against a real, unmodified baseline (round 5's `project_brief` win was isolated to one
-feature, not the whole with/without-codegraph question) — consistent with, not just assumed
-from, the scale-dependence claim this report has cited since round 1.
-
-## Round 7 (2026-08-11): Grafana (97,239 entities, 16,046 files) — a near-tie, and why
-
-The biggest repo tested yet by a wide margin — ~73x JobHuntPro's entity count, ~344x
-LedgerGuard's. Getting here required fixing two real bugs first, not just running the
-comparison: a server boot sequence that blocked the MCP handshake on a large repo's staleness
-scan (fixed by backgrounding it), and — more seriously — a genuine deadlock where loading the
-embedding model off the main thread while the asyncio event loop was running froze the server
-indefinitely (confirmed by direct reproduction: the identical warmup call completed in ~31s run
-synchronously vs. hanging 280s+ with zero progress dispatched through the server's real
-`anyio.to_thread` path). Both are logged in the codebase's own commit history, not repeated
-here — relevant context for why this round's numbers include a real, if large, one-time
-first-connect cost (70-90s+) that smaller-repo rounds never paid.
-
-**Methodology:** same continuous-session, cumulative-delta protocol as round 6. Both sides ran
-the identical 3 questions in one session each; MCP genuinely removed (`claude mcp remove
-codegraph`) for the without-side, not prompt-suppressed.
-
-| Question | With codegraph | Without codegraph | Delta |
-|---|---|---|---|
-| Architecture overview | $0.26 (81% cache hit) | $0.26 (84% cache hit) | Tie |
-| Dashboard alerting trace | $0.57 (93% cache hit) | $0.58 (93% cache hit) | Without −$0.01 |
-| Dashboard model shape/blast-radius | $1.03 (96% cache hit) | $1.06 (96% cache hit) | With −$0.03 |
-| **Total** | **$1.03** | **$1.06** | **With −$0.03 (−2.8%)** |
-
-**Honest read: this is a tie, not a win.** A 2.8% margin is inside measurement noise for a
-3-question sample. Two real reasons, not excuses:
-
-1. **Grafana's own docs are unusually strong.** Nearly every major subsystem has a
-   directory-scoped `AGENTS.md` (alerting, unified storage, docs, journeys) plus a normal
-   README — this repo is already pre-optimized for AI-agent navigation in a way neither
-   LedgerGuard nor JobHuntPro was. Grep-on-a-well-documented-repo is a much stronger baseline
-   than grep-on-an-undocumented-one; the scale-dependence advantage this report has tracked
-   since round 1 assumes the baseline has to work harder than that.
-2. **Question 3 was shaped exactly wrong for what `impact_analysis` tracked at the time.**
-   "What would break if I changed the Dashboard *data model's shape*" is a type/struct-shape
-   question; `impact_analysis` only walked the call graph (transitive callers), and a
-   struct/interface has no callers — only field/param/return-type references. It correctly
-   returned `total: 0` on every type query, which reads as "safe to change" but actually meant
-   "invisible to this tool." The without-side's plain grep for the type name found real answers
-   `impact_analysis` structurally couldn't produce, and won that specific question because of
-   it — not because grep is better at scale, but because the tool was blind to the exact shape
-   of the question asked.
-
-**Fixed the same day, then re-measured:** `impact_analysis` now checks the resolved entity's
-kind — functions/methods still get the call-graph blast radius; a class/interface/type_alias
-gets a signature-text usage search instead (word-boundary match over the same indexed data, no
-re-index required). Verified directly against this exact Grafana index before re-testing:
-`DashboardDTO` went from `total: 0` to 30 real usages (`BackendSrv.getDashboardByUid`,
-`getDashboardFolderTitle`, and 28 others).
-
-### Question 3, re-run standalone (fresh session each side, not a continuation)
-
-| | Cost | Notes |
-|---|---|---|
-| With codegraph | **$0.43** | 5 `impact_analysis` calls, 89% cache hit. Found two real blast radii: legacy frontend `DashboardModel` (49 usages) and backend spec types across all 5 API versions (62 usages, incl. codegen/deepcopy/OpenAPI implications). |
-| Without codegraph | **$1.03** | Dispatched Claude Code's own Explore subagent (77% of session cost) running multiple background searches. Found comparable depth (schema version freeze, conversion functions, unified-storage compat contract, 38 alerting files referencing `DashboardUID`). |
-| **Delta** | **With −$0.60 (−58%)** | |
-
-**This is the win the near-tie was missing, on the exact question that exposed the gap.** Both
-answers were genuinely good quality — this isn't a quality tradeoff, codegraph got comparable
-depth for less than half the cost. The mechanism matches JobHuntPro round 6's pattern exactly:
-the harder/deeper the question, the more the gap grows in codegraph's favor, and it grows
-sharply once the without-side is forced to dispatch Claude Code's Explore subagent to compensate
-for a capability the graph tool didn't have. Note this specific re-test used fresh standalone
-sessions per side (not the continuous-session protocol every other number in this report uses)
-to isolate the one changed variable — not directly poolable with the round's own $1.03/$1.06
-continuous-session totals above, but the before/after contrast (tool blind to the question →
-tool answers it directly) is the real finding here, not the exact dollar figure.
+1 new regression test in `test_installer_guide.py`. This fix has **not yet been
+re-measured empirically** — the honest next step is rerunning the same 5-question A/B with
+the updated guide to see how much of the 34% gap it actually closes. Don't claim it's fixed
+until that's done.
 
 ## What this report is NOT saying
 
