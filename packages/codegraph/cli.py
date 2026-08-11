@@ -329,7 +329,35 @@ def index(
     store = GraphStore(db)
     store.init_schema()
 
-    files = list(walk(repo))
+    # walk() is lazy -- materializing it (many nested dirs, a large .git/,
+    # vendored assets) can itself take real time on a big repo, and it runs
+    # before the Parsing bar below even exists, so a plain `list(walk(repo))`
+    # here printed nothing at all until the whole tree was scanned. Drive it
+    # manually so scanning is visible from the very first second.
+    files: list[tuple[Path, Language]] = []
+    if console.is_terminal:
+        with console.status("[cyan]Scanning files...", spinner="dots") as scan_status:
+            last_update = time.monotonic()
+            for item in walk(repo):
+                files.append(item)
+                now = time.monotonic()
+                if now - last_update >= 0.2:
+                    scan_status.update(f"[cyan]Scanning files... {len(files)} found[/cyan]")
+                    last_update = now
+    else:
+        last_scan_print = time.monotonic()
+        for item in walk(repo):
+            files.append(item)
+            now = time.monotonic()
+            if _should_emit_plain_progress(len(files), float("inf"), now - last_scan_print):
+                console.print(
+                    f"[dim]Scanning... {len(files)} files found, {now - start:.0f}s elapsed[/dim]"
+                )
+                last_scan_print = now
+        console.print(
+            f"[dim]Scan complete: {len(files)} files found, {time.monotonic() - start:.0f}s.[/dim]"
+        )
+
     skipped_lang = 0
     skipped_generated = 0
     parse_errors = 0

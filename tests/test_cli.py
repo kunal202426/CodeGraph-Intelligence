@@ -111,6 +111,17 @@ def test_index_prints_a_plain_progress_line_when_not_a_terminal(
     assert "Parsing... 7/7 (100%)" in result.stdout
 
 
+def test_index_prints_scan_complete_when_not_a_terminal(runner: CliRunner, tmp_path: Path) -> None:
+    """Regression: `files = list(walk(repo))` ran with zero output before the
+    Parsing bar even started -- on a huge repo (many nested dirs, a large
+    .git/, vendored assets) that walk itself can take minutes, and looked
+    completely stuck since nothing had printed yet at all."""
+    db = tmp_path / "graph.duckdb"
+    result = runner.invoke(app, ["index", str(SAMPLE_REPO), "--db", str(db)])
+    assert result.exit_code == 0, result.stdout
+    assert "Scan complete: 7 files found" in result.stdout
+
+
 # ---------- index ----------
 
 
