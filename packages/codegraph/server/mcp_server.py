@@ -1673,6 +1673,54 @@ async def _serve() -> None:
         await server.run(read_stream, write_stream, server.create_initialization_options())
 
 
+def _start_boot_diagnostics() -> threading.Thread:
+    """Run the staleness check + embedding warm-up on a background thread.
+
+    Both are best-effort (staleness is an early stderr warning; warm-up just
+    pre-loads the embedding model so the first real call isn't slow) --
+    neither is required to serve requests. They used to run before
+    stdio_server() started, blocking the MCP handshake itself: on a large
+    repo (tens of thousands of files) the staleness scan alone can take
+    several seconds, and a real 16k-file repo pushed total boot past 13s --
+    long enough for Claude Code's own MCP connect timeout to give up and
+    report "Failed to connect" even though the server was working fine.
+    Running them here instead means the handshake is never gated on repo size.
+    """
+    import time
+
+    def _run() -> None:
+        stale_start = time.monotonic()
+        try:
+            from codegraph.sync.watcher import count_stale_files
+
+            stale = count_stale_files(Path("."), get_db_path())
+            if stale > 0:
+                import sys
+
+                noun = "file" if stale == 1 else "files"
+                print(
+                    f"CodeGraph: {stale} {noun} changed since last index. "
+                    "Re-run codegraph index to update.",
+                    file=sys.stderr,
+                )
+        except Exception:  # noqa: BLE001 — staleness check is best-effort
+            pass
+        stale_secs = time.monotonic() - stale_start
+
+        warm_start = time.monotonic()
+        _warm_embedding_model_with_timeout()
+        warm_secs = time.monotonic() - warm_start
+
+        _breadcrumb(
+            f"background boot diagnostics done (staleness {stale_secs:.1f}s, "
+            f"warmup {warm_secs:.1f}s)"
+        )
+
+    thread = threading.Thread(target=_run, daemon=True, name="codegraph-boot-diagnostics")
+    thread.start()
+    return thread
+
+
 def main() -> None:
     global _db_path
     import time
@@ -1685,38 +1733,9 @@ def main() -> None:
         _db_path = args.db
     _breadcrumb(f"starting (db: {get_db_path()})")
     _start_ppid_watchdog(os.getppid())
+    _start_boot_diagnostics()
 
-    # Staleness check: warn to stderr if source files changed since last index.
-    # stdout is reserved for MCP framing; all diagnostics must go to stderr.
-    stale_start = time.monotonic()
-    try:
-        from codegraph.sync.watcher import count_stale_files
-
-        stale = count_stale_files(Path("."), get_db_path())
-        if stale > 0:
-            import sys
-
-            noun = "file" if stale == 1 else "files"
-            print(
-                f"CodeGraph: {stale} {noun} changed since last index. "
-                "Re-run codegraph index to update.",
-                file=sys.stderr,
-            )
-    except Exception:  # noqa: BLE001 — staleness check is best-effort
-        pass
-    stale_secs = time.monotonic() - stale_start
-
-    # Warm the embedding model in the main thread BEFORE serving, so the first
-    # get_context doesn't trigger a heavy off-main-thread import that can hang.
-    # Bounded so a slow environment can't also stall the MCP handshake itself.
-    warm_start = time.monotonic()
-    _warm_embedding_model_with_timeout()
-    warm_secs = time.monotonic() - warm_start
-
-    _breadcrumb(
-        f"serving (boot {time.monotonic() - boot_start:.1f}s: "
-        f"staleness {stale_secs:.1f}s, warmup {warm_secs:.1f}s)"
-    )
+    _breadcrumb(f"serving (boot {time.monotonic() - boot_start:.1f}s)")
 
     import anyio
 

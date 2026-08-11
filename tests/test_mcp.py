@@ -935,10 +935,14 @@ def test_main_emits_starting_and_serving_breadcrumbs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
 ) -> None:
     """The boot path must leave a breadcrumb trail on stderr: 'starting' at
-    process start and 'serving' (with phase timings) once the handshake loop
-    is about to begin. Added after three real stuck-connection incidents that
-    each began as guesswork over a silent process -- with these lines, the
-    absence/last-line of the trail localizes the stall at a glance."""
+    process start and 'serving' once the handshake loop is about to begin.
+    Added after three real stuck-connection incidents that each began as
+    guesswork over a silent process -- with these lines, the absence/last-line
+    of the trail localizes the stall at a glance. Staleness/warmup timings are
+    no longer part of this immediate trail -- see
+    test_boot_diagnostics_run_in_background_and_report_when_done -- because
+    waiting for them here is exactly the bug in
+    test_main_does_not_block_on_slow_staleness_check."""
     import anyio
 
     monkeypatch.setattr(mcp_server, "_db_path", tmp_path / "nope.duckdb")
@@ -951,6 +955,53 @@ def test_main_emits_starting_and_serving_breadcrumbs(
     assert captured.out == ""
     assert "starting (db:" in captured.err
     assert "serving (boot" in captured.err
+
+
+def test_main_does_not_block_on_slow_staleness_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: staleness check + embedding warm-up used to run BEFORE
+    stdio_server() started, blocking the MCP handshake itself. On a large
+    repo the staleness scan alone can take several seconds -- confirmed on a
+    real 16k-file repo taking 13+s total boot, past what Claude Code's own
+    MCP connect timeout allows, surfacing as "Failed to connect" in `claude
+    mcp list` even though the server was working fine. Both now run on a
+    background thread instead of gating startup."""
+    import time
+
+    import anyio
+
+    monkeypatch.setattr(mcp_server, "_db_path", tmp_path / "nope.duckdb")
+    monkeypatch.setattr("sys.argv", ["codegraph-mcp"])
+    monkeypatch.setattr(anyio, "run", lambda fn: None)
+
+    def _slow_count_stale_files(*_a, **_k):
+        time.sleep(0.3)
+        return 0
+
+    monkeypatch.setattr("codegraph.sync.watcher.count_stale_files", _slow_count_stale_files)
+
+    start = time.monotonic()
+    mcp_server.main()
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 0.1, f"main() blocked for {elapsed:.2f}s on the staleness check"
+
+
+def test_boot_diagnostics_run_in_background_and_report_when_done(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    """The backgrounded staleness+warmup work must still leave its own
+    breadcrumb once it finishes, preserving the debugging value of the old
+    (blocking) combined line -- just off the handshake's critical path."""
+    monkeypatch.setattr(mcp_server, "_db_path", tmp_path / "nope.duckdb")
+
+    thread = mcp_server._start_boot_diagnostics()
+    thread.join(timeout=5.0)
+    assert not thread.is_alive()
+
+    captured = capsys.readouterr()
+    assert "staleness" in captured.err
     assert "warmup" in captured.err
 
 
