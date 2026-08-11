@@ -394,15 +394,31 @@ codegraph`) for the without-side, not prompt-suppressed.
    it — not because grep is better at scale, but because the tool was blind to the exact shape
    of the question asked.
 
-**Fixed the same day, not yet re-measured:** `impact_analysis` now checks the resolved
-entity's kind — functions/methods still get the call-graph blast radius; a
-class/interface/type_alias gets a signature-text usage search instead (word-boundary match
-over the same indexed data, no re-index required). Verified directly against this exact
-Grafana index: `DashboardDTO` went from `total: 0` to 30 real usages
-(`BackendSrv.getDashboardByUid`, `getDashboardFolderTitle`, and 28 others). Question 3 has not
-yet been re-run with this fix in place — that's the next data point, not a claimed win. Logging
-the honest near-tie here first rather than only reporting the number after the fix that was
-motivated by watching it lose.
+**Fixed the same day, then re-measured:** `impact_analysis` now checks the resolved entity's
+kind — functions/methods still get the call-graph blast radius; a class/interface/type_alias
+gets a signature-text usage search instead (word-boundary match over the same indexed data, no
+re-index required). Verified directly against this exact Grafana index before re-testing:
+`DashboardDTO` went from `total: 0` to 30 real usages (`BackendSrv.getDashboardByUid`,
+`getDashboardFolderTitle`, and 28 others).
+
+### Question 3, re-run standalone (fresh session each side, not a continuation)
+
+| | Cost | Notes |
+|---|---|---|
+| With codegraph | **$0.43** | 5 `impact_analysis` calls, 89% cache hit. Found two real blast radii: legacy frontend `DashboardModel` (49 usages) and backend spec types across all 5 API versions (62 usages, incl. codegen/deepcopy/OpenAPI implications). |
+| Without codegraph | **$1.03** | Dispatched Claude Code's own Explore subagent (77% of session cost) running multiple background searches. Found comparable depth (schema version freeze, conversion functions, unified-storage compat contract, 38 alerting files referencing `DashboardUID`). |
+| **Delta** | **With −$0.60 (−58%)** | |
+
+**This is the win the near-tie was missing, on the exact question that exposed the gap.** Both
+answers were genuinely good quality — this isn't a quality tradeoff, codegraph got comparable
+depth for less than half the cost. The mechanism matches JobHuntPro round 6's pattern exactly:
+the harder/deeper the question, the more the gap grows in codegraph's favor, and it grows
+sharply once the without-side is forced to dispatch Claude Code's Explore subagent to compensate
+for a capability the graph tool didn't have. Note this specific re-test used fresh standalone
+sessions per side (not the continuous-session protocol every other number in this report uses)
+to isolate the one changed variable — not directly poolable with the round's own $1.03/$1.06
+continuous-session totals above, but the before/after contrast (tool blind to the question →
+tool answers it directly) is the real finding here, not the exact dollar figure.
 
 ## What this report is NOT saying
 
