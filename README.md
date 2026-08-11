@@ -8,6 +8,12 @@
 
 **Index the repo once into a queryable graph — the agent looks things up instead of re-reading files.**
 
+## 🏆 Real A/B test, 97,000-entity repo: **58% cheaper**
+
+<br>
+
+![cost](https://img.shields.io/badge/real_A%2FB-58%25_cheaper-facc15?style=for-the-badge&labelColor=0d1424)
+
 <br>
 
 ![tests](https://img.shields.io/badge/tests-1276_passing-22c55e?style=flat-square&labelColor=0d1424)
