@@ -351,6 +351,59 @@ against a real, unmodified baseline (round 5's `project_brief` win was isolated 
 feature, not the whole with/without-codegraph question) — consistent with, not just assumed
 from, the scale-dependence claim this report has cited since round 1.
 
+## Round 7 (2026-08-11): Grafana (97,239 entities, 16,046 files) — a near-tie, and why
+
+The biggest repo tested yet by a wide margin — ~73x JobHuntPro's entity count, ~344x
+LedgerGuard's. Getting here required fixing two real bugs first, not just running the
+comparison: a server boot sequence that blocked the MCP handshake on a large repo's staleness
+scan (fixed by backgrounding it), and — more seriously — a genuine deadlock where loading the
+embedding model off the main thread while the asyncio event loop was running froze the server
+indefinitely (confirmed by direct reproduction: the identical warmup call completed in ~31s run
+synchronously vs. hanging 280s+ with zero progress dispatched through the server's real
+`anyio.to_thread` path). Both are logged in the codebase's own commit history, not repeated
+here — relevant context for why this round's numbers include a real, if large, one-time
+first-connect cost (70-90s+) that smaller-repo rounds never paid.
+
+**Methodology:** same continuous-session, cumulative-delta protocol as round 6. Both sides ran
+the identical 3 questions in one session each; MCP genuinely removed (`claude mcp remove
+codegraph`) for the without-side, not prompt-suppressed.
+
+| Question | With codegraph | Without codegraph | Delta |
+|---|---|---|---|
+| Architecture overview | $0.26 (81% cache hit) | $0.26 (84% cache hit) | Tie |
+| Dashboard alerting trace | $0.57 (93% cache hit) | $0.58 (93% cache hit) | Without −$0.01 |
+| Dashboard model shape/blast-radius | $1.03 (96% cache hit) | $1.06 (96% cache hit) | With −$0.03 |
+| **Total** | **$1.03** | **$1.06** | **With −$0.03 (−2.8%)** |
+
+**Honest read: this is a tie, not a win.** A 2.8% margin is inside measurement noise for a
+3-question sample. Two real reasons, not excuses:
+
+1. **Grafana's own docs are unusually strong.** Nearly every major subsystem has a
+   directory-scoped `AGENTS.md` (alerting, unified storage, docs, journeys) plus a normal
+   README — this repo is already pre-optimized for AI-agent navigation in a way neither
+   LedgerGuard nor JobHuntPro was. Grep-on-a-well-documented-repo is a much stronger baseline
+   than grep-on-an-undocumented-one; the scale-dependence advantage this report has tracked
+   since round 1 assumes the baseline has to work harder than that.
+2. **Question 3 was shaped exactly wrong for what `impact_analysis` tracked at the time.**
+   "What would break if I changed the Dashboard *data model's shape*" is a type/struct-shape
+   question; `impact_analysis` only walked the call graph (transitive callers), and a
+   struct/interface has no callers — only field/param/return-type references. It correctly
+   returned `total: 0` on every type query, which reads as "safe to change" but actually meant
+   "invisible to this tool." The without-side's plain grep for the type name found real answers
+   `impact_analysis` structurally couldn't produce, and won that specific question because of
+   it — not because grep is better at scale, but because the tool was blind to the exact shape
+   of the question asked.
+
+**Fixed the same day, not yet re-measured:** `impact_analysis` now checks the resolved
+entity's kind — functions/methods still get the call-graph blast radius; a
+class/interface/type_alias gets a signature-text usage search instead (word-boundary match
+over the same indexed data, no re-index required). Verified directly against this exact
+Grafana index: `DashboardDTO` went from `total: 0` to 30 real usages
+(`BackendSrv.getDashboardByUid`, `getDashboardFolderTitle`, and 28 others). Question 3 has not
+yet been re-run with this fix in place — that's the next data point, not a claimed win. Logging
+the honest near-tie here first rather than only reporting the number after the fix that was
+motivated by watching it lose.
+
 ## What this report is NOT saying
 
 - Not saying CodeGraph's core graph/search/analysis features are wrong — cycles, smells,
