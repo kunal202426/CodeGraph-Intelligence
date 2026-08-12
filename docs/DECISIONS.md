@@ -47,6 +47,33 @@ re-test). Nothing swept under the rug.
 
 **Aug 2026**
 
+- **Fixed the real reason Kortex sometimes "wasn't being used" on a big repo — three
+  compounding bugs, none of them in the agent.** For weeks the symptom was that an agent
+  given an *editing* task on Grafana went straight to grep, ignoring the MCP tools; two
+  rounds of guide-wording changes did nothing, because the tools were never callable.
+  Measuring MCP boot directly found why:
+  - Boot took **25.6s cold** against Claude Code's **30s connect timeout** — `main()` loaded
+    sentence-transformers/torch synchronously before it could serve. Warm cache connected;
+    cold cache got dropped *silently*, so the agent had no tools and no error to report.
+    Embeddings now run in a **worker subprocess** spawned at boot and never waited on. That
+    also makes the old main-thread deadlock structurally impossible: torch is never imported
+    in the server process at all.
+  - `get_context` ran a **full repo walk synchronously, twice** (stale count + stale paths)
+    on a cold cache, while the boot thread ran a third copy — **225 seconds** on 16k files.
+    Staleness is now single-flight, shared between both caches from one walk, and bounded by
+    a 1s first-call budget: small repos keep the immediate warning, big ones answer now and
+    warn on the next call.
+  - Those three concurrent walks **crashed the interpreter outright** (`Fatal Python error:
+    PyEval_SaveThread: the function must be called with the GIL held`), killing the server
+    mid-session — which a client surfaces only as a dropped connection.
+  - The walk itself was slow because it opened and read 8 KiB of *every* source file to
+    sniff for binaries. Staleness only needs paths and mtimes, and an already-indexed file
+    was proven non-binary when it was indexed, so the sniff is now skipped for known files
+    and kept only for genuinely new ones.
+
+  Measured on Grafana after: **boot 25.6s → 0.3s**, **staleness walk 225s → 6.2s**, first
+  `get_context` **19.9s**, warm calls **0.5s**, clean exit. Every earlier "codegraph wasn't
+  invoked for editing tasks" data point is void — that A/B needs re-running from scratch.
 - Real, controlled A/B on an even bigger repo — Grafana (97,239 entities, 16,046 files). The
   round came back a near-tie (-2.8%) until digging into *why* one question lost surfaced a real
   gap: `impact_analysis` only walked the call graph, so a struct/interface (no callers, only

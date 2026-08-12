@@ -8,24 +8,39 @@
   spec, `plan/`) moved out of the public repo into a local, gitignored `.internal/` folder.
 - **Phase:** Maintenance & hardening (post-audit fixes, usability, repo hygiene). No phase
   currently in progress — safe to start a new session cold from this file.
-- **Tests:** 1278 passing, 1 live-skip (needs `ANTHROPIC_API_KEY`), 0 failing. Verified both
+- **Tests:** 1300 passing, 1 live-skip (needs `ANTHROPIC_API_KEY`), 0 failing. Verified both
   locally and on GitHub Actions (`gh run list`) as of the last commit below. (This file's
   "Next task" list and phase history below predate the 2026-08-11 Grafana stress test and its
   fixes — see the README changelog and
   [docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md](docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md)
   for what shipped since; not yet reconciled into this file's own history below.)
-- **Known major gap, highest priority (found 2026-08-11, partially mitigated, not solved):**
-  reproduced 3x live on Grafana that an agent given an **editing** task goes straight to
-  grep + Read, skipping codegraph tools entirely — once with a competing skill firing
-  (`superpowers:brainstorming`, under its own "invoke if even 1% relevant" policy), twice
-  with no skill involved and codegraph verified connected. Never happened on any pure Q&A
-  test. Sharper hypothesis after the 3rd repro: the guide's edit rule said "Editing? Locate
-  it, then Read + Edit" — vague enough that "locate it" via grep self-justifies, since Edit
-  needs a fresh Read regardless. Two mitigations shipped: `skill` named explicitly alongside
-  `grep`/`explore-subagent` in the general rule, and the edit rule now names the locate tool
-  directly (`Locate via get_context/search_code`, not just "locate it"). Neither is a proven
-  fix yet — both are still just stronger nudges codegraph can't force compliance with. Needs
-  real re-testing on the next editing task before calling this closed.
+- **RESOLVED 2026-08-12 — it was never a model-behaviour problem.** Reproduced 5x live on
+  Grafana that an agent given an **editing** task went straight to grep + Read, skipping
+  codegraph entirely. Two rounds of guide-wording fixes changed nothing, which was the clue:
+  the tools were never callable in the first place. Root cause, found by measuring MCP boot
+  directly instead of reasoning about the agent:
+  - **Boot took 25.6s cold** on Grafana (97k entities), against Claude Code's **30s MCP
+    connect timeout**. `main()` loaded sentence-transformers/torch *synchronously* before it
+    could serve (12.6s of imports alone). Warm filesystem cache → connected; cold → the
+    client dropped the server **silently**, with no error surfaced, so the agent just used
+    grep. That's the whole mystery: Q&A tests passed because the server was already warm from
+    a prior call; fresh editing sessions started cold. `claude mcp list` always said
+    `✓ Connected` because it boots its own server and *waits*, unlike a session.
+  - **`get_context` ran a full repo walk synchronously, twice** (`_get_stale_count` +
+    `_get_stale_paths`), on a cold cache, while the boot thread ran a third copy. That walk
+    measured **225 seconds** on 16k files — the cache's "10-50ms per call" assumption only
+    ever held on small repos.
+  - **Three concurrent walks crashed the interpreter outright** —
+    `Fatal Python error: PyEval_SaveThread: the function must be called with the GIL held` —
+    killing the server mid-session, which a client reports only as a lost connection.
+
+  All three fixed (see the 2026-08-12 changelog entry): embeddings moved to a worker
+  subprocess, staleness made single-flight + non-blocking with a bounded first-call budget,
+  and the staleness walk taught to skip the per-file binary sniff. Measured after:
+  **boot 25.6s → 0.3s, staleness walk 225s → 6.2s, first `get_context` → 19.9s, warm calls
+  → 0.5s, clean exit, no crash.** The guide-wording changes stay (they're still reasonable
+  nudges) but they were never the issue. **The editing A/B test needs re-running from
+  scratch** — every prior "codegraph wasn't used" data point is void.
 - **Next task (all optional, none blocking):**
   - JSX/React component usage (`<Component />`) isn't a call edge — confirmed the
     second-largest dead-code false-positive source on a real React frontend, see

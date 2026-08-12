@@ -43,7 +43,7 @@ import pathspec
 from codegraph.graph.resolver import resolve_symbols
 from codegraph.graph.store import GraphStore, escape_like
 from codegraph.uir import hash_source
-from codegraph.walker import ALWAYS_EXCLUDE, detect_language, looks_generated, walk
+from codegraph.walker import ALWAYS_EXCLUDE, detect_language, is_binary, looks_generated, walk
 
 # --------------------------------------------------------------------------- #
 # Public data-transfer object
@@ -612,14 +612,23 @@ def find_stale_files(repo: Path, db: Path) -> list[Path]:
     stale: list[Path] = []
     try:
         root = Path(repo).resolve()
-        for abs_path, _lang in walk(repo):
+        # Walk without the content-based binary sniff: it opens and reads every
+        # candidate file, which measured 225s on a real 16k-file repo and made
+        # MCP tool calls appear to hang. A path already present in `indexed_at`
+        # was proven indexable when it was indexed, so it needs no re-check;
+        # only a path we've never seen still gets sniffed, below.
+        for abs_path, _lang in walk(repo, sniff_binary=False):
             try:
                 rel = abs_path.relative_to(root).as_posix()
             except ValueError:
                 continue
             last_indexed_ts = indexed_at.get(rel)
             if last_indexed_ts is None:
-                stale.append(abs_path)  # never indexed
+                # Unknown file: sniff it now, so a binary blob with a source
+                # extension isn't reported stale forever (indexing would
+                # correctly refuse it, so the warning could never clear).
+                if not is_binary(abs_path):
+                    stale.append(abs_path)
                 continue
             try:
                 if abs_path.stat().st_mtime > last_indexed_ts:
@@ -676,7 +685,15 @@ def find_deleted_files(repo: Path, db: Path) -> list[str]:
 
     try:
         root = Path(repo).resolve()
-        existing = {abs_path.relative_to(root).as_posix() for abs_path, _lang in walk(repo)}
+        # No binary sniff needed: this only asks "does the path still exist?",
+        # and reading 8 KiB of every file to answer that is what made the
+        # staleness check cost minutes on a large repo. If anything, skipping
+        # it is more correct here -- a file that turned binary still exists and
+        # should not be reported as deleted.
+        existing = {
+            abs_path.relative_to(root).as_posix()
+            for abs_path, _lang in walk(repo, sniff_binary=False)
+        }
     except Exception:  # noqa: BLE001 — repo missing, permission error, etc.
         return []
 

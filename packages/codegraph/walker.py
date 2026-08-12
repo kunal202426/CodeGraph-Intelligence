@@ -148,8 +148,18 @@ def _load_gitignore(root: Path) -> pathspec.PathSpec | None:
     return pathspec.PathSpec.from_lines("gitignore", text.splitlines())
 
 
-def walk(root: Path) -> Iterator[tuple[Path, Language]]:
-    """Yield (path, language) for each indexable file under `root`."""
+def walk(root: Path, sniff_binary: bool = True) -> Iterator[tuple[Path, Language]]:
+    """Yield (path, language) for each indexable file under `root`.
+
+    ``sniff_binary=False`` skips the content-based binary check, which opens
+    and reads 8 KiB of *every* file with an indexable extension. That is
+    correct for indexing (a binary blob named ``.py`` must not be parsed) but
+    ruinously expensive for callers that only need paths and mtimes: on a real
+    16k-file repo those opens alone cost 225 seconds per walk, which is what
+    made the MCP server's staleness check hang tool calls for minutes. Callers
+    that pass False take responsibility for any binary files they might now
+    see -- see ``find_stale_files`` for how it stays correct.
+    """
     root = Path(root).resolve()
     if not root.is_dir():
         return
@@ -189,7 +199,7 @@ def walk(root: Path) -> Iterator[tuple[Path, Language]]:
                 if spec.match_file(rel_file):
                     continue
 
-            if is_binary(path):
+            if sniff_binary and is_binary(path):
                 continue
 
             yield path, lang

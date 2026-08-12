@@ -329,3 +329,74 @@ def test_serve_skips_warm_up_when_no_embeddings(tmp_path: Path) -> None:
 
     embed_one_mock.assert_not_called()
     assert "Loading embedding model" not in result.output
+
+
+# ---------------------------------------------------------------------------
+# staleness must not read file contents (T: 225s walk on a 16k-file repo)
+# ---------------------------------------------------------------------------
+
+
+def test_walk_can_skip_the_binary_content_sniff(tmp_path: Path) -> None:
+    """`walk` decides "is this binary?" by opening every candidate file and
+    reading 8 KiB. That is right for indexing and ruinous for a staleness
+    check, which only needs paths and mtimes: on a real 16k-file repo those
+    opens cost 225 SECONDS per walk. The sniff must be optional."""
+    from codegraph.walker import walk
+
+    (tmp_path / "text.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+    (tmp_path / "binary.py").write_bytes(b"\x00\x01\x02 not really python\x00")
+
+    sniffed = {p.name for p, _lang in walk(tmp_path)}
+    unsniffed = {p.name for p, _lang in walk(tmp_path, sniff_binary=False)}
+
+    assert sniffed == {"text.py"}
+    assert unsniffed == {"text.py", "binary.py"}
+
+
+def test_find_stale_files_does_not_read_already_indexed_files(tmp_path: Path, monkeypatch) -> None:
+    """The whole point of the opt-out: a file already in the index was proven
+    non-binary when it was indexed, so re-sniffing it every staleness check is
+    pure waste. Only genuinely unknown files still get read."""
+    import codegraph.walker as walker_mod
+    from codegraph.sync.watcher import find_stale_files
+
+    repo = tmp_path / "proj"
+    repo.mkdir()
+    (repo / "indexed.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+    db = repo / ".codegraph" / "graph.duckdb"
+    result = _RUNNER.invoke(app, ["index", str(repo), "--db", str(db), "--no-embed"])
+    assert result.exit_code == 0, result.output
+
+    sniffed: list[str] = []
+    real_is_binary = walker_mod.is_binary
+    monkeypatch.setattr(
+        walker_mod,
+        "is_binary",
+        lambda p: (sniffed.append(Path(p).name), real_is_binary(p))[1],
+    )
+
+    find_stale_files(repo, db)
+
+    assert "indexed.py" not in sniffed, f"re-read already-indexed files: {sniffed}"
+
+
+def test_never_indexed_binary_file_is_not_reported_stale(tmp_path: Path) -> None:
+    """Guard on the optimization above: skipping the sniff wholesale would make
+    a binary file with a source extension look "new, never indexed" on every
+    check -- a staleness warning that can never be cleared, because indexing
+    correctly refuses to index it. Unknown files must still be sniffed."""
+    from codegraph.sync.watcher import find_stale_files
+
+    repo = tmp_path / "proj"
+    repo.mkdir()
+    (repo / "real.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+    db = repo / ".codegraph" / "graph.duckdb"
+    result = _RUNNER.invoke(app, ["index", str(repo), "--db", str(db), "--no-embed"])
+    assert result.exit_code == 0, result.output
+
+    # Appears after indexing, has an indexable extension, but is not source.
+    (repo / "blob.py").write_bytes(b"\x00\x01\x02\x00")
+
+    stale = find_stale_files(repo, db)
+
+    assert [p.name for p in stale] == [], f"binary blob reported stale: {stale}"

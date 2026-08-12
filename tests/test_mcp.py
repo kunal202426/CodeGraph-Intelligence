@@ -631,26 +631,172 @@ def test_get_stale_count_rechecks_after_branch_switch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Simulates: index on main (cache primed with 0), switch branches inside
-    the TTL window, ask a question -- must not silently report 0 forever."""
+    the TTL window, ask a question -- must not silently report 0 forever.
+
+    The recheck is asynchronous (see the non-blocking tests below), so the
+    call that observes the new HEAD schedules the walk and the *next* call
+    sees the refreshed number."""
     import codegraph.sync.watcher as watcher_mod
 
     repo = tmp_path / "proj"
     db = _index_temp_repo(repo, repo / "a.py", "def f():\n    return 1\n")
     monkeypatch.setattr(mcp_server, "_db_path", db)
     monkeypatch.setattr(mcp_server, "_stale_cache", mcp_server._StalenessCache())
+    monkeypatch.setattr(mcp_server, "_stale_paths_cache", mcp_server._StalePathsCache())
 
-    heads = iter(["head-main", "head-main", "head-feature"])
-    monkeypatch.setattr(watcher_mod, "git_head", lambda _repo: next(heads))
+    head = {"value": "head-main"}
+    monkeypatch.setattr(watcher_mod, "git_head", lambda _repo: head["value"])
     monkeypatch.setattr(watcher_mod, "find_deleted_files", lambda _repo, _db: [])
-    monkeypatch.setattr(watcher_mod, "count_stale_files", lambda _repo, _db: 0)
+    monkeypatch.setattr(watcher_mod, "find_stale_files", lambda _repo, _db: [])
 
-    assert mcp_server._get_stale_count() == 0  # primes cache for head-main
+    mcp_server._refresh_staleness_now()  # primes cache for head-main
+    assert mcp_server._get_stale_count() == 0
     assert mcp_server._get_stale_count() == 0  # still head-main -> cache hit
 
     # HEAD moves to a different branch; even though TTL hasn't expired, the
     # cache must be treated as invalid and the count re-derived.
-    monkeypatch.setattr(watcher_mod, "count_stale_files", lambda _repo, _db: 4)
+    head["value"] = "head-feature"
+    monkeypatch.setattr(
+        watcher_mod, "find_stale_files", lambda _repo, _db: [repo / f"s{i}.py" for i in range(4)]
+    )
+    mcp_server._refresh_staleness_now()
     assert mcp_server._get_stale_count() == 4
+
+
+# ---------- staleness must never block a tool call ----------
+
+
+def test_get_stale_count_does_not_block_on_a_cold_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The bug that made get_context look frozen on a large repo.
+
+    Staleness is derived from a full directory walk. On a 16k-file repo that
+    measured 225 SECONDS -- and `_get_context` called it synchronously, twice
+    (count + paths), on a cold cache, while the boot thread ran the same walk
+    concurrently. The cache docstring's "10-50ms per call" estimate only ever
+    held for small repos.
+
+    A staleness warning is best-effort metadata; it must never gate an answer.
+    A cold cache reports "not stale yet" immediately and schedules the walk in
+    the background, so the *next* call carries the warning."""
+    import time
+
+    import codegraph.sync.watcher as watcher_mod
+
+    repo = tmp_path / "proj"
+    db = _index_temp_repo(repo, repo / "a.py", "def f():\n    return 1\n")
+    monkeypatch.setattr(mcp_server, "_db_path", db)
+    monkeypatch.setattr(mcp_server, "_stale_cache", mcp_server._StalenessCache())
+    monkeypatch.setattr(mcp_server, "_stale_paths_cache", mcp_server._StalePathsCache())
+
+    import threading
+
+    release = threading.Event()
+
+    def glacial_walk(_repo: Path, _db: Path) -> list[Path]:
+        release.wait(timeout=30)
+        return []
+
+    monkeypatch.setattr(mcp_server, "_staleness_refresh_running", False)
+    monkeypatch.setattr(watcher_mod, "git_head", lambda _repo: "head")
+    monkeypatch.setattr(watcher_mod, "find_stale_files", glacial_walk)
+    monkeypatch.setattr(watcher_mod, "find_deleted_files", lambda _repo, _db: [])
+
+    try:
+        t0 = time.monotonic()
+        count = mcp_server._get_stale_count()
+        paths = mcp_server._get_stale_paths()
+        elapsed = time.monotonic() - t0
+
+        assert elapsed < 5.0, f"staleness blocked the caller for {elapsed:.1f}s"
+        assert count == 0
+        assert paths == frozenset()
+    finally:
+        # Don't leave a walk in flight -- single-flight would then suppress the
+        # next test's refresh and it would fail for the wrong reason.
+        release.set()
+        time.sleep(0.2)
+
+
+def test_concurrent_callers_trigger_only_one_staleness_walk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Three concurrent full-repo walks (boot thread + get_context's count +
+    get_context's paths) hammered the filesystem hard enough to take down the
+    interpreter outright on a real 16k-file repo:
+
+        Fatal Python error: PyEval_SaveThread: the function must be called
+        with the GIL held, but the GIL is released
+
+    -- crashing the server mid-session, which the client reports only as a
+    dropped connection. One walk at a time, shared by every caller."""
+    import threading
+    import time
+
+    import codegraph.sync.watcher as watcher_mod
+
+    repo = tmp_path / "proj"
+    db = _index_temp_repo(repo, repo / "a.py", "def f():\n    return 1\n")
+    monkeypatch.setattr(mcp_server, "_db_path", db)
+    monkeypatch.setattr(mcp_server, "_stale_cache", mcp_server._StalenessCache())
+    monkeypatch.setattr(mcp_server, "_stale_paths_cache", mcp_server._StalePathsCache())
+
+    walks = {"n": 0}
+    walk_lock = threading.Lock()
+
+    def counting_walk(_repo: Path, _db: Path) -> list[Path]:
+        with walk_lock:
+            walks["n"] += 1
+        time.sleep(1.0)
+        return []
+
+    monkeypatch.setattr(mcp_server, "_staleness_refresh_running", False)
+    monkeypatch.setattr(watcher_mod, "git_head", lambda _repo: "head")
+    monkeypatch.setattr(watcher_mod, "find_stale_files", counting_walk)
+    monkeypatch.setattr(watcher_mod, "find_deleted_files", lambda _repo, _db: [])
+
+    threads = [threading.Thread(target=mcp_server._get_stale_count) for _ in range(4)] + [
+        threading.Thread(target=mcp_server._get_stale_paths) for _ in range(4)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=20)
+
+    # Let the single in-flight refresh finish.
+    time.sleep(2.5)
+    assert walks["n"] == 1, f"{walks['n']} concurrent walks -- must be single-flight"
+
+
+def test_one_walk_fills_both_the_count_and_paths_caches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """count_stale_files is literally len(find_stale_files), so deriving the
+    count and the path set from separate walks doubled the cost for nothing."""
+    import codegraph.sync.watcher as watcher_mod
+
+    repo = tmp_path / "proj"
+    db = _index_temp_repo(repo, repo / "a.py", "def f():\n    return 1\n")
+    monkeypatch.setattr(mcp_server, "_db_path", db)
+    monkeypatch.setattr(mcp_server, "_stale_cache", mcp_server._StalenessCache())
+    monkeypatch.setattr(mcp_server, "_stale_paths_cache", mcp_server._StalePathsCache())
+
+    walks = {"n": 0}
+
+    def counting_walk(_repo: Path, _db: Path) -> list[Path]:
+        walks["n"] += 1
+        return [repo / "a.py", repo / "b.py"]
+
+    monkeypatch.setattr(watcher_mod, "git_head", lambda _repo: "head")
+    monkeypatch.setattr(watcher_mod, "find_stale_files", counting_walk)
+    monkeypatch.setattr(watcher_mod, "find_deleted_files", lambda _repo, _db: ["gone.py"])
+
+    mcp_server._refresh_staleness_now()
+
+    assert walks["n"] == 1
+    assert mcp_server._get_stale_count() == 3  # 2 changed + 1 deleted
+    assert mcp_server._get_stale_paths() == frozenset({"a.py", "b.py", "gone.py"})
 
 
 def test_get_context_tool_definition() -> None:
@@ -925,28 +1071,30 @@ def test_get_context_no_match_has_zero_savings(indexed_db: Path) -> None:
     assert data["savings_ratio"] == 0.0
 
 
-# ---------- startup model warmup ----------
+# ---------- startup embedding worker ----------
 
 
-def test_warm_embedding_model_skips_without_embeddings(
+def test_embedding_worker_not_started_without_embeddings(
     indexed_db: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A --no-embed index has no vectors, so startup must NOT load the model
-    (which would import the heavy torch/sklearn stack for nothing)."""
-    import codegraph.embeddings.pipeline as pipeline
+    """A --no-embed index has no vectors, so startup must NOT spawn the worker
+    (whose only job is to host the heavy torch stack)."""
+    import codegraph.embeddings.remote as remote
 
-    called = {"n": 0}
-    monkeypatch.setattr(pipeline, "embed_one", lambda *_a, **_k: called.__setitem__("n", 1))
-    mcp_server._warm_embedding_model()
-    assert called["n"] == 0
+    started = {"n": 0}
+    monkeypatch.setattr(
+        remote.EmbeddingWorkerClient, "start", lambda self: started.__setitem__("n", 1)
+    )
+    mcp_server._start_embedding_worker()
+    assert started["n"] == 0
 
 
-def test_warm_embedding_model_is_noop_when_db_missing(
+def test_embedding_worker_start_is_noop_when_db_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Warmup must never raise, even if the DB doesn't exist yet."""
+    """Startup must never raise, even if the DB doesn't exist yet."""
     monkeypatch.setattr(mcp_server, "_db_path", tmp_path / "nope.duckdb")
-    mcp_server._warm_embedding_model()  # should return quietly
+    mcp_server._start_embedding_worker()  # should return quietly
 
 
 def test_breadcrumb_writes_to_stderr_never_stdout(capsys: pytest.CaptureFixture) -> None:
@@ -1081,29 +1229,91 @@ def test_start_ppid_watchdog_spawns_a_named_daemon_thread() -> None:
     assert thread.daemon is True
 
 
-def test_main_warms_embedding_model_synchronously_before_serving(
+def test_main_starts_the_embedding_worker_before_serving(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Regression: loading sentence-transformers/torch off the main thread
-    while the asyncio event loop is running deadlocks the whole server --
-    confirmed live by direct reproduction (same warmup code: ~31s called
-    synchronously vs. indefinite hang dispatched via anyio.to_thread, twice
-    reproduced against a real 97k-entity index). A background-thread or
-    timeout-and-abandon warmup (the previous design) can leave that import
-    still in flight on a non-main thread once the event loop starts -- the
-    exact unsafe state. Warmup must complete on the main thread, before
-    anyio.run, no exceptions."""
+    """The worker is spawned during boot so the model is already loading by the
+    time the first semantic query lands -- but boot never *waits* for it (see
+    the timing test below)."""
     import anyio
 
     order: list[str] = []
     monkeypatch.setattr(mcp_server, "_db_path", tmp_path / "nope.duckdb")
     monkeypatch.setattr("sys.argv", ["codegraph-mcp"])
-    monkeypatch.setattr(mcp_server, "_warm_embedding_model", lambda: order.append("warm"))
+    monkeypatch.setattr(mcp_server, "_start_embedding_worker", lambda: order.append("worker"))
     monkeypatch.setattr(anyio, "run", lambda fn: order.append("serve"))
 
     mcp_server.main()
 
-    assert order == ["warm", "serve"]
+    assert order == ["worker", "serve"]
+
+
+def test_main_does_not_block_boot_on_the_embedding_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The bug this whole subprocess design exists to fix.
+
+    Boot used to load sentence-transformers/torch synchronously before it
+    could serve: measured 25.6s cold on a real 97k-entity index, against
+    Claude Code's 30s MCP connect timeout. Warm filesystem cache -> connected;
+    cold -> the client gave up and dropped the server, silently, with no error
+    shown to the user. The agent then just used grep instead, which is what
+    made several A/B runs look like a model-behaviour problem when the tools
+    were simply never there.
+
+    It also could not be moved to a background thread: importing torch off the
+    main thread while the event loop runs deadlocks the process outright. A
+    subprocess solves both -- so boot must stay fast even when the model is
+    genuinely slow to load."""
+    import time
+
+    import anyio
+
+    monkeypatch.setattr(mcp_server, "_db_path", tmp_path / "nope.duckdb")
+    monkeypatch.setattr("sys.argv", ["codegraph-mcp"])
+    monkeypatch.setattr(anyio, "run", lambda fn: None)
+
+    # Stand in for a model that takes far longer than the connect timeout.
+    def slow_model_load() -> None:
+        time.sleep(45)
+
+    monkeypatch.setattr(
+        "codegraph.embeddings.remote.EmbeddingWorkerClient.start", lambda self: None
+    )
+    monkeypatch.setattr(
+        "codegraph.embeddings.pipeline.embed_batch", lambda *_a, **_k: slow_model_load()
+    )
+
+    t0 = time.monotonic()
+    mcp_server.main()
+    boot = time.monotonic() - t0
+
+    assert boot < 10.0, f"boot took {boot:.1f}s -- must stay well under the 30s connect timeout"
+
+
+def test_server_embeds_through_the_worker_not_in_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    """torch must never be imported in the server process -- that is what makes
+    the deadlock structurally impossible, not just unlikely."""
+    import codegraph.embeddings.pipeline as pipeline
+    import codegraph.embeddings.remote as remote
+    import numpy as np
+
+    def fail(*_a: object, **_k: object) -> None:
+        raise AssertionError("server embedded in-process instead of via the worker")
+
+    monkeypatch.setattr(pipeline, "embed_batch", fail)
+    monkeypatch.setattr(pipeline, "embed_one", fail)
+    monkeypatch.setattr(
+        remote.EmbeddingWorkerClient,
+        "embed_batch_or_none",
+        lambda self, texts: np.zeros((len(texts), 384), dtype=np.float32),
+    )
+
+    assert mcp_server._maybe_embed("hello") is not None
+    assert mcp_server._maybe_embed_batch(["a", "b"]) == [
+        pytest.approx([0.0] * 384),
+        pytest.approx([0.0] * 384),
+    ]
 
 
 def test_get_context_respects_token_budget(indexed_db: Path) -> None:

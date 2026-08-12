@@ -97,27 +97,21 @@ _stale_cache = _StalenessCache()
 
 
 def _get_stale_count() -> int:
-    """Return the number of source files changed or deleted since the last index.
+    """Number of source files changed or deleted since the last index.
 
-    Uses _stale_cache to avoid re-walking the repo on every tool call, keyed
-    by the repo's current git HEAD so a branch switch forces a fresh check
-    instead of reusing the previous branch's cached answer. Returns 0 on any
-    error so a broken staleness check never blocks search.
+    Never walks the repo on the calling thread -- see
+    ``_refresh_staleness_in_background`` for why that matters. A cold cache
+    reports 0 ("nothing known to be stale") and schedules the walk; the next
+    call carries the real number.
     """
-    from codegraph.sync.watcher import count_stale_files, find_deleted_files, git_head
+    from codegraph.sync.watcher import git_head
 
-    root = _repo_root_for_db()
-    head = git_head(root)
+    head = git_head(_repo_root_for_db())
     cached = _stale_cache.get(head)
     if cached is not None:
         return cached
-    try:
-        db = get_db_path()
-        count = count_stale_files(root, db) + len(find_deleted_files(root, db))
-    except Exception:  # noqa: BLE001 — staleness check is best-effort
-        count = 0
-    _stale_cache.set(count, head)
-    return count
+    _refresh_staleness_in_background().wait(timeout=_STALE_FIRST_CALL_BUDGET_SEC)
+    return _stale_cache.get(head) or 0
 
 
 class _StalePathsCache:
@@ -158,20 +152,53 @@ _stale_paths_cache = _StalePathsCache()
 
 
 def _get_stale_paths() -> frozenset[str]:
-    """Return repo-relative paths of files changed or deleted since the last index.
+    """Repo-relative paths of files changed or deleted since the last index.
 
     Powers the per-file staleness banner in ``get_context``: a file referenced
     in a response gets an explicit "this may be outdated" note naming it,
-    rather than a generic repo-wide count. Returns an empty set on any error
-    so a broken staleness check never blocks search.
+    rather than a generic repo-wide count. Same non-blocking contract as
+    ``_get_stale_count`` -- a cold cache reports nothing and schedules the walk.
+    """
+    from codegraph.sync.watcher import git_head
+
+    head = git_head(_repo_root_for_db())
+    cached = _stale_paths_cache.get(head)
+    if cached is not None:
+        return cached
+    _refresh_staleness_in_background().wait(timeout=_STALE_FIRST_CALL_BUDGET_SEC)
+    return _stale_paths_cache.get(head) or frozenset()
+
+
+# How long a cold cache may hold up a tool call while the walk runs. Small
+# repos finish well inside this, so they keep the immediate first-call
+# staleness banner; a big repo blows through it and the caller answers now,
+# picking up the warning on its next call instead. The point is a bounded
+# worst case -- the unbounded version cost 225s per call on a 16k-file repo.
+_STALE_FIRST_CALL_BUDGET_SEC = 1.0
+
+_staleness_refresh_lock = threading.Lock()
+_staleness_refresh_running = False
+_staleness_refresh_done = threading.Event()
+
+
+def _current_git_head() -> str | None:
+    from codegraph.sync.watcher import git_head
+
+    return git_head(_repo_root_for_db())
+
+
+def _refresh_staleness_now() -> None:
+    """Walk the repo once and fill BOTH staleness caches from that one walk.
+
+    ``count_stale_files`` is literally ``len(find_stale_files(...))``, so the
+    old split -- one walk for the count, another for the path set -- paid for
+    the same directory traversal twice and could disagree with itself between
+    them. Deriving both from a single walk is cheaper and self-consistent.
     """
     from codegraph.sync.watcher import find_deleted_files, find_stale_files, git_head
 
     root = _repo_root_for_db()
     head = git_head(root)
-    cached = _stale_paths_cache.get(head)
-    if cached is not None:
-        return cached
     try:
         db = get_db_path()
         changed = {p.relative_to(root).as_posix() for p in find_stale_files(root, db)}
@@ -180,7 +207,54 @@ def _get_stale_paths() -> frozenset[str]:
     except Exception:  # noqa: BLE001 — staleness check is best-effort
         paths = frozenset()
     _stale_paths_cache.set(paths, head)
-    return paths
+    _stale_cache.set(len(paths), head)
+
+
+def _refresh_staleness_in_background() -> threading.Event:
+    """Schedule one staleness walk, at most one at a time, off the caller's thread.
+
+    Staleness is derived from a full directory walk, and the cache's original
+    "10-50ms per call" assumption only ever held on small repos. Measured on a
+    real 16k-file repo the walk took 225 SECONDS -- and ``_get_context`` ran it
+    synchronously, twice (count + paths), on a cold cache, while the boot
+    thread ran a third copy concurrently. Two consequences, both observed live:
+
+    * every first ``get_context`` on a large repo blocked for minutes, which
+      reads to the user as codegraph being hung; and
+    * the concurrent walks took down the interpreter itself --
+      ``Fatal Python error: PyEval_SaveThread: the function must be called
+      with the GIL held, but the GIL is released`` -- killing the server
+      mid-session, which the client surfaces only as a lost connection.
+
+    A staleness warning is best-effort metadata about the answer, never part
+    of the answer, so it must not gate one. Single-flight: concurrent callers
+    share the in-flight walk instead of starting their own.
+
+    Returns an event that is set once the in-flight walk finishes, so a caller
+    can wait on it for a bounded budget rather than either blocking forever or
+    giving up instantly.
+    """
+    global _staleness_refresh_running, _staleness_refresh_done
+    with _staleness_refresh_lock:
+        if _staleness_refresh_running:
+            return _staleness_refresh_done
+        _staleness_refresh_running = True
+        _staleness_refresh_done = threading.Event()
+        done = _staleness_refresh_done
+
+    def _run() -> None:
+        global _staleness_refresh_running
+        try:
+            _refresh_staleness_now()
+        except Exception:  # noqa: BLE001 — best-effort; never propagate off-thread
+            pass
+        finally:
+            with _staleness_refresh_lock:
+                _staleness_refresh_running = False
+            done.set()
+
+    threading.Thread(target=_run, daemon=True, name="codegraph-staleness-refresh").start()
+    return done
 
 
 server: Server = Server("codegraph")
@@ -672,25 +746,33 @@ def _open_store() -> GraphStore:
 
 def _maybe_embed(query: str) -> list[float] | None:
     try:
-        from codegraph.embeddings.pipeline import embed_one
+        from codegraph.embeddings.remote import get_shared_client
 
-        return embed_one(query).tolist()
-    except Exception:  # noqa: BLE001 - model unavailable → literal search only
+        vector = get_shared_client().embed_one_or_none(query)
+        return None if vector is None else vector.tolist()
+    except Exception:  # noqa: BLE001 - worker unavailable → literal search only
         return None
 
 
 def _maybe_embed_batch(queries: list[str]) -> list[list[float] | None]:
-    """Embed several queries in ONE model.encode() call instead of one call
-    per query -- real latency win for get_context's multi-query batching,
-    independent of (and in addition to) the round-trip savings batching
-    itself provides. Falls back to all-None (literal-only search) for every
-    query on any failure, matching _maybe_embed's per-query behaviour.
+    """Embed several queries in ONE encode call instead of one call per query
+    -- real latency win for get_context's multi-query batching, independent of
+    (and in addition to) the round-trip savings batching itself provides.
+    Falls back to all-None (literal-only search) for every query on any
+    failure, matching _maybe_embed's per-query behaviour.
+
+    Goes through the worker subprocess rather than importing the model here:
+    see `codegraph.embeddings.worker` for why in-process embedding cost the
+    server its MCP connection on large repos.
     """
     try:
-        from codegraph.embeddings.pipeline import embed_batch
+        from codegraph.embeddings.remote import get_shared_client
 
-        return [v.tolist() for v in embed_batch(queries)]
-    except Exception:  # noqa: BLE001 - model unavailable → literal search only
+        vectors = get_shared_client().embed_batch_or_none(queries)
+        if vectors is None:
+            return [None] * len(queries)
+        return [v.tolist() for v in vectors]
+    except Exception:  # noqa: BLE001 - worker unavailable → literal search only
         return [None] * len(queries)
 
 
@@ -1449,8 +1531,10 @@ def _reembed_entities(store: GraphStore, entity_ids: list[str]) -> int:
         return 0
     try:
         from codegraph.embeddings.chunking import build_embed_input_from_fields, embed_input_hash
-        from codegraph.embeddings.pipeline import embed_batch
-    except Exception:  # noqa: BLE001 — torch/model unavailable
+        from codegraph.embeddings.remote import get_shared_client
+
+        embed_batch = get_shared_client().embed_batch
+    except Exception:  # noqa: BLE001 — embedding worker unavailable
         return 0
 
     rows = store.conn.execute(
@@ -1545,29 +1629,31 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> list[TextCon
     return [TextContent(type="text", text=text)]
 
 
-def _warm_embedding_model() -> None:
-    """Load the embedding model in the MAIN thread at startup, synchronously.
+def _start_embedding_worker() -> None:
+    """Spawn the embedding worker subprocess -- without waiting for it.
 
-    ``get_context`` embeds its query for semantic search. Sync MCP handlers run
-    via ``anyio.to_thread``, so loading the heavy sentence-transformers / torch
-    stack off the main thread -- a background thread, or an anyio worker
-    thread handling a real request -- while the asyncio stdio loop is running
-    on the main thread DEADLOCKS THE WHOLE SERVER. This isn't a theoretical
-    risk: confirmed by direct reproduction against a real 97k-entity index --
-    this exact warmup code completes in ~31s called synchronously, but hangs
-    indefinitely (280s+, still alive, zero progress) when the same call is
-    dispatched through anyio.to_thread instead. An earlier version of this
-    function ran on a background thread with a timeout-and-abandon fallback
-    to avoid blocking the MCP handshake; that reintroduced exactly this
-    deadlock, because "abandon" left the import still in flight on a non-main
-    thread once serving started. There is no safe way to background this --
-    call it here, synchronously, before anyio.run, every time.
+    Replaces an in-process, synchronous model warmup that was the single
+    largest cause of "codegraph isn't connected" in real use. That warmup
+    imported sentence-transformers/torch before the server could serve:
+    measured 25.6s of boot on a real 97k-entity index with a cold filesystem
+    cache (12.6s of it just the imports), against Claude Code's 30s MCP
+    connect timeout. A warm cache connected; a cold one was dropped by the
+    client -- silently, with no error surfaced to the user, so the agent
+    simply fell back to grep and the tools looked "ignored".
 
-    Skipped when the index has no embeddings. Non-fatal: any failure just falls
-    back to lazy loading + literal-only search (handlers already handle that).
+    It could not just be backgrounded either: importing torch on a non-main
+    thread while the asyncio loop runs on the main thread deadlocks the
+    process outright (reproduced twice against the same index -- ~31s
+    synchronous vs. 280s+ with zero progress via anyio.to_thread). Hosting
+    the model in a *separate process* fixes both at once: boot no longer
+    waits on it, and torch is never imported here at all, so the deadlock
+    cannot occur regardless of which thread calls what.
+
+    Skipped when the index has no embeddings -- nothing would ever query the
+    worker, so there is no reason to pay for the process. Non-fatal: any
+    failure leaves handlers on literal-only search, which they already
+    handle.
     """
-    import sys
-
     try:
         db = get_db_path()
         if not db.exists():
@@ -1575,11 +1661,10 @@ def _warm_embedding_model() -> None:
         with GraphStore(db, read_only=True) as store:
             if store.count_embedded() == 0:
                 return
-        from codegraph.embeddings.pipeline import embed_one
+        from codegraph.embeddings.remote import get_shared_client
 
-        embed_one("warmup")
-        print("CodeGraph: embedding model ready.", file=sys.stderr)
-    except Exception:  # noqa: BLE001 — warmup is best-effort; lazy load still works
+        get_shared_client().start()
+    except Exception:  # noqa: BLE001 — best-effort; literal-only search still works
         pass
 
 
@@ -1608,40 +1693,13 @@ def _breadcrumb(msg: str) -> None:
 def _process_alive(pid: int) -> bool:
     """True if a process with this PID is currently running.
 
-    Platform-specific because the obvious cross-platform trick doesn't work:
-    `os.kill(pid, 0)` is the standard POSIX liveness probe (raises
-    `ProcessLookupError` without actually signaling anything), but on
-    Windows `os.kill` with a non-special value calls `TerminateProcess` --
-    using it here would actually try to KILL the process instead of just
-    checking it. Windows needs `OpenProcess`/`GetExitCodeProcess` instead,
-    which only queries state.
+    Lives in ``codegraph.proc`` now that the embedding worker needs the same
+    check -- kept here as a thin alias so existing callers and tests keep
+    working.
     """
-    import sys
+    from codegraph.proc import process_alive
 
-    if sys.platform == "win32":
-        import ctypes
-        import ctypes.wintypes
-
-        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-        STILL_ACTIVE = 259
-        handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-        if not handle:
-            return False
-        try:
-            exit_code = ctypes.wintypes.DWORD()
-            if not ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
-                return False
-            return exit_code.value == STILL_ACTIVE
-        finally:
-            ctypes.windll.kernel32.CloseHandle(handle)
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True  # exists, just owned by someone else
-    else:
-        return True
+    return process_alive(pid)
 
 
 _PPID_CHECK_INTERVAL_SEC = 5.0
@@ -1696,25 +1754,25 @@ def _start_staleness_check_in_background() -> threading.Thread:
     """Run the staleness check on a background thread.
 
     Best-effort (an early stderr warning if source files changed since last
-    index) and not required to serve requests -- unlike embedding warmup
-    (see `_warm_embedding_model`), it only runs DuckDB queries, no native-
-    threading-sensitive imports, so backgrounding it carries none of that
-    deadlock risk. It used to run before stdio_server() started, blocking the
-    MCP handshake itself: on a large repo (tens of thousands of files) the
-    scan alone can take several seconds, and a real 16k-file repo pushed
-    total boot past 13s -- long enough for Claude Code's own MCP connect
-    timeout to give up and report "Failed to connect" even though the server
-    was working fine. Running it here instead means the handshake is never
-    gated on repo size.
+    index) and not required to serve requests. It used to run before
+    stdio_server() started, blocking the MCP handshake itself: on a large repo
+    (tens of thousands of files) the scan alone can take several seconds, and a
+    real 16k-file repo pushed total boot past 13s -- long enough for Claude
+    Code's own MCP connect timeout to give up and report "Failed to connect"
+    even though the server was working fine. Running it here instead means the
+    handshake is never gated on repo size.
+
+    Goes through the same single-flight refresh the tool handlers use, so this
+    also primes their caches -- previously it ran its own separate walk of the
+    same tree, concurrently with theirs, for a result it then threw away.
     """
     import time
 
     def _run() -> None:
         stale_start = time.monotonic()
         try:
-            from codegraph.sync.watcher import count_stale_files
-
-            stale = count_stale_files(Path("."), get_db_path())
+            _refresh_staleness_now()
+            stale = _stale_cache.get(_current_git_head()) or 0
             if stale > 0:
                 import sys
 
@@ -1748,9 +1806,10 @@ def main() -> None:
     _start_ppid_watchdog(os.getppid())
     _start_staleness_check_in_background()
 
-    # Must run synchronously, here, before anyio.run below -- see
-    # _warm_embedding_model's docstring for why backgrounding this deadlocks.
-    _warm_embedding_model()
+    # Spawns the model's host process and returns immediately -- boot must not
+    # wait on the model, or the client's connect timeout drops us. See
+    # _start_embedding_worker's docstring.
+    _start_embedding_worker()
 
     _breadcrumb(f"serving (boot {time.monotonic() - boot_start:.1f}s)")
 

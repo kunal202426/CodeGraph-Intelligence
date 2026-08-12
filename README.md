@@ -16,7 +16,7 @@
 
 <br>
 
-![tests](https://img.shields.io/badge/tests-1278_passing-22c55e?style=flat-square&labelColor=0d1424)
+![tests](https://img.shields.io/badge/tests-1300_passing-22c55e?style=flat-square&labelColor=0d1424)
 ![languages](https://img.shields.io/badge/languages-22-38bdf8?style=flat-square&labelColor=0d1424)
 ![mcp](https://img.shields.io/badge/MCP_tools-12-a5b4fc?style=flat-square&labelColor=0d1424)
 ![python](https://img.shields.io/badge/python-3.11+-3776ab?style=flat-square&labelColor=0d1424)
@@ -67,7 +67,7 @@ get more cross-cutting. [Full data + the honest story behind these numbers →](
 
 > [!NOTE]
 > **Status: active development.** Core indexing, search, and MCP tools are stable.
-> 1278 tests passing. Every user-facing surface manually tested: 21/21 passed, 6 issues fixed.
+> 1300 tests passing. Every user-facing surface manually tested: 21/21 passed, 6 issues fixed.
 > [Manual test →](docs/MANUAL_TEST_REPORT.md) · [Bench notes →](docs/QUALITY_REPORT_2026-07-01.md)
 > The MCP server works but is still preview, not production-ready.
 
@@ -517,7 +517,7 @@ whose input changed. `ask` latency depends on the Anthropic API.
 | **Dogfood** (Kortex indexing itself) | `get_context` returns **9.6x fewer tokens** than reading the matched files in full (1,108 vs 10,637 on one query). Across more queries: **101x average** (12x worst, 190x best). [Bench notes →](docs/QUALITY_REPORT_2026-07-01.md) · [Details →](docs/VERIFICATION.md) |
 | **Search quality** | Hit@1 = **7/7** on symbol queries where the function name doesn't appear in the query string at all. Warm query ~15 ms. |
 | **Real $ cost A/B** | **58% cheaper** on Grafana (97,000 entities) for deep blast-radius questions. **14% cheaper overall** on a ~1300-entity repo. Break-even on a 47-file one. [Full data →](docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md) · [the story →](docs/DECISIONS.md) |
-| **Tests** | **1278 passing**, 0 failures, 1 live-skip (needs an API key). Covers MCP tools, all 22 parsers, framework route resolution, receiver-type and inheritance-aware resolution, graph queries, CLI, all 8 installer targets. |
+| **Tests** | **1300 passing**, 0 failures, 1 live-skip (needs an API key). Covers MCP tools, all 22 parsers, framework route resolution, receiver-type and inheritance-aware resolution, graph queries, CLI, all 8 installer targets. |
 | **Manual test pass** | Every user-facing surface — CLI, web UI, watch daemon, MCP server (install, live query, uninstall) — run by hand. 21/21 passed; 6 issues logged. [Report →](docs/MANUAL_TEST_REPORT.md) |
 
 ---
@@ -572,6 +572,25 @@ an agent ignores the tools and keeps re-reading your source — so it's on by de
 
 **You do NOT need:** an Anthropic API key *(for the core features)*, any cloud account or
 subscription beyond what you already have, or Docker.
+
+### 🩺 If your agent doesn't seem to be using Kortex
+
+The failure mode to know about: when an MCP server takes too long to start, **Claude Code
+drops it silently** — no error, no warning. The agent simply has no Kortex tools and falls
+back to grep, which looks exactly like it's ignoring them. This bit us for weeks on a
+97k-entity repo before we measured it.
+
+Kortex now boots in **~0.3s** regardless of repo size (the embedding model loads in a
+background worker process, and staleness checks never block a call), so this shouldn't
+happen. If you hit it anyway on very slow storage, raise the client's startup timeout:
+
+```bash
+MCP_TIMEOUT=120000 claude
+```
+
+To confirm what's actually happening, the server prints timestamped boot phases to stderr,
+which Claude Code captures in its MCP logs — `starting` with no `serving` line means boot
+stalled, and the timings say where.
 
 ---
 
