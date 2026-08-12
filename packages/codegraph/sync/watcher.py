@@ -36,9 +36,13 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import duckdb
 import pathspec
+
+if TYPE_CHECKING:
+    import numpy as np
 
 from codegraph.graph.resolver import resolve_symbols
 from codegraph.graph.store import GraphStore, escape_like
@@ -164,6 +168,7 @@ def index_one_file(
     *,
     no_embed: bool = False,
     _parsers: dict | None = None,
+    embed_fn: Callable[[list[str]], np.ndarray] | None = None,
 ) -> int:
     """Re-parse one file and upsert it into the DB.
 
@@ -173,6 +178,17 @@ def index_one_file(
 
     This is the hot path for every debounced watcher event.  It mirrors the
     body of the ``codegraph index`` loop but for a single file.
+
+    ``embed_fn``: how to turn texts into vectors. Defaults to None, which
+    means "import and call the in-process pipeline" -- correct for the CLI
+    and the `codegraph watch` daemon, neither of which run inside an event
+    loop, so paying torch's import cost in-process is fine and avoids a
+    pointless subprocess round-trip per saved file. The MCP server's
+    `reindex` tool MUST pass its worker-subprocess client here instead: that
+    handler runs on an anyio worker thread while its own asyncio loop runs on
+    the main thread, and importing torch there for the first time would be
+    exactly the deadlock the embedding worker subprocess exists to make
+    impossible. See mcp_server.py's `_reindex`.
     """
     lang = detect_language(abs_path)
     if lang is None:
@@ -240,18 +256,26 @@ def index_one_file(
         resolve_symbols(store, repo)
 
         if not no_embed:
-            _embed_file(store, rel_path)
+            _embed_file(store, rel_path, embed_fn=embed_fn)
 
         return len(result.entities)
     finally:
         store.close()
 
 
-def _embed_file(store: GraphStore, rel_path: str) -> None:
-    """(Re-)embed entities for one file. Non-fatal on model failure."""
+def _embed_file(
+    store: GraphStore, rel_path: str, *, embed_fn: Callable[[list[str]], np.ndarray] | None = None
+) -> None:
+    """(Re-)embed entities for one file. Non-fatal on model failure.
+
+    See ``index_one_file``'s docstring for why ``embed_fn`` exists and who
+    must pass one.
+    """
     try:
         from codegraph.embeddings.chunking import build_embed_input_from_fields, embed_input_hash
-        from codegraph.embeddings.pipeline import embed_batch
+
+        if embed_fn is None:
+            from codegraph.embeddings.pipeline import embed_batch as embed_fn
     except Exception:  # noqa: BLE001 — torch/model unavailable
         return
 
@@ -273,7 +297,7 @@ def _embed_file(store: GraphStore, rel_path: str) -> None:
         return
 
     try:
-        vectors = embed_batch([p[1] for p in pending])
+        vectors = embed_fn([p[1] for p in pending])
         store.update_embeddings(
             [(pending[i][0], vectors[i].tolist(), pending[i][2]) for i in range(len(pending))]
         )

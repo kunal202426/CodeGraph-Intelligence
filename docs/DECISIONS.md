@@ -74,6 +74,21 @@ re-test). Nothing swept under the rug.
   Measured on Grafana after: **boot 25.6s → 0.3s**, **staleness walk 225s → 6.2s**, first
   `get_context` **19.9s**, warm calls **0.5s**, clean exit. Every earlier "codegraph wasn't
   invoked for editing tasks" data point is void — that A/B needs re-running from scratch.
+- **Same day, found live while testing the fix above:** `reindex` hit the identical deadlock
+  through a door the worker-subprocess rewrite didn't cover. `index_one_file` (which
+  `reindex` calls) imports and calls the embedding pipeline **in-process** — right for the
+  CLI and `codegraph watch` (no event loop, nothing to deadlock), wrong for the MCP server's
+  `reindex` handler, which runs on an anyio worker thread while the server's own asyncio
+  loop runs on the main thread. First-ever torch import there, off the main thread, mid-loop
+  — exactly the hazard the worker subprocess exists to remove, just missed at this call site.
+  Caught live: the actual server process behind this session sat hung on a real `reindex`
+  call for 45+ minutes (9.6s CPU used the whole time, still "Responding", DB file still
+  locked) after Claude Code's client gave up waiting at its own 1800s idle timeout. Fixed by
+  giving `index_one_file`/`_embed_file` an injectable `embed_fn` — CLI/watch keep the fast
+  in-process default, `reindex` now passes the worker-subprocess client. Verified on an
+  isolated repo: a real reindex of a genuinely changed file completed in 12.7s, no hang.
+  **A server already running the old code can't self-heal from this — it's holding the
+  deadlock in memory. Needs a Claude Code restart, not just a fresh git pull.**
 - Real, controlled A/B on an even bigger repo — Grafana (97,239 entities, 16,046 files). The
   round came back a near-tie (-2.8%) until digging into *why* one question lost surfaced a real
   gap: `impact_analysis` only walked the call graph, so a struct/interface (no callers, only

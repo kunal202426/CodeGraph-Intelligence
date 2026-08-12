@@ -1402,6 +1402,18 @@ def _reindex(args: dict[str, Any]) -> str:
     if not db.exists():
         return json.dumps({"error": f"No graph database at {db}. Run `codegraph index <repo>`."})
 
+    # MUST go through the out-of-process worker, never the in-process pipeline:
+    # this handler runs on an anyio worker thread while the server's own
+    # asyncio event loop runs on the main thread. Importing torch here would be
+    # its first-ever import in this process, off the main thread, while the
+    # loop runs -- exactly the deadlock the embedding worker subprocess exists
+    # to make structurally impossible. See index_one_file's docstring.
+    embed_fn = None
+    if not no_embed:
+        from codegraph.embeddings.remote import get_shared_client
+
+        embed_fn = get_shared_client().embed_batch
+
     root = _repo_root_for_db()
     head = git_head(root)
     stale = find_stale_files(root, db)
@@ -1449,7 +1461,9 @@ def _reindex(args: dict[str, Any]) -> str:
     failed = 0
     for abs_path in stale:
         try:
-            total_entities += index_one_file(root, abs_path, db, no_embed=no_embed)
+            total_entities += index_one_file(
+                root, abs_path, db, no_embed=no_embed, embed_fn=embed_fn
+            )
             reindexed += 1
         except Exception:  # noqa: BLE001 — one bad file shouldn't abort the batch
             failed += 1

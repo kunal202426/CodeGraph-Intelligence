@@ -41,6 +41,24 @@
   → 0.5s, clean exit, no crash.** The guide-wording changes stay (they're still reasonable
   nudges) but they were never the issue. **The editing A/B test needs re-running from
   scratch** — every prior "codegraph wasn't used" data point is void.
+- **Follow-up, same day: `reindex` hung the same deadlock through a second door.** Testing
+  the fix above live (first real MCP round-trip through a reconnected server) surfaced a
+  4th bug the worker-subprocess rewrite missed: `reindex` calls `index_one_file`, which
+  imports `codegraph.embeddings.pipeline` and embeds **in-process** — correct for the CLI and
+  `codegraph watch` (no event loop, no timeout to blow), but `reindex` runs inside the MCP
+  server on an anyio worker thread while the server's own asyncio loop runs on the main
+  thread. That's torch's first-ever import in the process, off the main thread, while the
+  loop runs — exactly the deadlock the worker subprocess was built to make impossible,
+  just reopened at a call site the original fix didn't touch. Live proof: the actual MCP
+  server process connected to this session sat at the exact PyEval_SaveThread-class hang
+  for 45+ minutes (9.6s CPU used, `Responding: True`, DB file locked) after a `reindex` call
+  that Claude Code's own client gave up waiting on after 1800s. Fixed by making
+  `index_one_file`/`_embed_file` accept an injectable `embed_fn`, defaulting to the in-process
+  pipeline (CLI/watch keep their performance) with `reindex` passing the worker-subprocess
+  client instead. Verified on an isolated throwaway repo: reindex of a genuinely-changed file
+  completed in 12.7s (matches the measured cold worker-embed cost), no hang, clean exit.
+  **The already-running server that hit the original hang cannot self-heal — it holds the
+  deadlock in memory. A Claude Code restart is required to load this fix.**
 - **Next task (all optional, none blocking):**
   - JSX/React component usage (`<Component />`) isn't a call edge — confirmed the
     second-largest dead-code false-positive source on a real React frontend, see

@@ -524,3 +524,77 @@ def test_deleting_a_quarantined_file_clears_the_quarantine(tmp_path: Path, monke
     _wait_for_fired(fired, prev)
     assert fired[-1].action == "modified"
     assert fired[-1].error is None
+
+
+# ---------------------------------------------------------------------------
+# embed_fn injection -- see mcp_server.py's _reindex for why this exists
+# ---------------------------------------------------------------------------
+
+
+def test_index_one_file_uses_injected_embed_fn_instead_of_the_in_process_pipeline(
+    tmp_path: Path,
+) -> None:
+    """The MCP server's `reindex` tool runs on an anyio worker thread while its
+    own asyncio event loop runs on the main thread. If it embedded by importing
+    `codegraph.embeddings.pipeline` directly (the CLI/watch-daemon default),
+    that would be torch's first-ever import in the server process happening
+    off the main thread while the loop runs -- the exact deadlock condition
+    the worker-subprocess design exists to make impossible. `index_one_file`
+    must accept an alternate embed function and use it instead of importing
+    the in-process pipeline at all when one is given."""
+    import numpy as np
+
+    repo = tmp_path / "proj"
+    repo.mkdir()
+    src = repo / "a.py"
+    src.write_text("def f():\n    return 1\n", encoding="utf-8")
+    db = repo / ".codegraph" / "graph.duckdb"
+
+    calls: list[list[str]] = []
+
+    def fake_embed(texts: list[str]) -> np.ndarray:
+        calls.append(list(texts))
+        return np.ones((len(texts), 384), dtype=np.float32)
+
+    index_one_file(repo, src, db, _parsers=_py_parsers(), embed_fn=fake_embed)
+
+    assert calls, "injected embed_fn was never called"
+
+    store = GraphStore(db)
+    try:
+        row = store.conn.execute(
+            "SELECT embedding IS NOT NULL FROM entities WHERE qualified_name LIKE '%f'"
+        ).fetchone()
+        assert row is not None and row[0] is True
+    finally:
+        store.close()
+
+
+def test_index_one_file_falls_back_to_the_in_process_pipeline_by_default(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """No embed_fn given (the CLI / `codegraph watch` case, neither of which run
+    inside an event loop) must keep using the in-process pipeline directly --
+    this is a deliberate perf choice, not an oversight, so the default must not
+    silently change."""
+    import codegraph.embeddings.pipeline as pipeline
+
+    repo = tmp_path / "proj"
+    repo.mkdir()
+    src = repo / "a.py"
+    src.write_text("def f():\n    return 1\n", encoding="utf-8")
+    db = repo / ".codegraph" / "graph.duckdb"
+
+    called = {"n": 0}
+
+    def fake_embed_batch(texts: list[str], model_name: str = pipeline.DEFAULT_MODEL):
+        called["n"] += 1
+        import numpy as np
+
+        return np.ones((len(texts), 384), dtype=np.float32)
+
+    monkeypatch.setattr(pipeline, "embed_batch", fake_embed_batch)
+
+    index_one_file(repo, src, db, _parsers=_py_parsers())
+
+    assert called["n"] == 1
