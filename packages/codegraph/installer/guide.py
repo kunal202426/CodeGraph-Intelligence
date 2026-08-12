@@ -38,15 +38,16 @@ surface cross-file edges files can't show. Use them by default.
    explore-subagent -- skip `index_status`; `get_context` reports staleness via `warnings`,
    run `reindex` if it appears.
 2. Use `detail="full"` when you'll need real code -- a second round-trip costs more than the
-   larger response. Summary mode is for browsing candidates.
-3. Editing? Locate it, then Read + Edit -- Edit needs a fresh Read anyway.
+   larger response. Summary mode is for browsing.
+3. Editing? Locate via `get_context`/`search_code`, then Read + Edit -- Edit needs a
+   fresh Read anyway.
 4. After `get_context`, report: `CodeGraph: ~<tokens_estimated> vs ~<tokens_if_read> tokens
    (<savings_ratio>x less)` -- response size, not $ cost.
 
 **Which tool:**
 - `project_brief()` -- ONCE, first: layers, hot paths, entry points.
 - `get_context(query)` -- signatures + callers/callees + staleness; `detail="full"` = source.
-  2+ known names? Pass a list (max 5), not separately.
+  2+ names? pass a list (max 5).
 - `get_entity_context(id)` -- full source + neighbours.
 - `impact_analysis(id)` -- what breaks.
 - `trace_path(from_id, to_id)` -- shortest call chain A to B.

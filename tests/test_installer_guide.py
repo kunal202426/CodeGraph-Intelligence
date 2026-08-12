@@ -83,6 +83,18 @@ def test_guide_tells_agent_to_use_codegraph_even_when_a_skill_fires_first(
     assert "before a file/grep/skill" in text
 
 
+def test_guide_tells_agent_to_locate_via_codegraph_before_editing(tmp_path: Path) -> None:
+    """Real finding, live on Grafana, reproduced 3x (once with a competing skill
+    firing, twice without): an agent given an editing task went straight to
+    grep + Read, skipping codegraph tools entirely, even when codegraph was
+    verified connected and no skill fired. The old wording ("Editing? Locate
+    it, then Read + Edit") let "locate it" mean anything, including grep --
+    the agent could self-justify skipping get_context since it needs to Read
+    the file for Edit regardless. The edit rule must name the locate tool."""
+    text = write_agent_guide(tmp_path).read_text(encoding="utf-8")
+    assert "Locate via `get_context`" in text or "Locate via get_context" in text
+
+
 def test_guide_is_strong_mandate_with_savings_instruction(tmp_path: Path) -> None:
     """The guide must (a) require CodeGraph before reading files and (b) tell the
     agent to report the token savings — the two levers behind 'auto-use'."""

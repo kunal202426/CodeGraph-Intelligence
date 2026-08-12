@@ -8,22 +8,24 @@
   spec, `plan/`) moved out of the public repo into a local, gitignored `.internal/` folder.
 - **Phase:** Maintenance & hardening (post-audit fixes, usability, repo hygiene). No phase
   currently in progress — safe to start a new session cold from this file.
-- **Tests:** 1277 passing, 1 live-skip (needs `ANTHROPIC_API_KEY`), 0 failing. Verified both
+- **Tests:** 1278 passing, 1 live-skip (needs `ANTHROPIC_API_KEY`), 0 failing. Verified both
   locally and on GitHub Actions (`gh run list`) as of the last commit below. (This file's
   "Next task" list and phase history below predate the 2026-08-11 Grafana stress test and its
   fixes — see the README changelog and
   [docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md](docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md)
   for what shipped since; not yet reconciled into this file's own history below.)
 - **Known major gap, highest priority (found 2026-08-11, partially mitigated, not solved):**
-  a competing skill/subagent (any of them, not one specific skill — observed live with
-  `superpowers:brainstorming` on an editing task under its own "invoke if even 1% relevant"
-  policy) can take over the agent's flow and fall back to manual grep/Read entirely, skipping
-  codegraph tools -- twice reproduced on Grafana, never happened on any pure Q&A test that
-  never triggered a skill. Guide now names `skill` explicitly in the same
-  before-this-list as `grep`/`explore-subagent` (cheap, partial mitigation), but this is a
-  genuine prompt-priority race codegraph doesn't control the outcome of — no verified fix yet,
-  only a stronger nudge. Needs real re-testing (does naming it explicitly actually change
-  outcomes, or does a competing skill still win sometimes) before calling this closed.
+  reproduced 3x live on Grafana that an agent given an **editing** task goes straight to
+  grep + Read, skipping codegraph tools entirely — once with a competing skill firing
+  (`superpowers:brainstorming`, under its own "invoke if even 1% relevant" policy), twice
+  with no skill involved and codegraph verified connected. Never happened on any pure Q&A
+  test. Sharper hypothesis after the 3rd repro: the guide's edit rule said "Editing? Locate
+  it, then Read + Edit" — vague enough that "locate it" via grep self-justifies, since Edit
+  needs a fresh Read regardless. Two mitigations shipped: `skill` named explicitly alongside
+  `grep`/`explore-subagent` in the general rule, and the edit rule now names the locate tool
+  directly (`Locate via get_context/search_code`, not just "locate it"). Neither is a proven
+  fix yet — both are still just stronger nudges codegraph can't force compliance with. Needs
+  real re-testing on the next editing task before calling this closed.
 - **Next task (all optional, none blocking):**
   - JSX/React component usage (`<Component />`) isn't a call edge — confirmed the
     second-largest dead-code false-positive source on a real React frontend, see
