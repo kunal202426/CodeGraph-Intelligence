@@ -95,6 +95,22 @@ def test_guide_tells_agent_to_locate_via_codegraph_before_editing(tmp_path: Path
     assert "Locate via `get_context`" in text or "Locate via get_context" in text
 
 
+def test_guide_tells_agent_to_use_codegraph_for_every_new_symbol_not_just_the_first(
+    tmp_path: Path,
+) -> None:
+    """Real finding, live on Grafana, after the infra fix that made the tools reliably
+    reachable: an agent called `get_context` exactly once at the start of an editing task,
+    then chased half a dozen further symbols (BaseInterval, MinInterval, RuleLimits,
+    BaseEvaluationInterval...) entirely via grep -- the session's own MCP-cost delta was
+    close to zero because ~95% of its tool calls never touched codegraph at all. The old
+    edit rule read as a one-time "find the starting point" step, which the agent could
+    satisfy with a single call and then treat as done. It must instead say to keep using
+    the tool for each new symbol found while investigating, not just the first one."""
+    text = write_agent_guide(tmp_path).read_text(encoding="utf-8")
+    assert "EACH symbol" in text
+    assert "not just the first" in text
+
+
 def test_guide_is_strong_mandate_with_savings_instruction(tmp_path: Path) -> None:
     """The guide must (a) require CodeGraph before reading files and (b) tell the
     agent to report the token savings — the two levers behind 'auto-use'."""

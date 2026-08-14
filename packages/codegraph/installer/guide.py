@@ -39,8 +39,8 @@ surface cross-file edges files can't show. Use them by default.
    run `reindex` if it appears.
 2. Use `detail="full"` when you'll need real code -- a second round-trip costs more than the
    larger response. Summary mode is for browsing.
-3. Editing? Locate via `get_context`/`search_code`, then Read + Edit -- Edit needs a
-   fresh Read anyway.
+3. Editing? Locate via `get_context`/`search_code` for EACH symbol, not just the first
+   -- then Read + Edit.
 4. After `get_context`, report: `CodeGraph: ~<tokens_estimated> vs ~<tokens_if_read> tokens
    (<savings_ratio>x less)` -- response size, not $ cost.
 
