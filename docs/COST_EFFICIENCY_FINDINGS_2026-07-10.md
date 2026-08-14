@@ -4,6 +4,61 @@
 vs. off, across multiple codebases and dates — **newest first.** Every round reports real
 `/usage` cost, not estimated tokens, including the rounds where it came out worse.
 
+## Round 8 (2026-08-14): a real editing task on Grafana — three MCP infra bugs found and fixed, then codegraph got *more expensive* the more it was used
+
+A live A/B on an actual editing task (add a missing minimum-interval validation check to
+Grafana's alert-rule backend), not a Q&A session — the first one this report has run.
+
+**Phase 1 found the tools weren't reachable at all, not a model-behavior problem.** Five
+reproductions of "the agent ignores codegraph on editing tasks" turned out to be three
+infrastructure bugs, none of them the model's fault: MCP boot loaded torch synchronously and
+took 25.6s cold against Claude Code's 30s connect timeout (warm cache connected, cold cache got
+dropped *silently*, zero error shown); a staleness check walked the full repo synchronously,
+twice, per call (225s on 16k files); and concurrent walks crashed the interpreter outright. All
+three fixed (embeddings moved to a worker subprocess, staleness made single-flight and
+non-blocking). Full detail in the README/DECISIONS changelog and commit history — not repeated
+here, this section is the cost result once the tools actually worked.
+
+**Phase 2, with the infra fixed, ran the real A/B — three rounds, same prompt each time:**
+
+| Round | Cost | codegraph calls | Entry points fixed |
+|---|---|---|---|
+| With-codegraph #1 | $2.36 | 1 (`get_context`) | 2 |
+| Without-codegraph | $2.48 | 0 | 2 (+ wrote real tests) |
+| With-codegraph #2 (after a guide fix) | $3.69 | 5 (`search_code` x2, `get_context` x3) | **3** |
+
+Round 1 barely used codegraph (one call, then grep for everything else) — cost landed close to
+the without-side, which is the expected outcome when a tool is available but not actually used.
+The guide's edit rule was rewritten ("locate via `get_context`/`search_code` for **each**
+symbol, not just the first") specifically to fix that, and it worked: round 2 called codegraph
+5x instead of 1x.
+
+**But round 2 cost more, not less — and the honest reason is not "it did more work."** First
+pass at writing this up credited the higher cost to round 2 finding a genuinely missed third
+entry point (Grafana's provisioning/Terraform path). That's true, but it's an excuse, not an
+explanation: **`impact_analysis` and `trace_path` were called zero times**, in a session whose
+entire task was "find every place that validates this interval" — the textbook
+`impact_analysis` question. Instead, the transcript shows ~30 native `Searched`/`Read` calls
+alongside the 5 codegraph calls, chasing `SchedulerBaseInterval`, `RuleLimits`,
+`ValidateInterval` call sites, and provisioning entry points one grep at a time. The codegraph
+calls were **additive, not substitutive** — used alongside an equally long grep chain, not
+instead of it. And because this project's own cost model is dominated by cumulative cache-read
+across a session (documented as far back as this doc's first entry), every extra round-trip
+compounds the running total regardless of which tool it was. More tool calls of any kind, in one
+continuous session, costs more — that's mechanical, not a quality tradeoff.
+
+**Root cause, not softened this time:** the guide fix taught the agent to call codegraph more
+often, but not to prefer it *over* grep for the specific shape of question it's built for
+("what else calls/uses this"), and nothing in the guide or the tool descriptions currently
+signals "if you're about to grep for the third related symbol, stop and use `impact_analysis`
+instead." `get_context`'s multi-query batching (up to 5 names in one call) also went unused here
+— five separate `get_context`/`search_code` calls where 1-2 batched calls would have covered the
+same symbols in fewer round-trips.
+
+**This round is not a codegraph win or loss — it's a genuine product gap**, logged honestly:
+the tool got used more often without getting used *better*, and the guide doesn't yet teach the
+difference. See "Not fixed this pass" below for the concrete fix ideas this produced.
+
 ## Round 7 (2026-08-11): Grafana (97,239 entities, 16,046 files) — a near-tie, and why
 
 The biggest repo tested yet by a wide margin — ~73x JobHuntPro's entity count, ~344x

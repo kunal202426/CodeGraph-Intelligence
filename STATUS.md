@@ -59,6 +59,22 @@
   completed in 12.7s (matches the measured cold worker-embed cost), no hang, clean exit.
   **The already-running server that hit the original hang cannot self-heal — it holds the
   deadlock in memory. A Claude Code restart is required to load this fix.**
+- **OPEN 2026-08-14 — infra fixed, but codegraph got more expensive the more it was used.**
+  With the boot/staleness/reindex bugs above fixed, ran a real 3-round editing A/B on Grafana
+  (add a missing min-interval validation check to the backend). Round 1 barely used codegraph
+  (1 call, then grep for everything) and cost $2.36, close to the without-side's $2.48 — expected
+  when a reachable tool isn't actually used. A guide fix ("locate via get_context/search_code for
+  EACH symbol, not just the first") pushed usage to 5 calls in round 2 — but cost rose to $3.69,
+  not down. Root cause, not softened: **`impact_analysis`/`trace_path` were called zero times**
+  in a session whose task was "find every call site of this validation function" — the exact
+  question those tools exist for. The 5 codegraph calls were additive alongside ~30 native
+  `Searched`/`Read` actions, not substitutive, and get_context's multi-query batching (up to 5
+  names/call) went unused too. In a cost model dominated by cumulative cache-read per session
+  (documented since this doc's first entry), every extra round-trip compounds the total
+  regardless of which tool it was — more calls of any kind costs more. **The guide teaches the
+  agent to call codegraph more often, not to prefer it over grep for the shape of question it's
+  built for.** Full data: [docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md](docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md)
+  (Round 8). Not yet fixed — see brainstormed ideas being worked next.
 - **Next task (all optional, none blocking):**
   - JSX/React component usage (`<Component />`) isn't a call edge — confirmed the
     second-largest dead-code false-positive source on a real React frontend, see
