@@ -100,6 +100,19 @@ def test_impact_analysis_description_clarifies_call_edges_only() -> None:
     assert "no callers" in tool.description or "call edges" in tool.description
 
 
+def test_impact_analysis_description_says_prefer_it_over_grep() -> None:
+    """Real finding, live on Grafana (round 8 of the cost A/B): a task whose entire
+    job was "find every call site of this function" called impact_analysis ZERO
+    times, running ~30 native greps instead alongside a handful of get_context
+    calls. search_code's description already says "Prefer this over grep" for
+    finding entities in the first place; impact_analysis needs the same explicit
+    framing for the follow-up question ("who else calls/uses this"), since that's
+    exactly the shape of question it exists to answer in one call instead of a
+    chain of greps."""
+    tool = {t.name: t for t in tool_definitions()}["impact_analysis"]
+    assert "grep" in tool.description.lower()
+
+
 def test_tool_descriptions_are_directive() -> None:
     """Each tool must tell the agent WHEN to use it / to prefer it over file reads."""
     import re
@@ -895,6 +908,38 @@ def test_get_context_summary_caps_neighbor_lists(indexed_db: Path) -> None:
             assert ent["depends_on_count"] >= len(deps)
         if callers:
             assert ent["called_by_count"] >= len(callers)
+
+
+def test_get_context_points_to_impact_analysis_when_callers_are_truncated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The response-level fix for the round-8 finding: a numeric mismatch between
+    called_by_count and the (capped) called_by list was already present in every
+    response, but nothing said what to do about it -- the agent had to notice the
+    gap and remember a static guide bullet from many turns earlier. This is a
+    just-in-time nudge, live in the response next to the truncated data itself,
+    naming the tool and the exact entity_id to pass it."""
+    from codegraph.server.mcp_server import _NEIGHBOR_CAP
+
+    repo = tmp_path / "proj"
+    src = repo / "hub.py"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    callers_src = "\n".join(
+        f"def caller_{i}():\n    return target()" for i in range(_NEIGHBOR_CAP + 3)
+    )
+    src.write_text(f"def target():\n    return 1\n\n\n{callers_src}\n", encoding="utf-8")
+    db = repo / ".codegraph" / "graph.duckdb"
+    result = CliRunner().invoke(cli_app, ["index", str(repo), "--db", str(db), "--no-embed"])
+    assert result.exit_code == 0, result.output
+    monkeypatch.setattr(mcp_server, "_db_path", db)
+
+    data = _call("get_context", {"query": "target"})
+    target = next(e for e in data["entities"] if e["entity_id"].endswith(":target"))
+    assert target["called_by_count"] > _NEIGHBOR_CAP
+
+    pointer = [w for w in data["warnings"] if "impact_analysis" in w]
+    assert pointer, f"expected an impact_analysis pointer in warnings, got: {data['warnings']}"
+    assert target["entity_id"] in pointer[0]
 
 
 def test_get_context_summary_omits_raw_source(indexed_db: Path) -> None:

@@ -324,12 +324,14 @@ def tool_definitions() -> list[Tool]:
         ),
         Tool(
             name="impact_analysis",
-            description="Use this before editing an entity to see what would break. For a "
-            "function/method: the reverse-call blast radius (transitive callers) via the "
-            "resolved call graph. For a struct/interface/type_alias (which has no callers, "
-            "only field/param/return-type references): usages of that type instead -- check "
-            "response 'mode' ('callers' vs 'type_usages') to tell which you got. Pass "
-            "entity_id if already known, or query (a name or short phrase) to resolve first.",
+            description="Prefer this over grep for 'who calls/uses this' -- one call resolves "
+            "the full transitive answer instead of a chain of greps for related symbols. Use it "
+            "before editing an entity to see what would break. For a function/method: the "
+            "reverse-call blast radius (transitive callers) via the resolved call graph. For a "
+            "struct/interface/type_alias (which has no callers, only field/param/return-type "
+            "references): usages of that type instead -- check response 'mode' ('callers' vs "
+            "'type_usages') to tell which you got. Pass entity_id if already known, or query "
+            "(a name or short phrase) to resolve first.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -1144,6 +1146,7 @@ def _get_context(args: dict[str, Any]) -> str:
 
         entities = []
         files_seen: list[str] = []
+        truncated_callers: list[str] = []
         used_tokens = 0
         truncated = False
         col_select = ", ".join(columns)
@@ -1223,6 +1226,15 @@ def _get_context(args: dict[str, Any]) -> str:
             entities.append(entity)
             if entity_file:
                 files_seen.append(entity_file)
+            if not full and len(callers) > _NEIGHBOR_CAP:
+                # The count/list mismatch (called_by_count vs the capped called_by
+                # list) was always visible in the raw response, but a number the
+                # agent has to notice and act on is weaker than an explicit
+                # instruction sitting right next to it -- found via a real A/B
+                # where impact_analysis was called zero times in a session whose
+                # entire task was "find every caller of this function", running
+                # ~30 native greps instead. This fires exactly where that gap was.
+                truncated_callers.append(eid)
 
         # Per-file staleness banner: name the exact file(s) among *this response's*
         # entities that changed since indexing, rather than only the repo-wide
@@ -1235,6 +1247,14 @@ def _get_context(args: dict[str, Any]) -> str:
             warnings.append(
                 f"Changed since indexing: {shown}{more}. The source shown for these files "
                 "may be outdated -- Read them directly if you need the live content."
+            )
+
+        if truncated_callers:
+            shown = ", ".join(truncated_callers[:3])
+            more = "" if len(truncated_callers) <= 3 else f" (+{len(truncated_callers) - 3} more)"
+            warnings.append(
+                f"More callers than shown for: {shown}{more}. Call impact_analysis(entity_id) "
+                "for the complete list instead of grepping for the rest."
             )
 
         # Savings: how many tokens reading the surfaced entities' files in full
