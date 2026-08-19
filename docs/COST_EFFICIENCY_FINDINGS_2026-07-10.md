@@ -4,6 +4,61 @@
 vs. off, across multiple codebases and dates — **newest first.** Every round reports real
 `/usage` cost, not estimated tokens, including the rounds where it came out worse.
 
+## Round 9 (2026-08-14, same day): the structural fix worked — cheapest round yet, and it exposed a real verification gap
+
+Same prompt, same repo, one session after Round 8's structural fix shipped (`impact_analysis`'s
+tool description now says "prefer this over grep"; `get_context` now points at it by name when
+an entity's caller list is truncated).
+
+**Cost: $1.14 — the cheapest of all four editing rounds by a wide margin** (round 1: $2.36,
+without-codegraph: $2.48, round 2: $3.69). Session was the shortest too: 3m4s active vs. 13m35s+
+for round 2.
+
+**What actually drove it down:** one `get_context` call, batched with 3 queries in a single
+round-trip (`["MIN_TIME_RANGE_STEP_S", "alert rule evaluation interval validation",
+"IntervalSeconds validate"]`) — the multi-query batching feature the guide has documented since
+early in this report, unused in every prior round. That one call surfaced enough (a test mutator
+named `WithIntervalSeconds`, an `IntervalSeconds` field) to let 2-3 targeted native regex
+searches pin down the exact validation function directly. Still zero `impact_analysis` calls —
+but this round didn't need many follow-ups, because the first call was information-dense instead
+of narrow.
+
+**The fix itself was also the best of all four rounds, architecturally.** Every previous round
+duplicated the check at 2-3 entry points. This one found `ValidateRuleGroupInterval` in
+`alert_rule.go` — the single choke point `AlertRule.ValidateAlertRule` and both
+`UpdateRuleGroup`/`ReplaceRuleGroup` already funnel through — and fixed it there, once. Six
+lines, one function, no duplication.
+
+**But that choke point was avoided by name in round 8.** Round 8's agent explicitly identified
+this exact function as too risky to touch — "exercised pervasively by internal store tests
+configured with a 1-second base interval for speed" — and deliberately added the check at
+higher-level entry points instead, specifically to avoid that blast radius. Round 9's agent
+found the better location but skipped the verification that earned round 8's caution.
+
+**Confirmed real, not hypothetical, by direct inspection of the call graph:**
+- `pkg/services/ngalert/store/testing.go:142` sets the store test suite's config to
+  `BaseInterval: 1 * time.Second`.
+- `pkg/services/ngalert/models/testing.go:124` — the shared random alert-rule generator used
+  throughout that suite — sets `IntervalSeconds: rand.Int63n(60) + 1`, uniform over [1, 60].
+- `pkg/services/ngalert/store/alert_rule.go:1717` calls `alertRule.ValidateAlertRule(cfg)` inside
+  `InsertAlertRules`, which 15+ store tests call directly.
+
+With the new `< 10s` floor and no change to the generator, **~15% of randomly generated test
+rules now fail insertion** — not a deterministic break, a newly introduced *flaky* test, which is
+worse: it passes most CI runs and fails unpredictably on whichever random seed draws a value
+under 10.
+
+**Honest conclusion, not spun either direction:** this is the strongest cost result of the whole
+investigation, and the batching + fewer-but-denser-calls pattern is real, reproducible signal
+worth keeping. But it is not evidence that codegraph makes an agent more careful — the cheapest
+run was cheap partly *because* it verified less than the priciest one did. Cost and correctness
+moved independently this round, and conflating them would be exactly the kind of self-serving
+reporting this document has tried not to do. None of the four MCP tools touched this session
+(`search_code`, `get_context`, `impact_analysis`, and the guide/description nudges from round 8)
+answer "what existing test fixtures would violate a constraint I'm about to tighten" — a
+materially different question from "who calls this." **Not fixed this pass — logged as a real
+product gap, next up.**
+
 ## Round 8 (2026-08-14): a real editing task on Grafana — three MCP infra bugs found and fixed, then codegraph got *more expensive* the more it was used
 
 A live A/B on an actual editing task (add a missing minimum-interval validation check to

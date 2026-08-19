@@ -59,22 +59,31 @@
   completed in 12.7s (matches the measured cold worker-embed cost), no hang, clean exit.
   **The already-running server that hit the original hang cannot self-heal — it holds the
   deadlock in memory. A Claude Code restart is required to load this fix.**
-- **OPEN 2026-08-14 — infra fixed, but codegraph got more expensive the more it was used.**
-  With the boot/staleness/reindex bugs above fixed, ran a real 3-round editing A/B on Grafana
-  (add a missing min-interval validation check to the backend). Round 1 barely used codegraph
-  (1 call, then grep for everything) and cost $2.36, close to the without-side's $2.48 — expected
-  when a reachable tool isn't actually used. A guide fix ("locate via get_context/search_code for
-  EACH symbol, not just the first") pushed usage to 5 calls in round 2 — but cost rose to $3.69,
-  not down. Root cause, not softened: **`impact_analysis`/`trace_path` were called zero times**
-  in a session whose task was "find every call site of this validation function" — the exact
-  question those tools exist for. The 5 codegraph calls were additive alongside ~30 native
-  `Searched`/`Read` actions, not substitutive, and get_context's multi-query batching (up to 5
-  names/call) went unused too. In a cost model dominated by cumulative cache-read per session
-  (documented since this doc's first entry), every extra round-trip compounds the total
-  regardless of which tool it was — more calls of any kind costs more. **The guide teaches the
-  agent to call codegraph more often, not to prefer it over grep for the shape of question it's
-  built for.** Full data: [docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md](docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md)
-  (Round 8). Not yet fixed — see brainstormed ideas being worked next.
+- **RESOLVED (cost) / OPEN (a new gap) 2026-08-14 — the structural fix worked, cheapest round
+  yet, but it exposed a real verification gap.** Round 8 found codegraph was getting used *more*
+  without getting used *better* (`impact_analysis` called zero times in a session whose task was
+  exactly what it's for). Fixed structurally, not with more guide wording: `impact_analysis`'s
+  tool description now says "prefer this over grep for who calls/uses this," and `get_context`
+  now emits a live warning naming the exact entity_id when its caller list is truncated. Round 9,
+  same prompt, same repo, one session later: **$1.14 — the cheapest of all four editing rounds**,
+  driven by one batched `get_context` call (3 queries in one round-trip, a feature that existed
+  since early in this report but had gone unused every prior round) that was information-dense
+  enough to need almost no follow-up. The fix it produced was also the best of all four rounds
+  architecturally — one shared choke point (`ValidateRuleGroupInterval`) instead of duplicating
+  the check at 2-3 entry points like every previous round.
+  **But that choke point was avoided by name in round 8**, which explicitly flagged it as
+  "exercised pervasively by internal store tests configured with a 1-second base interval" and
+  deliberately worked around it. Round 9 found the better location but skipped that verification
+  — confirmed real by direct inspection: a shared random rule generator
+  (`models/testing.go:124`) draws `IntervalSeconds` uniform over [1, 60] with no floor, feeding
+  15+ store tests via `InsertAlertRules` → `ValidateAlertRule`, so the new `<10s` check now fails
+  ~15% of randomly generated test rules — a newly introduced **flaky** test, not a clean break.
+  **Honest read: cost and correctness moved independently.** The cheapest run was cheap partly
+  because it verified less than the priciest one did — not evidence codegraph makes an agent more
+  careful. None of the four MCP tools currently answer "what existing test fixtures would violate
+  a constraint I'm about to tighten," a materially different question from "who calls this."
+  Full data: [docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md](docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md)
+  (Round 9). Not yet fixed — this is the next thing being worked.
 - **Next task (all optional, none blocking):**
   - JSX/React component usage (`<Component />`) isn't a call edge — confirmed the
     second-largest dead-code false-positive source on a real React frontend, see
