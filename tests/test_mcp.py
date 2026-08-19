@@ -269,6 +269,160 @@ def test_impact_analysis_query_low_confidence_gets_warning(
     assert any("low-confidence" in w.lower() for w in data["warnings"])
 
 
+def test_impact_analysis_tool_definition_has_field_property() -> None:
+    tool = {t.name: t for t in tool_definitions()}["impact_analysis"]
+    assert "field" in tool.inputSchema["properties"]
+
+
+def _index_temp_repo_multi(repo: Path, files: dict[str, str]) -> Path:
+    """Index a repo with several source files into <repo>/.codegraph/graph.duckdb."""
+    for rel, body in files.items():
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+    db = repo / ".codegraph" / "graph.duckdb"
+    result = CliRunner().invoke(cli_app, ["index", str(repo), "--db", str(db), "--no-embed"])
+    assert result.exit_code == 0, result.output
+    return db
+
+
+def test_impact_analysis_field_finds_construction_sites(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Real gap found via a live A/B on Grafana (cost/efficiency findings, round 9): an
+    agent tightened a numeric-field validation (interval must be >= 10s) without
+    checking that a test-fixture generator elsewhere constructed that same field with
+    random values as low as 1 -- turning 15+ store tests newly flaky. Neither
+    search_code (name/docstring only) nor the existing type_usages mode (signature
+    text only) can see a field being SET inside a function body. A field usage search
+    -- regex over raw_source, same mechanism as type_usages but a different column --
+    is exactly "who constructs/sets this field", the question that gap needed
+    answered before the edit, not after."""
+    repo = tmp_path / "proj"
+    db = _index_temp_repo_multi(
+        repo,
+        {
+            "models.py": (
+                "class AlertRule:\n"
+                "    def __init__(self, interval_seconds: int):\n"
+                "        self.interval_seconds = interval_seconds\n"
+            ),
+            "testing.py": (
+                "import random\n"
+                "from models import AlertRule\n\n"
+                "def generate_alert_rule() -> AlertRule:\n"
+                "    return AlertRule(interval_seconds=random.randint(1, 60))\n"
+            ),
+            "unrelated.py": "def totally_unrelated():\n    return 42\n",
+        },
+    )
+    monkeypatch.setattr(mcp_server, "_db_path", db)
+
+    alert_rule_id = next(
+        h["entity_id"]
+        for h in _call("search_code", {"query": "AlertRule"})
+        if h["name"] == "AlertRule"
+    )
+    data = _call("impact_analysis", {"entity_id": alert_rule_id, "field": "interval_seconds"})
+
+    assert data["mode"] == "field_usages"
+    assert data["field"] == "interval_seconds"
+    assert data["total"] >= 1
+    names = [u["name"] for u in data["usages"]]
+    assert "generate_alert_rule" in names
+    assert "totally_unrelated" not in names
+
+
+def test_impact_analysis_field_excludes_same_named_field_on_an_unrelated_type(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Real precision problem found against a live ~97k-entity index (Grafana): a
+    bare field-name search for 'IntervalSeconds' returned 217 hits dominated by an
+    unrelated struct (SyncOptions) that happens to share the field name -- a common
+    field name is not a rare token at real scale. Requiring the containing type's
+    own name to also appear in the body (true of any real construction site) is
+    what makes this usable signal instead of noise."""
+    repo = tmp_path / "proj"
+    db = _index_temp_repo_multi(
+        repo,
+        {
+            "models.py": (
+                "class AlertRule:\n"
+                "    def __init__(self, interval_seconds: int):\n"
+                "        self.interval_seconds = interval_seconds\n\n\n"
+                "class SyncOptions:\n"
+                "    def __init__(self, interval_seconds: int):\n"
+                "        self.interval_seconds = interval_seconds\n"
+            ),
+            "testing.py": (
+                "from models import AlertRule, SyncOptions\n\n"
+                "def make_alert_rule() -> AlertRule:\n"
+                "    return AlertRule(interval_seconds=5)\n\n\n"
+                "def make_sync_options() -> SyncOptions:\n"
+                "    return SyncOptions(interval_seconds=99)\n"
+            ),
+        },
+    )
+    monkeypatch.setattr(mcp_server, "_db_path", db)
+
+    alert_rule_id = next(
+        h["entity_id"]
+        for h in _call("search_code", {"query": "AlertRule"})
+        if h["name"] == "AlertRule"
+    )
+    data = _call("impact_analysis", {"entity_id": alert_rule_id, "field": "interval_seconds"})
+
+    names = [u["name"] for u in data["usages"]]
+    assert "make_alert_rule" in names
+    assert "make_sync_options" not in names
+
+
+def test_impact_analysis_field_via_query_not_just_entity_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """field combines with query the same way plain impact_analysis does -- resolve
+    the containing type by name/phrase, no separate search_code round-trip needed."""
+    repo = tmp_path / "proj"
+    db = _index_temp_repo_multi(
+        repo,
+        {
+            "models.py": (
+                "class AlertRule:\n"
+                "    def __init__(self, interval_seconds: int):\n"
+                "        self.interval_seconds = interval_seconds\n"
+            ),
+            "testing.py": (
+                "from models import AlertRule\n\n"
+                "def make_rule() -> AlertRule:\n"
+                "    return AlertRule(interval_seconds=1)\n"
+            ),
+        },
+    )
+    monkeypatch.setattr(mcp_server, "_db_path", db)
+
+    data = _call("impact_analysis", {"query": "AlertRule", "field": "interval_seconds"})
+    assert data["mode"] == "field_usages"
+    assert any(u["name"] == "make_rule" for u in data["usages"])
+
+
+def test_impact_analysis_field_on_a_function_entity_errors(indexed_db: Path) -> None:
+    """A field only makes sense on a struct/class/interface -- a function has no
+    fields, so passing one against a function entity is a caller mistake, not a
+    valid "zero usages" result. Fail loudly instead of silently returning nothing."""
+    eid = next(r["entity_id"] for r in _call("search_code", {"query": "authenticate"}))
+    data = _call("impact_analysis", {"entity_id": eid, "field": "whatever"})
+    assert "error" in data
+
+
+def test_impact_analysis_without_field_is_unaffected(indexed_db: Path) -> None:
+    """Regression guard: the new optional `field` parameter must not change the
+    default callers/type_usages behavior when omitted."""
+    eid = next(r["entity_id"] for r in _call("search_code", {"query": "authenticate"}))
+    data = _call("impact_analysis", {"entity_id": eid})
+    assert data["mode"] == "callers"
+    assert "field" not in data
+
+
 def test_ask_codebase_without_embeddings(indexed_db: Path) -> None:
     # Indexed with --no-embed → ask should report the missing embeddings, no API call.
     data = _call("ask_codebase", {"query": "how does login work?"})

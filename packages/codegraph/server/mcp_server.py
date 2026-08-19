@@ -330,8 +330,11 @@ def tool_definitions() -> list[Tool]:
             "reverse-call blast radius (transitive callers) via the resolved call graph. For a "
             "struct/interface/type_alias (which has no callers, only field/param/return-type "
             "references): usages of that type instead -- check response 'mode' ('callers' vs "
-            "'type_usages') to tell which you got. Pass entity_id if already known, or query "
-            "(a name or short phrase) to resolve first.",
+            "'type_usages') to tell which you got. Tightening a field's validation (e.g. adding "
+            "a minimum)? Pass 'field' with the field name to find who constructs/sets it -- "
+            "check test fixtures/generators BEFORE the edit, not after; a generator using values "
+            "your new check rejects becomes a flaky test, not a build failure. Pass entity_id if "
+            "already known, or query (a name or short phrase) to resolve first.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -342,6 +345,12 @@ def tool_definitions() -> list[Tool]:
                     "query": {
                         "type": "string",
                         "description": "Name or phrase to resolve first. Alternative to entity_id.",
+                    },
+                    "field": {
+                        "type": "string",
+                        "description": "A field/property name on the resolved struct/class/"
+                        "interface. When set, finds who constructs/sets/reads it (textual "
+                        "usages, not a graph edge) instead of callers/type usages.",
                     },
                     "depth": {"type": "integer", "default": 3},
                 },
@@ -896,9 +905,59 @@ def _find_type_usages(conn, entity_id: str, type_name: str, limit: int = 200) ->
     ]
 
 
+def _find_field_usages(
+    conn, entity_id: str, field_name: str, type_name: str, limit: int = 100
+) -> list[dict]:
+    """Entities whose BODY sets *field_name* on something that looks like *type_name*.
+
+    A struct/class field isn't its own indexed entity (only module/function/class/
+    method/interface/type_alias/variable are), so it can't be resolved the way
+    impact_analysis resolves everything else -- there's no entity_id for
+    "AlertRule.IntervalSeconds" to look up. This searches raw_source (not
+    signature, which only covers what's declared, not what's constructed) via the
+    same regex-over-indexed-text approach as _find_type_usages, one column over.
+
+    Two-pattern, not one: a bare field-name search over a real ~97k-entity index
+    found the field name is commonly reused across unrelated structs (Grafana has
+    an `IntervalSeconds` on both `AlertRule` and an unrelated `SyncOptions`) --
+    217 hits, dominated by noise from the wrong type. Requiring the containing
+    type's name to ALSO appear in the same body -- true of any real construction
+    site, which has to name the type it's building -- cut that to 66 while
+    surfacing the actual target (`AlertRuleGenerator.Generate`, a test-fixture
+    generator) directly. Still text-based, not true type-checking, so false
+    positives/negatives remain possible on ambiguous code -- an advisory list to
+    verify, same honesty as _find_type_usages, not a proof.
+
+    Exists because of a real, expensive gap: an editing task tightened a numeric
+    field's validation (a minimum interval) without checking that a test-fixture
+    generator elsewhere constructed that same field with values below the new
+    floor -- turning 15+ store tests newly flaky, confirmed live on Grafana (see
+    docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md, round 9). Neither search_code
+    (name/docstring only) nor _find_type_usages (signature only) can see a field
+    being *set* inside a function body -- this is "who constructs/sets this field",
+    the question that gap needed answered before the edit, not after.
+    """
+    import re
+
+    field_pattern = r"\b" + re.escape(field_name) + r"\s*[:=]"
+    type_pattern = r"\b" + re.escape(type_name) + r"\b"
+    rows = conn.execute(
+        "SELECT entity_id, type, name, file, start_line FROM entities "
+        "WHERE entity_id != ? AND raw_source IS NOT NULL "
+        "AND regexp_matches(raw_source, ?) AND regexp_matches(raw_source, ?) "
+        "LIMIT ?",
+        [entity_id, field_pattern, type_pattern, limit],
+    ).fetchall()
+    return [
+        {"entity_id": r[0], "type": r[1], "name": r[2], "file": r[3], "start_line": r[4]}
+        for r in rows
+    ]
+
+
 def _impact_analysis(args: dict[str, Any]) -> str:
     entity_id = args.get("entity_id")
     query = args.get("query")
+    field = args.get("field")
     depth = int(args.get("depth", 3))
     warnings: list[str] = []
     store = _open_store()
@@ -920,6 +979,26 @@ def _impact_analysis(args: dict[str, Any]) -> str:
         if row is None:
             return json.dumps({"error": f"No entity {entity_id!r}."})
         entity_kind, entity_name = row
+
+        if field:
+            if entity_kind not in _TYPE_LIKE_ENTITY_KINDS:
+                return json.dumps(
+                    {
+                        "error": f"{entity_id!r} is a {entity_kind}, not a "
+                        "struct/class/interface -- 'field' only applies to a type."
+                    }
+                )
+            usages = _find_field_usages(store.conn, entity_id, str(field), entity_name)
+            result = {
+                "root": entity_id,
+                "mode": "field_usages",
+                "field": str(field),
+                "total": len(usages),
+                "usages": usages,
+            }
+            if warnings:
+                result["warnings"] = warnings
+            return json.dumps(result)
 
         if entity_kind in _TYPE_LIKE_ENTITY_KINDS:
             usages = _find_type_usages(store.conn, entity_id, entity_name)
