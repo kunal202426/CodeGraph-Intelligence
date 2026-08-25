@@ -59,8 +59,32 @@
   completed in 12.7s (matches the measured cold worker-embed cost), no hang, clean exit.
   **The already-running server that hit the original hang cannot self-heal — it holds the
   deadlock in memory. A Claude Code restart is required to load this fix.**
-- **OPEN, highest priority 2026-08-25 — three rounds of nudges, zero `impact_analysis` calls,
-  because the signal is on the wrong axis.** Shipped three structural fixes aimed at round 8's
+- **RESOLVED 2026-08-25 — the nudges were never the problem; `impact_analysis` was returning
+  the wrong number.** A sanity check while brainstorming invalidated three rounds of work:
+  `impact_analysis(ValidateRuleGroupInterval)` reported **1 caller**, `grep` ground truth was
+  **3**. Every round since 9 edited that function believing it had one caller — a "1 caller"
+  answer reads as *safe to change*. Two stacked bugs:
+  - **Qualified cross-package calls fell through to `external:`** (`models.Foo()`). Parsers
+    drop the qualifier, so `_resolve_call` saw a bare name, missed the import table (keyed by
+    module name, never the function), and gave up. Fixed in `bfd3838` — resolve a bare callee
+    against the directories a file imports, only when exactly one exports that name.
+  - **Root cause: Go import resolution matched only the import path's LAST segment**, then
+    took the alphabetically-first `.go` file in any directory with that name. On Grafana
+    `time` → `pkg/tsdb/azuremonitor/time/`, `context` → `pkg/services/grpcserver/context/`,
+    and every `.../ngalert/models` → `pkg/cmd/grafana-cli/models/`. Common package names
+    (`models`, `types`, `util`, `api`, `store`) repeat constantly on a real repo, so a large
+    share of cross-package edges pointed at the **wrong** package — not missing, wrong.
+    Present since Go support shipped, and the reason the first fix did nothing on Grafana
+    despite passing its own tests. Fixed in `1468311` — single-segment path is stdlib by
+    definition; otherwise match the longest import-path suffix that is a real directory.
+  Verified after a `--force` reparse: **`impact_analysis` 1 → 11 callers**, 3/3 direct call
+  sites resolved, repo-wide resolved imports **+2,583**, `import "time"` → `external:time`.
+  Closes the "calls through an imported module namespace don't resolve" backlog item open
+  since the 2026-07-06 stress test. **Rounds 9-11's conclusions about nudge effectiveness are
+  now uninterpretable** — they measured agent response to incorrect data; any re-test needs a
+  correctly-resolved index.
+- **Superseded by the above (kept for the reasoning trail) — three rounds of nudges, zero
+  `impact_analysis` calls, misdiagnosed as a wrong-axis signal problem.** Shipped three structural fixes aimed at round 8's
   "codegraph gets used more, not better" finding: `impact_analysis`'s description says "prefer
   this over grep", `get_context` warns when it truncates a caller list, and `search_code`
   attaches a per-hit hint above the same caller-count cap (`33368b5`, `ca682ea`). Rounds 10

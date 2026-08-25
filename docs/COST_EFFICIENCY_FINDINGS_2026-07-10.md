@@ -4,6 +4,69 @@
 vs. off, across multiple codebases and dates — **newest first.** Every round reports real
 `/usage` cost, not estimated tokens, including the rounds where it came out worse.
 
+## Post-round-11 (2026-08-25): the nudges were never the problem — `impact_analysis` was returning the wrong number
+
+Rounds 9-11 spent three iterations trying to get an agent to call `impact_analysis`. While
+grounding a brainstorm about *why* that kept failing, a single sanity check invalidated the
+entire premise:
+
+```
+impact_analysis(ValidateRuleGroupInterval)  ->  total: 1
+grep -rn "ValidateRuleGroupInterval("       ->  3 real call sites
+```
+
+**Even a perfectly obeyed nudge would have handed the agent "1 caller" — which reads as
+"safe to change."** Every round since 9 edited this exact function believing it had one
+caller. Three fixes optimized the *delivery* of an answer that was itself wrong.
+
+Two stacked bugs, found by digging rather than theorizing:
+
+**Layer 1 — qualified cross-package calls fell through to `external:`.** Every parser drops
+the qualifier (`models.Foo()` → a bare `?call:Foo` edge), then `_resolve_call` checked
+same-file, then the file's import table (keyed by *module* name for a package import, so it
+can never match the function), then a Java-only same-package branch, then gave up. Fixed by
+resolving a bare callee against the directories a file imports — only when exactly one
+imported package exports that name, since the qualifier is gone and a wrong edge is worse
+than a missing one.
+
+**Layer 2 (the root) — Go import resolution matched only the import path's LAST segment**,
+then took the alphabetically-first `.go` file in any directory with that name. On Grafana:
+
+| Import | Resolved to | Correct? |
+|---|---|---|
+| `time` | `pkg/tsdb/azuremonitor/time/` | stdlib hijacked |
+| `context` | `pkg/services/grpcserver/context/` | stdlib hijacked |
+| `.../ngalert/models` | `pkg/cmd/grafana-cli/models/` | wrong package |
+
+Common package names (`models`, `types`, `util`, `api`, `store`) repeat constantly on a real
+repo, so a large share of cross-package edges were wired to the **wrong** package — not
+missing, *wrong*. Present since Go support shipped. It also explains why the layer-1 fix did
+nothing on Grafana despite passing its own tests: it resolves against the directories a file
+imports, and those directories were wrong. Fixed by treating a single-segment path as stdlib
+by definition, then matching the longest import-path suffix that is a real directory.
+
+**Verified on the real repo, before/after a `--force` reparse:**
+
+| Metric | Before | After |
+|---|---|---|
+| `impact_analysis` on `ValidateRuleGroupInterval` | 1 caller | **11** |
+| Direct call sites resolved | 1 of 3 | **3 of 3** |
+| Repo-wide resolved imports | 172,786 | **175,369** (+2,583) |
+| `import "time"` | `pkg/tsdb/azuremonitor/time/` | `external:time` |
+
+The 11 includes `DBstore.InsertAlertRules`, `RoutePutAlertRuleGroup` and the provisioning
+path — the actual blast radius, invisible for every prior round.
+
+**Method note worth keeping:** this was found by checking a tool's output against `grep`
+ground truth, not by reasoning about agent behavior. Three rounds of behavioral theorizing
+produced three fixes to the wrong layer; one verification pass found the real bug. When a
+tool's answer and the agent's behavior disagree, **verify the tool first** — the cheaper
+check, and here the correct one.
+
+**Consequence for the earlier rounds:** rounds 9-11's cost figures stand, but their
+conclusions about nudge effectiveness are uninterpretable — they measured agent response to
+incorrect data. Any re-test has to run on a correctly-resolved index.
+
 ## Rounds 10-11 (2026-08-25): two nudges shipped, neither fired — and the reason is an axis mismatch, not a threshold
 
 Same editing prompt on Grafana, same protocol, run after shipping two structural fixes aimed
