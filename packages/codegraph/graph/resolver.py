@@ -1072,15 +1072,31 @@ def _resolve_go(
 ) -> tuple[str, float]:
     """Resolve a Go import path.
 
-    Go imports are module-path rooted (e.g. `github.com/x/y/pkg` or just
-    `fmt`). Best-effort strategy: convert the last slash-segment to a directory
-    name and scan for any `.go` file inside a directory of that name.
-    """
-    # Standard library packages have no slash or dots — treat as external.
-    last_seg = path.split("/")[-1]
+    Go imports are module-path rooted (`github.com/x/y/pkg`) or stdlib (`fmt`).
+    Strategy: a single-segment path is stdlib by definition; otherwise match the
+    LONGEST suffix of the import path that is a real directory in the repo.
 
-    # Try exact module-qname lookup (works when the path matches our index keys
-    # directly, e.g. the repo root is the module root).
+    An earlier version matched only the path's last segment and took the
+    alphabetically-first `.go` file in any directory with that name. On a real
+    repo that is badly wrong in two ways, both observed on Grafana:
+
+    * stdlib hijacking -- `import "time"` resolved to `pkg/tsdb/azuremonitor/
+      time/`, `context` to `pkg/services/grpcserver/context/`; and
+    * wrong-package collisions -- every `.../ngalert/models` import resolved to
+      `pkg/cmd/grafana-cli/models/`, because common package names (`models`,
+      `types`, `util`, `api`, `store`) repeat constantly across a large repo.
+
+    Suffix matching is unambiguous by construction: the candidate is compared
+    against exact directory paths, so at most one directory can match, and the
+    longest-first order prefers the most specific one.
+    """
+    # A single-segment import path is always stdlib -- anything in-repo or
+    # third-party carries a domain-ish prefix (`github.com/...`). Checked before
+    # any directory probing so a local dir sharing a stdlib name can't win.
+    if "/" not in path:
+        return f"external:{path}", 0.5
+
+    # Exact module-qname lookup (works when the repo root is the module root).
     dot_path = path.replace("/", ".")
     file = by_module_qname.get(dot_path)
     if file and file.endswith(".go"):
@@ -1088,15 +1104,23 @@ def _resolve_go(
         if result:
             return result
 
-    # Heuristic: find any `.go` file whose parent directory's last segment matches.
-    for known_file in sorted(known_files):
-        if not known_file.endswith(".go"):
+    go_files_by_dir: dict[str, list[str]] = {}
+    for known_file in known_files:
+        if known_file.endswith(".go"):
+            go_files_by_dir.setdefault(posixpath.dirname(known_file), []).append(known_file)
+
+    segments = path.split("/")
+    for i in range(len(segments)):
+        candidate_dir = "/".join(segments[i:])
+        files_in_dir = go_files_by_dir.get(candidate_dir)
+        if not files_in_dir:
             continue
-        parts = known_file.split("/")
-        if len(parts) >= 2 and parts[-2] == last_seg:
-            result = _module_entity_for_file(known_file, by_file_name)
-            if result:
-                return result
+        # min() rather than "first seen": a package spans several files and any
+        # of them carries the same module entity, so pick deterministically
+        # instead of depending on set-iteration order.
+        result = _module_entity_for_file(min(files_in_dir), by_file_name)
+        if result:
+            return result
 
     return f"external:{path}", 0.5
 

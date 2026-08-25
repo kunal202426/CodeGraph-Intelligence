@@ -195,6 +195,61 @@ def test_java_same_package_call_resolves_without_import(tmp_path: Path) -> None:
     ) in calls
 
 
+def test_go_stdlib_import_not_hijacked_by_a_local_dir_of_the_same_name(
+    tmp_path: Path,
+) -> None:
+    """`import "time"` must stay external even when the repo has its own
+    directory named `time`.
+
+    Found on Grafana: `time` resolved to `pkg/tsdb/azuremonitor/time/`, and
+    `context` to `pkg/services/grpcserver/context/` -- both stdlib, both
+    hijacked by an unrelated local directory that happened to share the last
+    path segment. In Go a single-segment import path is *always* stdlib;
+    anything third-party or in-repo carries a domain-ish prefix
+    (`github.com/...`), so there is no ambiguity to weigh here."""
+    db = _index(
+        tmp_path,
+        {
+            "go.mod": "module example.com/app\n\ngo 1.21\n",
+            "time/helper.go": "package time\n\nfunc Helper() {}\n",
+            "svc/svc.go": ('package svc\n\nimport "time"\n\nfunc Run() { _ = time.Now }\n'),
+        },
+    )
+    dsts = _resolved_dsts(db)
+    assert "external:time" in dsts, f"stdlib import was hijacked, got: {sorted(dsts)}"
+
+
+def test_go_import_picks_the_right_package_among_same_named_dirs(tmp_path: Path) -> None:
+    """Two directories named `models`; the import path says which one.
+
+    Found on Grafana, where every `.../ngalert/models` import resolved to
+    `pkg/cmd/grafana-cli/models/` instead -- the resolver matched only the
+    import path's LAST segment and then took the alphabetically-first `.go`
+    file in any directory with that name. On a real repo, common package names
+    (`models`, `types`, `util`, `api`, `store`) collide constantly, so this
+    quietly mis-wired a large fraction of all cross-package edges. Match the
+    longest path suffix that is a real directory instead."""
+    db = _index(
+        tmp_path,
+        {
+            "go.mod": "module example.com/app\n\ngo 1.21\n",
+            "cmd/cli/models/model.go": "package models\n\nfunc CliOnly() {}\n",
+            "services/alerting/models/rules.go": (
+                "package models\n\nfunc Validate() error {\n\treturn nil\n}\n"
+            ),
+            "services/alerting/svc.go": (
+                "package alerting\n\n"
+                'import "example.com/app/services/alerting/models"\n\n'
+                "func Run() error {\n\treturn models.Validate()\n}\n"
+            ),
+        },
+    )
+    dsts = _resolved_dsts(db)
+    assert not any("cmd/cli/models" in d for d in dsts), (
+        f"import resolved to the wrong same-named package, got: {sorted(dsts)}"
+    )
+
+
 def test_go_qualified_cross_package_call_resolves(tmp_path: Path) -> None:
     """`models.Validate(...)` -- a call qualified by an imported package name --
     must resolve to the real function, not `external:`.
