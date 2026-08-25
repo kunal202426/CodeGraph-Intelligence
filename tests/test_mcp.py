@@ -187,6 +187,46 @@ def test_search_code_tool(indexed_db: Path) -> None:
     assert any(r["name"] == "authenticate" for r in results)
 
 
+def test_search_code_hints_at_impact_analysis_for_a_high_fanout_hit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Real gap found live on Grafana: round 10's investigation stayed in
+    search_code/Read the whole session and never called impact_analysis, even
+    though get_context's truncated-callers nudge already existed -- because
+    search_code shows zero caller information at all, so there was nothing to
+    even hint at a gap. get_context only warns when it's hiding callers it
+    already partially showed; search_code never showed any, so it needs its
+    own signal, not a copy of that one. Backward-compatible by design: this
+    adds an optional per-hit field, not a new top-level response shape, since
+    every caller (including this project's own tests) treats search_code's
+    response as a bare list of hit dicts."""
+    from codegraph.server.mcp_server import _NEIGHBOR_CAP
+
+    repo = tmp_path / "proj"
+    callers_src = "\n".join(
+        f"def caller_{i}():\n    return target()" for i in range(_NEIGHBOR_CAP + 3)
+    )
+    db = _index_temp_repo_multi(
+        repo,
+        {"hub.py": f"def target():\n    return 1\n\n\n{callers_src}\n"},
+    )
+    monkeypatch.setattr(mcp_server, "_db_path", db)
+
+    results = _call("search_code", {"query": "target"})
+    target = next(r for r in results if r["name"] == "target")
+
+    assert "impact_analysis" in target.get("hint", "")
+    assert target["entity_id"] in target["hint"]
+
+
+def test_search_code_no_hint_for_a_normal_hit(indexed_db: Path) -> None:
+    """Regression guard: the hint must not fire on ordinary, low-fanout hits --
+    it would just be repeated noise on every call otherwise."""
+    results = _call("search_code", {"query": "authenticate"})
+    hit = next(r for r in results if r["name"] == "authenticate")
+    assert "hint" not in hit
+
+
 def test_get_entity_context_tool(indexed_db: Path) -> None:
     eid = next(r["entity_id"] for r in _call("search_code", {"query": "authenticate"}))
     ctx = _call("get_entity_context", {"entity_id": eid})

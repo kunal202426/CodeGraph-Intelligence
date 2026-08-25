@@ -295,7 +295,9 @@ def tool_definitions() -> list[Tool]:
             "literal + semantic search over the indexed codebase -- returns matching "
             "entities (functions/classes/modules) with file:line and entity_id, using "
             "far fewer tokens than scanning files. Use when you need a quick list of "
-            "candidate locations; follow up with get_context for the full picture.",
+            "candidate locations; follow up with get_context for the full picture. A hit "
+            "with a high caller count carries a 'hint' field pointing at impact_analysis "
+            "-- check before editing it.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -787,6 +789,26 @@ def _maybe_embed_batch(queries: list[str]) -> list[list[float] | None]:
         return [None] * len(queries)
 
 
+def _caller_counts(conn, entity_ids: list[str]) -> dict[str, int]:
+    """Distinct-caller count per entity_id, one batched query -- not N+1.
+
+    Used to decide which search_code hits are worth hinting at impact_analysis
+    for. Deliberately cheap: a single GROUP BY over the already-indexed edges
+    table, no per-hit round-trip, so this stays proportionate to search_code's
+    role as the fast, lightweight candidate-list tool (get_context is where
+    the actual caller/callee detail lives).
+    """
+    if not entity_ids:
+        return {}
+    placeholders = _placeholders(len(entity_ids))
+    rows = conn.execute(
+        f"SELECT dst_id, COUNT(DISTINCT src_id) FROM edges "
+        f"WHERE dst_id IN ({placeholders}) AND type = 'calls' GROUP BY dst_id",
+        entity_ids,
+    ).fetchall()
+    return {r[0]: int(r[1]) for r in rows}
+
+
 def _search_code(args: dict[str, Any]) -> str:
     query = str(args["query"])
     limit = int(args.get("limit", 10))
@@ -795,22 +817,37 @@ def _search_code(args: dict[str, Any]) -> str:
         # Only pay the embedding cost when the index actually has vectors.
         vector = _maybe_embed(query) if store.count_embedded() > 0 else None
         hits = hybrid_search(store.conn, query, vector, limit=limit)
+        # search_code shows no caller info at all (unlike get_context, which at
+        # least shows a capped sample) -- so unlike get_context's "more than
+        # shown" warning, this has nothing to compare against. Only worth a
+        # hint for a genuinely high-fan-in function/method: found live on
+        # Grafana that a session staying entirely in search_code/Read never
+        # got a single signal pointing at impact_analysis, because there was
+        # nothing here suggesting one was warranted.
+        callable_ids = [h.entity_id for h in hits if h.type in ("function", "method")]
+        counts = _caller_counts(store.conn, callable_ids)
     finally:
         store.close()
-    return json.dumps(
-        [
-            {
-                "entity_id": h.entity_id,
-                "type": h.type,
-                "name": h.name,
-                "file": h.file,
-                "start_line": h.start_line,
-                "docstring": h.docstring,
-                "via": list(h.retrievers),
-            }
-            for h in hits
-        ]
-    )
+
+    results = []
+    for h in hits:
+        entry = {
+            "entity_id": h.entity_id,
+            "type": h.type,
+            "name": h.name,
+            "file": h.file,
+            "start_line": h.start_line,
+            "docstring": h.docstring,
+            "via": list(h.retrievers),
+        }
+        count = counts.get(h.entity_id, 0)
+        if count > _NEIGHBOR_CAP:
+            entry["hint"] = (
+                f"{count} callers -- call impact_analysis('{h.entity_id}') for the "
+                "full blast radius before editing this."
+            )
+        results.append(entry)
+    return json.dumps(results)
 
 
 def _get_entity_context(args: dict[str, Any]) -> str:
