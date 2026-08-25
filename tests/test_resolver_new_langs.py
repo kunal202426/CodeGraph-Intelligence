@@ -195,6 +195,119 @@ def test_java_same_package_call_resolves_without_import(tmp_path: Path) -> None:
     ) in calls
 
 
+def test_go_qualified_cross_package_call_resolves(tmp_path: Path) -> None:
+    """`models.Validate(...)` -- a call qualified by an imported package name --
+    must resolve to the real function, not `external:`.
+
+    Found live on Grafana while grounding a brainstorm, and it invalidated three
+    rounds of A/B work: impact_analysis on `ValidateRuleGroupInterval` reported
+    `total: 1` when ground-truth grep showed 3 real call sites. The two it
+    missed were both written `models.ValidateRuleGroupInterval(...)` across a
+    package boundary. A "1 caller" answer reads as "safe to change" -- the same
+    misleading-small-number failure class as the round-7 type_usages bug, but on
+    the function path.
+
+    Root cause is resolver-side, not parser-side: the parser correctly emits a
+    bare-name `go:?call:Validate` edge (the `models.` qualifier is dropped
+    before the resolver sees it), then `_resolve_call` checks same-file, then
+    the file's import table -- which for a Go package import is keyed by the
+    module name, never by the function -- and gives up. Because every parser
+    degrades qualified calls to the same bare-name shape, fixing it in the
+    resolver fixes every language at once (see the Python twin below)."""
+    import duckdb
+
+    db = _index(
+        tmp_path,
+        {
+            "go.mod": "module example.com/app\n\ngo 1.21\n",
+            "models/rules.go": (
+                "package models\n\nfunc Validate(interval int64) error {\n\treturn nil\n}\n"
+            ),
+            "service/svc.go": (
+                "package service\n\n"
+                'import "example.com/app/models"\n\n'
+                "func Run() error {\n"
+                "\treturn models.Validate(10)\n"
+                "}\n"
+            ),
+        },
+    )
+    conn = duckdb.connect(str(db), read_only=True)
+    calls = conn.execute(
+        "SELECT src_id, dst_id FROM edges WHERE type = 'calls' AND src_id LIKE '%svc.go%'"
+    ).fetchall()
+    conn.close()
+
+    assert ("go:service/svc.go:Run", "go:models/rules.go:Validate") in calls, (
+        f"qualified cross-package call unresolved, got: {calls}"
+    )
+
+
+def test_python_qualified_module_call_resolves(tmp_path: Path) -> None:
+    """The Python twin of the Go case above: `helpers.compute()` after
+    `import helpers`. Listed in STATUS.md's backlog since the 2026-07-06 stress
+    test as "calls through an imported module namespace don't resolve" -- same
+    single resolver fix covers it, because the parser degrades this to the same
+    bare-name `py:?call:compute` shape."""
+    import duckdb
+
+    db = _index(
+        tmp_path,
+        {
+            "helpers.py": "def compute(x):\n    return x + 1\n",
+            "app.py": "import helpers\n\n\ndef run():\n    return helpers.compute(1)\n",
+        },
+    )
+    conn = duckdb.connect(str(db), read_only=True)
+    calls = conn.execute(
+        "SELECT src_id, dst_id FROM edges WHERE type = 'calls' AND src_id LIKE '%app.py%'"
+    ).fetchall()
+    conn.close()
+
+    assert ("py:app.py:run", "py:helpers.py:compute") in calls, (
+        f"qualified module call unresolved, got: {calls}"
+    )
+
+
+def test_qualified_call_stays_external_when_ambiguous(tmp_path: Path) -> None:
+    """Guard on the fix's precision: the resolver only sees a bare callee name,
+    so if two *different* imported packages both export that name there is no
+    information left to pick between them. Must stay `external:` rather than
+    guess -- same don't-guess-when-ambiguous policy the rest of the resolver
+    follows."""
+    import duckdb
+
+    db = _index(
+        tmp_path,
+        {
+            "go.mod": "module example.com/app\n\ngo 1.21\n",
+            "alpha/a.go": "package alpha\n\nfunc Shared() error {\n\treturn nil\n}\n",
+            "beta/b.go": "package beta\n\nfunc Shared() error {\n\treturn nil\n}\n",
+            "service/svc.go": (
+                "package service\n\n"
+                "import (\n"
+                '\t"example.com/app/alpha"\n'
+                '\t"example.com/app/beta"\n'
+                ")\n\n"
+                "func Run() error {\n"
+                "\t_ = beta.Shared\n"
+                "\treturn alpha.Shared()\n"
+                "}\n"
+            ),
+        },
+    )
+    conn = duckdb.connect(str(db), read_only=True)
+    dsts = {
+        r[0]
+        for r in conn.execute(
+            "SELECT dst_id FROM edges WHERE type = 'calls' AND src_id LIKE '%svc.go%'"
+        ).fetchall()
+    }
+    conn.close()
+
+    assert "external:Shared" in dsts, f"ambiguous name should stay external, got: {dsts}"
+
+
 # ---------- Ruby ----------
 
 

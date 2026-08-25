@@ -248,6 +248,10 @@ def resolve_symbols(store: GraphStore, repo_root: Path | None = None) -> Resolut
     # file → {imported_name: resolved_target_id} — built from resolved imports,
     # used to resolve calls to imported symbols.
     imports_by_file: dict[str, dict[str, str]] = {}
+    # file → {directory of each resolved import target} — used to resolve a
+    # qualified cross-package call (`models.Validate()`) whose qualifier the
+    # parser already dropped. See _resolve_call.
+    imported_dirs_by_file: dict[str, set[str]] = {}
 
     # Phase 0 — inheritance edges. Resolved before calls: receiver-typed
     # method-call resolution walks a class's resolved base classes when
@@ -312,10 +316,21 @@ def resolve_symbols(store: GraphStore, repo_root: Path | None = None) -> Resolut
             external += 1
         else:
             resolved += 1
+            file = src_id.split(":", 2)[1]
             target_name = idx.name_by_id.get(new_dst)
             if target_name:
-                file = src_id.split(":", 2)[1]
                 imports_by_file.setdefault(file, {})[target_name] = new_dst
+            # Also record the *directory* each resolved import points into, so a
+            # qualified cross-package call (`models.Validate()`) can be looked up
+            # among that package's exported entities -- see _resolve_call. A
+            # package import resolves to a module entity, whose name is the
+            # module qname, so `imports_by_file` above is keyed by the module and
+            # can never match the called function's own name.
+            target_parts = new_dst.split(":", 2)
+            if len(target_parts) >= 3:
+                imported_dirs_by_file.setdefault(file, set()).add(
+                    posixpath.dirname(target_parts[1])
+                )
 
     # Phase 2 — calls (now that imports_by_file is populated).
     for src_id, dst_id, edge_type, line in call_rows:
@@ -332,7 +347,12 @@ def resolve_symbols(store: GraphStore, repo_root: Path | None = None) -> Resolut
             )
         else:
             new_dst, new_conf = _resolve_call(
-                dst_id, src_id, idx.entities_by_file, imports_by_file, idx.entities_by_dir
+                dst_id,
+                src_id,
+                idx.entities_by_file,
+                imports_by_file,
+                idx.entities_by_dir,
+                imported_dirs_by_file,
             )
         resolved_edges.append(
             Edge(src_id=src_id, dst_id=new_dst, type=edge_type, line=line, confidence=new_conf)
@@ -548,15 +568,17 @@ def _resolve_call(
     entities_by_file: dict[str, dict[str, str]],
     imports_by_file: dict[str, dict[str, str]],
     entities_by_dir: dict[str, dict[str, str]] | None = None,
+    imported_dirs_by_file: dict[str, set[str]] | None = None,
 ) -> tuple[str, float]:
     """Resolve a `<lang>:?call:<callee>` edge -- an UNTYPED call (the parser
     couldn't infer the receiver's type, or there is no receiver at all).
 
     Order: a same-file entity named `<callee>` (conf 1.0) → a name the caller's
     file imports (conf 0.9) → for Java, a same-package sibling that needs no
-    import (conf 0.85) → external (conf 0.5), matching on the simple callee
-    name since no type is known to disambiguate. Receiver-typed calls
-    (`obj.method()` where `obj`'s type WAS inferred) go through
+    import (conf 0.85) → an exported entity of that name in a package this file
+    imports, when unambiguous (conf 0.8) → external (conf 0.5), matching on the
+    simple callee name since no type is known to disambiguate. Receiver-typed
+    calls (`obj.method()` where `obj`'s type WAS inferred) go through
     `_resolve_method_call` instead, which resolves the exact declared method.
     """
     _, _, callee = dst_id.partition(":?call:")
@@ -578,6 +600,27 @@ def _resolve_call(
         same_package = entities_by_dir.get(posixpath.dirname(file), {})
         if callee in same_package:
             return same_package[callee], 0.85
+
+    # A qualified cross-package call -- `models.Validate()`, `helpers.compute()`,
+    # `mod::func()`. Every parser drops the qualifier before emitting the edge,
+    # so by here it's an ordinary bare name; and the `imports_by_file` lookup
+    # above can't match it, because a *package* import resolves to a module
+    # entity keyed by the module's own name, never by the called function's.
+    # Falling through to `external:` here silently deflated every caller count
+    # on real repos: found on Grafana, where impact_analysis reported 1 caller
+    # for a function with 3 real call sites, two of them `models.Foo(...)`
+    # across a package boundary -- a "1 caller" answer that reads as "safe to
+    # change". Only resolve when exactly one imported package exports the name:
+    # the qualifier is gone, so two candidates leave nothing to choose between,
+    # and a wrong call edge is worse than a missing one.
+    if entities_by_dir is not None and imported_dirs_by_file is not None:
+        matches = {
+            hit
+            for directory in imported_dirs_by_file.get(file, ())
+            if (hit := entities_by_dir.get(directory, {}).get(callee)) is not None
+        }
+        if len(matches) == 1:
+            return matches.pop(), 0.8
 
     return f"external:{callee}", 0.5
 
