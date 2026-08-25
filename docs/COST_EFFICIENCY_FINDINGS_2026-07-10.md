@@ -4,6 +4,59 @@
 vs. off, across multiple codebases and dates — **newest first.** Every round reports real
 `/usage` cost, not estimated tokens, including the rounds where it came out worse.
 
+## Rounds 10-11 (2026-08-25): two nudges shipped, neither fired — and the reason is an axis mismatch, not a threshold
+
+Same editing prompt on Grafana, same protocol, run after shipping two structural fixes aimed
+squarely at round 8's finding (`impact_analysis` never being called):
+
+1. `impact_analysis`'s tool description rewritten to "prefer this over grep for who
+   calls/uses this" (round 8, commit `33368b5`).
+2. `get_context` emits a warning naming the exact entity_id when its caller list is
+   truncated at `_NEIGHBOR_CAP` (round 8, same commit).
+3. `search_code` attaches a per-hit `hint` field when a hit's real caller count exceeds the
+   same cap (round 11 prep, commit `ca682ea`) — added specifically because round 10 stayed
+   in `search_code`/`Read` the whole session and so never saw fix #2 at all.
+
+| Round | Cost | codegraph calls | `impact_analysis` calls | Entry points | Correctness |
+|---|---|---|---|---|---|
+| 10 | $2.91 | 1 batched `get_context` | **0** | 2 of 3 (App-Platform skipped, flagged as follow-up) | Safe by design — made the floor opt-in (`minInterval > 0`), sidestepping the bug class |
+| 11 | **$1.20** | 1 batched `get_context` + `search_code` | **0** | **3 of 3** (best coverage of any round, resolved the old `TODO`) | **Two separate flaky-test regressions** |
+
+**Round 11 is the cheapest round yet AND the most complete fix AND the most broken.** All
+three of those are true simultaneously, which is the whole finding.
+
+**Regression 1 — a straight repeat of round 9's.** Hardcoded, unconditional
+`MinRuleEvaluationIntervalSeconds = 10` on `ValidateRuleGroupInterval`, while
+`models/testing.go:124`'s shared generator still draws `IntervalSeconds: rand.Int63n(60) + 1`
+and `store/testing.go:142` still configures `BaseInterval: 1s`. ~15% of randomized store
+tests become newly flaky, exactly as in round 9.
+
+**Regression 2 — new, and worse, because the agent explicitly checked for it and got it
+wrong.** The transcript states: *"Good, all tests use interval ≥ 10s, so a 10s floor is
+safe."* Verified by hand against the real file, that is false:
+`api_ruler_validation_test.go`'s `TestValidateRuleNode_NoUID` builds
+`interval := cfg.BaseInterval * time.Duration(rand.Int64N(10)+1)` where `config()` draws
+`BaseInterval` from `[3, 99]` seconds — so `interval` can be as low as 3s, and that value
+feeds a `ValidateRuleNode(...)` call asserted with `require.NoError`. A real, seed-dependent
+failure in a test the agent specifically claimed to have cleared.
+
+**The actual lesson, and why it invalidates the current fix direction:** both nudges key on
+**caller count exceeding a cap**. Across rounds 9, 10, and 11, caller count has *never* been
+the failing axis — every function involved has a handful of callers at most. The real,
+thrice-repeated failure is **transitive reachability through randomized test scaffolding**,
+several hops from the edit site, which a bounded grep-and-read verification gets wrong *even
+when explicitly attempted*. High-fan-in and "reachable from a fuzzing test generator" are
+orthogonal properties; three rounds of tuning a high-fan-in signal produced zero
+`impact_analysis` calls because the tool was answering a question nobody was asking.
+
+Also worth recording: **cost is now clearly decoupled from correctness.** Round 11 was
+cheapest *and* most broken; round 10 was priciest *and* safest. Any framing that treats
+falling cost as evidence the tooling is working would be reading noise as signal.
+
+**Not fixed this pass** — logged deliberately without a same-day fix, because three
+consecutive rounds of "ship a plausible heuristic, then discover it addressed the wrong
+axis" is itself the strongest argument against shipping a fourth one un-designed.
+
 ## Round 9 (2026-08-14, same day): the structural fix worked — cheapest round yet, and it exposed a real verification gap
 
 Same prompt, same repo, one session after Round 8's structural fix shipped (`impact_analysis`'s

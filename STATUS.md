@@ -59,6 +59,25 @@
   completed in 12.7s (matches the measured cold worker-embed cost), no hang, clean exit.
   **The already-running server that hit the original hang cannot self-heal — it holds the
   deadlock in memory. A Claude Code restart is required to load this fix.**
+- **OPEN, highest priority 2026-08-25 — three rounds of nudges, zero `impact_analysis` calls,
+  because the signal is on the wrong axis.** Shipped three structural fixes aimed at round 8's
+  "codegraph gets used more, not better" finding: `impact_analysis`'s description says "prefer
+  this over grep", `get_context` warns when it truncates a caller list, and `search_code`
+  attaches a per-hit hint above the same caller-count cap (`33368b5`, `ca682ea`). Rounds 10
+  ($2.91) and 11 ($1.20) both called `impact_analysis` **zero** times anyway. Round 11 was
+  simultaneously the cheapest round on record, the most complete fix (all 3 validation entry
+  points, resolved a standing `TODO`), **and** the most broken — it reintroduced round 9's
+  flaky-test regression *and* added a second one the agent explicitly checked for and got
+  wrong (claimed "all tests use interval ≥ 10s"; `api_ruler_validation_test.go` actually
+  randomizes `BaseInterval` over `[3, 99]`s and feeds the product into a `require.NoError`
+  path). **Root cause of the failed fixes: all three nudges key on caller count exceeding a
+  cap, but caller count has never been the failing axis** — across rounds 9/10/11 every
+  affected function had a handful of callers. The real failure is transitive reachability
+  through randomized test scaffolding, which is orthogonal to fan-in. Also now firmly
+  established: cost is decoupled from correctness (cheapest round = most broken). Deliberately
+  **not** fixed same-day — a fourth un-designed heuristic is exactly the pattern to break.
+  Full data: [docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md](docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md)
+  (Rounds 10-11).
 - **RESOLVED (cost) / OPEN (a new gap) 2026-08-14 — the structural fix worked, cheapest round
   yet, but it exposed a real verification gap.** Round 8 found codegraph was getting used *more*
   without getting used *better* (`impact_analysis` called zero times in a session whose task was
