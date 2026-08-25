@@ -35,12 +35,17 @@ from codegraph.graph.ranking import (
     significant_terms,
     split_identifier_segments,
 )
+from codegraph.uir import LANGUAGE_PREFIX
 
 # Entity-id language prefixes — used by `find_entity_by_name_or_id` to tell
 # "this is an entity_id, not a free-form name" without a regex.
-# Must cover every lang CodeGraph indexes so that passing a full entity_id as
-# a query (e.g. "go:pkg/server.go:Handler") triggers the exact-match branch.
-_ENTITY_ID_PREFIXES = ("py:", "ts:", "js:", "go:", "rs:", "java:", "rb:", "php:", "c:", "cpp:")
+# Derived from uir.LANGUAGE_PREFIX (not a hand-maintained second copy of it) so
+# it can never drift out of sync as languages get added -- a hardcoded subset
+# here once silently missed 12 of 22 languages: passing a full entity_id for
+# any of them (e.g. "kt:MainActivity.kt:onCreate") fell through to the
+# name/qualified_name branch below, which can never match a full entity_id
+# string, and silently returned no results for a perfectly valid entity_id.
+_ENTITY_ID_PREFIXES = tuple(f"{prefix}:" for prefix in LANGUAGE_PREFIX.values())
 
 
 def read_baseline_tokens(conn: duckdb.DuckDBPyConnection, files: Iterable[str]) -> int:

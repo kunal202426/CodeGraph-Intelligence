@@ -85,6 +85,35 @@ def test_find_entity_by_qualified_name(indexed: Path) -> None:
     assert hits[0].name == "validate"
 
 
+def test_find_entity_by_id_covers_every_indexed_language(runner: CliRunner, tmp_path: Path) -> None:
+    """Real bug, found and confirmed by cross-referencing this function's own
+    prefix tuple against uir.LANGUAGE_PREFIX: only 10 of the 22 languages
+    CodeGraph indexes were recognized as "this looks like an entity_id", so a
+    full entity_id for any of the other 12 (Kotlin here) fell through to the
+    name/qualified_name branch instead -- which can never match a full
+    entity_id string -- and silently returned no results for a perfectly
+    valid entity_id. Kotlin chosen as a concrete repro; the fix should cover
+    all 22, not just this one."""
+    repo = tmp_path / "proj"
+    _make_repo(repo, {"Main.kt": 'fun greet() {\n    println("hi")\n}\n'})
+    db = tmp_path / "graph.duckdb"
+    result = runner.invoke(app, ["index", str(repo), "--db", str(db)])
+    assert result.exit_code == 0, result.stdout
+
+    store = GraphStore(db)
+    try:
+        by_name = find_entity_by_name_or_id(store.conn, "greet")
+        assert len(by_name) == 1
+        entity_id = by_name[0].entity_id
+        assert entity_id.startswith("kt:")
+
+        by_id = find_entity_by_name_or_id(store.conn, entity_id)
+    finally:
+        store.close()
+    assert len(by_id) == 1
+    assert by_id[0].entity_id == entity_id
+
+
 # ---------- BFS ----------
 
 
