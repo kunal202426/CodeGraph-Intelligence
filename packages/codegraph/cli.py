@@ -394,15 +394,19 @@ def index(
     pending_edges: list = []
 
     def _flush() -> None:
+        # Edges are always rebuilt from scratch (a removed call must vanish),
+        # but entity rows are replaced by set difference rather than deleted
+        # outright -- a surviving entity_id keeps its embedding that way, so an
+        # unchanged re-parse costs no re-embedding. See replace_file_entities.
         if pending_stale_paths:
-            store.clear_files(pending_stale_paths)
-            pending_stale_paths.clear()
+            store.clear_file_edges(pending_stale_paths)
         if pending_file_rows:
             store.upsert_files(pending_file_rows)
             pending_file_rows.clear()
-        if pending_entities:
-            store.upsert_entities(pending_entities)
+        if pending_stale_paths or pending_entities:
+            store.replace_file_entities(pending_stale_paths, pending_entities)
             pending_entities.clear()
+            pending_stale_paths.clear()
         if pending_edges:
             store.upsert_edges(pending_edges)
             pending_edges.clear()

@@ -236,9 +236,12 @@ def index_one_file(
             ).fetchone()
             return int(row[0]) if row else 0
 
-        # Drop stale rows when re-indexing an already-indexed file.
+        # Drop stale edges when re-indexing an already-indexed file. Entities
+        # are replaced by set difference below instead of deleted here, so an
+        # entity that survives the edit keeps its embedding -- otherwise editing
+        # one function re-embeds every other entity in the same file.
         if prev_hash is not None:
-            store.clear_file(rel_path)
+            store.clear_file_edges([rel_path])
 
         try:
             result = parser.parse(Path(rel_path), source)
@@ -251,7 +254,7 @@ def index_one_file(
             hash_=current_hash,
             loc=source.count("\n") + 1,
         )
-        store.upsert_entities(result.entities)
+        store.replace_file_entities([rel_path], result.entities)
         store.upsert_edges(result.edges)
         resolve_symbols(store, repo)
 

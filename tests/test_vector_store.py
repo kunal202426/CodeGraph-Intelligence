@@ -75,6 +75,83 @@ def test_update_embeddings_stores_hash(tmp_path) -> None:
         store.close()
 
 
+def test_replace_file_entities_preserves_embeddings_for_surviving_entities(tmp_path) -> None:
+    """Re-parsing a file must not throw away embeddings it had no reason to touch.
+
+    The index pipeline replaced a re-parsed file's entities with
+    `clear_files()` (a plain `DELETE FROM entities WHERE file = ?`) followed by
+    a fresh upsert. Deleting the row takes its `embedding`/`embedding_hash`
+    with it, so the pipeline's own self-healing check (`not has_embedding or
+    stored_hash != input_hash`) saw a NULL embedding for every entity in the
+    file and re-embedded all of them -- even when the re-parse produced
+    byte-identical content.
+
+    Measured on the real 97k-entity Grafana index: a re-index that re-parsed
+    **0 of 16046 files** still re-embedded all 97,239 entities, 33 minutes of
+    work to recompute vectors for source that never changed. Same waste in
+    miniature on every watch-mode save: editing one function re-embeds every
+    other entity in that file too.
+
+    An entity's embedding is derived from its own source/summary, so an
+    unchanged entity's vector cannot have changed. Upsert-then-prune keeps the
+    row (and its embedding) for surviving entity_ids, while still removing
+    entities the new parse no longer produces."""
+    store = _store_with_entities(tmp_path, ["a", "b"])
+    try:
+        rng = np.random.default_rng(7)
+        store.update_embeddings([("py:a.py:a", _unit(rng.random(DIM)), "input_hash_a")])
+        assert store.count_embedded() == 1
+
+        # Re-parse of an unchanged file: same entities, same ids.
+        store.replace_file_entities(["a.py"], [_entity("a"), _entity("b")])
+
+        assert store.count_embedded() == 1, "re-parse wiped a surviving entity's embedding"
+        row = store.conn.execute(
+            "SELECT embedding_hash FROM entities WHERE entity_id = 'py:a.py:a'"
+        ).fetchone()
+        assert row[0] == "input_hash_a", "re-parse wiped the embedding_hash"
+    finally:
+        store.close()
+
+
+def test_replace_file_entities_prunes_entities_the_new_parse_dropped(tmp_path) -> None:
+    """The half `clear_files` got right, which the fix must not lose: an entity
+    deleted from the source must disappear from the graph, not linger forever."""
+    store = _store_with_entities(tmp_path, ["a", "b"])
+    try:
+        # New parse of a.py no longer contains `b` (function was deleted).
+        store.replace_file_entities(["a.py"], [_entity("a")])
+
+        remaining = {
+            r[0]
+            for r in store.conn.execute(
+                "SELECT entity_id FROM entities WHERE file = 'a.py'"
+            ).fetchall()
+        }
+        assert remaining == {"py:a.py:a"}, f"stale entity not pruned: {remaining}"
+    finally:
+        store.close()
+
+
+def test_replace_file_entities_still_writes_changed_fields(tmp_path) -> None:
+    """Guard: preserving embeddings must not make the upsert a no-op. A real
+    re-parse still has to write changed source/docstring."""
+    store = _store_with_entities(tmp_path, ["a"])
+    try:
+        changed = _entity("a")
+        changed.raw_source = "def a():\n    return 42\n"
+        changed.docstring = "now documented"
+        store.replace_file_entities(["a.py"], [changed])
+
+        row = store.conn.execute(
+            "SELECT raw_source, docstring FROM entities WHERE entity_id = 'py:a.py:a'"
+        ).fetchone()
+        assert row[0] == "def a():\n    return 42\n"
+        assert row[1] == "now documented"
+    finally:
+        store.close()
+
+
 def test_update_embeddings_only_touches_named_rows(tmp_path) -> None:
     store = _store_with_entities(tmp_path, ["a", "b"])
     try:

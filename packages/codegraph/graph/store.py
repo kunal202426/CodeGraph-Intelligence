@@ -195,6 +195,56 @@ class GraphStore:
         ]
         self._bulk_insert("entities", _ENTITY_COLUMNS, rows, on_conflict="replace")
 
+    def replace_file_entities(self, paths: list[str], entities: list[UIREntity]) -> None:
+        """Swap in a fresh parse's entities for `paths`, preserving embeddings.
+
+        Upsert-then-prune, deliberately not delete-then-insert. `INSERT OR
+        REPLACE` only writes the columns it names, so an entity_id that survives
+        a re-parse keeps its `embedding`/`embedding_hash`; anything the new
+        parse no longer produces is then deleted by set difference.
+
+        The old path cleared a file's entities with `DELETE FROM entities WHERE
+        file = ?` before re-inserting. That took each row's embedding with it,
+        so the indexer's self-healing check (`not has_embedding or stored_hash
+        != input_hash`) saw NULL for every entity in the file and re-embedded
+        the lot -- even for byte-identical source. Measured on a real 97k-entity
+        index: a re-index that re-parsed 0 of 16046 files still re-embedded all
+        97,239 entities, ~33 minutes to recompute vectors that could not have
+        changed. Same waste per save in watch mode.
+
+        Embeddings still refresh when they should: an entity whose source or
+        summary actually changed gets a different `embed_input_hash`, and the
+        indexer re-embeds it on that mismatch.
+        """
+        self.upsert_entities(entities)
+        # No stale paths means nothing to prune -- a first index, or a batch of
+        # brand-new files. Entities are still written above.
+        if not paths:
+            return
+        keep_ids = [e.entity_id for e in entities]
+        df = pd.DataFrame({"path": paths})  # noqa: F841 — referenced by name in SQL
+        staging = f"_staging_keep_{next(_stage_counter)}"
+        self.conn.register(staging, df)
+        try:
+            if keep_ids:
+                keep_df = pd.DataFrame({"entity_id": keep_ids})  # noqa: F841 — used in SQL
+                keep_staging = f"_staging_keepids_{next(_stage_counter)}"
+                self.conn.register(keep_staging, keep_df)
+                try:
+                    self.conn.execute(
+                        f"DELETE FROM entities WHERE file IN (SELECT path FROM {staging}) "
+                        f"AND entity_id NOT IN (SELECT entity_id FROM {keep_staging})"
+                    )
+                finally:
+                    self.conn.unregister(keep_staging)
+            else:
+                # A file that now parses to nothing: drop everything it had.
+                self.conn.execute(
+                    f"DELETE FROM entities WHERE file IN (SELECT path FROM {staging})"
+                )
+        finally:
+            self.conn.unregister(staging)
+
     def upsert_edges(self, edges: list[Edge]) -> None:
         """Bulk insert edges. Duplicates (same src+dst+type+line) are dropped."""
         if not edges:
@@ -336,6 +386,30 @@ class GraphStore:
         # Entities for this file. FK constraint cascades nothing automatically,
         # but the file row stays so the upsert can update its hash.
         self.conn.execute("DELETE FROM entities WHERE file = ?", [path])
+
+    def clear_file_edges(self, paths: list[str]) -> None:
+        """Delete only the outbound edges for `paths`, leaving entities intact.
+
+        The re-parse path for a file that still exists: its edges must be
+        rebuilt from scratch (a removed call/import has to disappear), but its
+        entity rows should survive so `replace_file_entities` can preserve
+        their embeddings. `clear_files` remains the right call for a file that
+        genuinely vanished from the repo.
+        """
+        if not paths:
+            return
+        df = pd.DataFrame(  # noqa: F841 — referenced by name in SQL
+            {"pat": [f"%:{escape_like(p)}:%" for p in paths]}
+        )
+        staging = f"_staging_clearedges_{next(_stage_counter)}"
+        self.conn.register(staging, df)
+        try:
+            self.conn.execute(
+                f"DELETE FROM edges WHERE EXISTS "
+                f"(SELECT 1 FROM {staging} s WHERE edges.src_id LIKE s.pat ESCAPE '\\')"
+            )
+        finally:
+            self.conn.unregister(staging)
 
     def clear_files(self, paths: list[str]) -> None:
         """Bulk version of `clear_file` -- two DELETEs total instead of two
