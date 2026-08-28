@@ -1197,29 +1197,46 @@ def _resolve_ruby(
     by_file_name: dict[tuple[str, str], str],
     known_files: set[str],
 ) -> tuple[str, float]:
-    """Resolve a Ruby `require` / `require_relative` path."""
+    """Resolve a Ruby `require` / `require_relative` path.
+
+    `require_relative` is unambiguous -- it's a real path joined against the
+    source file's directory, so the first candidate that exists on disk is
+    the only one that ever could. A bare `require`, by contrast, has no path
+    to go on at all; it's probed against a fixed guess-list of conventional
+    directory prefixes (`lib/`, `app/`). Found while auditing every resolver
+    for the class of bug fixed in Go: if two of those prefixes both hold a
+    real file with the same name, returning "whichever prefix came first in
+    the list" is a guess dressed up as a resolution. Only resolve when
+    exactly one prefix's candidate is real -- same don't-guess-when-ambiguous
+    policy the rest of the resolver already follows.
+    """
     src_file = src_id.split(":", 2)[1] if src_id.count(":") >= 2 else ""
     src_dir = posixpath.dirname(src_file)
-
-    candidates: list[str] = []
 
     if path.startswith("./") or path.startswith("../"):
         # require_relative-style: resolve against the source file's directory.
         joined = posixpath.normpath(posixpath.join(src_dir, path))
-        candidates += [joined, joined + ".rb"]
-    else:
-        # Bare require: probe common directory prefixes + direct file.
-        for prefix in ("", "lib/", "app/"):
-            candidates += [
-                prefix + path,
-                prefix + path + ".rb",
-            ]
+        for candidate in (joined, joined + ".rb"):
+            if candidate in known_files:
+                result = _module_entity_for_file(candidate, by_file_name)
+                if result:
+                    return result
+        return f"external:{path}", 0.5
 
-    for candidate in candidates:
-        if candidate in known_files:
-            result = _module_entity_for_file(candidate, by_file_name)
-            if result:
-                return result
+    # Bare require: each directory prefix is one guess. A prefix "matches" if
+    # either its bare or .rb-suffixed form is a real file -- both name the
+    # same file, so that pair doesn't itself count as an ambiguity.
+    matched_files: set[str] = set()
+    for prefix in ("", "lib/", "app/"):
+        for candidate in (prefix + path, prefix + path + ".rb"):
+            if candidate in known_files:
+                matched_files.add(candidate)
+                break
+
+    if len(matched_files) == 1:
+        result = _module_entity_for_file(matched_files.pop(), by_file_name)
+        if result:
+            return result
 
     return f"external:{path}", 0.5
 

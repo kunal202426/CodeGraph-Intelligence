@@ -403,6 +403,38 @@ def test_ruby_stdlib_require_external(tmp_path: Path) -> None:
     assert any(d.startswith("external:json") for d in dsts)
 
 
+def test_ruby_bare_require_ambiguous_across_prefixes_stays_external(
+    tmp_path: Path,
+) -> None:
+    """A bare `require "helper"` is probed against a fixed prefix list
+    (`lib/`, `app/`, ...) since there's no explicit path to go on. Found while
+    auditing every resolver for the class of bug fixed in Go (matching by a
+    partial path with no way to tell which of several real candidates was
+    meant): when TWO of those prefixes both hold a real `helper.rb`, the old
+    code silently returned whichever prefix happened to come first in the
+    list -- a guess dressed up as a resolution, not a resolution. Must stay
+    external instead, same don't-guess-when-ambiguous policy the rest of the
+    resolver already follows (e.g. two files sharing a module-qname suffix)."""
+    db = _index(
+        tmp_path,
+        {
+            "lib/helper.rb": "def lib_version\nend\n",
+            "app/helper.rb": "def app_version\nend\n",
+            "main.rb": "require 'helper'\ndef run\n  lib_version\nend\n",
+        },
+    )
+    import duckdb
+
+    conn = duckdb.connect(str(db), read_only=True)
+    dst = conn.execute(
+        "SELECT dst_id FROM edges WHERE src_id LIKE '%main.rb%' AND type = 'imports'"
+    ).fetchone()
+    conn.close()
+    assert dst is not None and dst[0].startswith("external:"), (
+        f"ambiguous bare require should stay external, got: {dst}"
+    )
+
+
 # ---------- PHP ----------
 
 
