@@ -547,10 +547,14 @@ class ImpactTree:
     total: int = 0  # distinct entities in the blast radius (excluding root)
 
 
+DEFAULT_CALLER_NODE_CAP = 200
+
+
 def find_callers(
     conn: duckdb.DuckDBPyConnection,
     entity_id: str,
     depth: int = 3,
+    node_cap: int = DEFAULT_CALLER_NODE_CAP,
 ) -> ImpactTree:
     """Breadth-first walk over inbound `calls` edges of `entity_id`.
 
@@ -559,6 +563,18 @@ def find_callers(
     is a caller, then we recurse on those callers.
 
     - Truncates each branch at `depth` hops.
+    - Also stops once `node_cap` distinct callers have been discovered, across
+      the whole walk, not per level. A genuinely hot-path function's blast
+      radius can run into the hundreds -- measured live on a real ~97k-entity
+      repo, an 815-caller function serialized to ~32,000 tokens and cost 9.5s
+      (896 sequential queries, one per node visited), larger than many agents'
+      entire context budget for a single tool call. Same stop-and-say-so
+      policy as `graph/resolver.py`'s `_AMBIGUOUS_CANDIDATE_CEILING`: past the
+      cap, the exact count stops mattering for the decision this tool exists
+      to inform ("how carefully do I need to treat this edit") -- 200 vs. 815
+      callers both mean "treat with extreme caution", and the honest
+      `truncated` flag says so without silently guessing at the true count or
+      paying for a response nobody can use in full.
     - Cycle-safe: visits each entity at most once (recursion stops on revisit).
     - A caller that calls the parent from several lines appears once per parent.
     """
@@ -572,7 +588,12 @@ def find_callers(
 
     for level in range(depth):
         next_frontier: list[str] = []
+        cap_hit = False
         for callee in frontier:
+            remaining = node_cap - (len(visited) - 1)
+            if remaining <= 0:
+                cap_hit = True
+                break
             rows = conn.execute(
                 """
                 SELECT e.src_id, e.confidence,
@@ -591,6 +612,9 @@ def find_callers(
                 if src_id in seen_here:
                     continue
                 seen_here.add(src_id)
+                if src_id not in visited and len(visited) - 1 >= node_cap:
+                    cap_hit = True
+                    continue
                 kids.append(
                     CallerNode(
                         entity_id=src_id,
@@ -610,6 +634,10 @@ def find_callers(
 
             if kids:
                 callers[callee] = kids
+
+        if cap_hit:
+            truncated = True
+            break
 
         frontier = next_frontier
         if not frontier:

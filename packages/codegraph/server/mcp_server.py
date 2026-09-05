@@ -35,7 +35,12 @@ from mcp.server import Server
 from mcp.types import TextContent, Tool
 
 from codegraph.analysis.brief import build_project_brief
-from codegraph.graph.queries import find_callers, hybrid_search, read_baseline_tokens
+from codegraph.graph.queries import (
+    DEFAULT_CALLER_NODE_CAP,
+    find_callers,
+    hybrid_search,
+    read_baseline_tokens,
+)
 from codegraph.graph.ranking import (
     extract_search_terms,
     is_test_path,
@@ -1064,6 +1069,19 @@ def _impact_analysis(args: dict[str, Any]) -> str:
             for callee, callers in tree.callers.items()
         },
     }
+    if tree.total >= DEFAULT_CALLER_NODE_CAP:
+        # Distinguished from a plain depth cutoff (which also sets `truncated`)
+        # because "there are more than N callers" and "I only looked N hops
+        # deep" call for different next moves -- this is "this is a
+        # hot-path/widely-used symbol, treat any change here as high-risk",
+        # not "increase depth". Found live: an uncapped walk on a real
+        # 815-caller function serialized to ~32,000 tokens in one response.
+        warnings.append(
+            f"Hit the {DEFAULT_CALLER_NODE_CAP}-caller cap -- this entity has at "
+            f"least {tree.total} callers, likely more. Treat it as a widely-used, "
+            "high-risk-to-change symbol; the exact count beyond the cap isn't the "
+            "actionable part of this answer."
+        )
     if warnings:
         result["warnings"] = warnings
     return json.dumps(result)

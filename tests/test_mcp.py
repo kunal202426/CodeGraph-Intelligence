@@ -248,6 +248,37 @@ def test_impact_analysis_tool(indexed_db: Path) -> None:
     assert data["mode"] == "callers"
 
 
+def test_impact_analysis_warns_and_stays_small_on_a_capped_response(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Real, measured bug: impact_analysis on a genuinely hot-path Grafana
+    function (815 real callers) serialized to ~32,000 tokens and took 9.5s --
+    larger than many agents' entire context budget for one tool call, from the
+    exact tool whose selling point is being cheaper than reading files. Once
+    find_callers' node_cap kicks in, the response must (a) stay small and (b)
+    say clearly why the number looks incomplete, distinct from a plain depth
+    cutoff -- "there are 200+ callers" calls for different caution than
+    "I only looked 3 hops deep"."""
+    from codegraph.server.mcp_server import DEFAULT_CALLER_NODE_CAP
+
+    repo = tmp_path / "proj"
+    callers_src = "\n".join(
+        f"def caller_{i}():\n    return target()" for i in range(DEFAULT_CALLER_NODE_CAP + 20)
+    )
+    db = _index_temp_repo_multi(
+        repo, {"hub.py": f"def target():\n    return 1\n\n\n{callers_src}\n"}
+    )
+    monkeypatch.setattr(mcp_server, "_db_path", db)
+
+    data = _call("impact_analysis", {"query": "target"})
+
+    assert data["truncated"] is True
+    assert data["total"] >= DEFAULT_CALLER_NODE_CAP
+    assert any("cap" in w.lower() for w in data.get("warnings", []))
+    # The actual point: bounded response size, not "however big the graph is".
+    assert len(json.dumps(data)) < 20_000
+
+
 def test_impact_analysis_tool_definition_has_query_property() -> None:
     tool = {t.name: t for t in tool_definitions()}["impact_analysis"]
     assert "query" in tool.inputSchema["properties"]

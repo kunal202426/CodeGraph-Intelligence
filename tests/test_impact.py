@@ -123,6 +123,56 @@ def test_caller_counted_once_despite_multiple_call_sites(runner: CliRunner, tmp_
     assert tree.total == 1
 
 
+def test_find_callers_caps_total_nodes_on_a_genuinely_hot_function(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """Real, measured bug: a genuinely hot-path function's blast radius can run
+    into the hundreds -- on a live Grafana index, impact_analysis on an
+    815-caller function serialized to ~32,000 tokens and took 9.5s (896
+    sequential DB queries, one per BFS-visited node). That's larger than many
+    agents' whole context budget for one tool call, and directly contradicts
+    the tool's own cost-efficiency premise. `node_cap` bounds both: once the
+    walk has discovered `node_cap` distinct callers, it stops and reports
+    `truncated=True` -- the same stop-and-say-so policy resolver.py already
+    applies via `_AMBIGUOUS_CANDIDATE_CEILING` to prevent the identical class
+    of blowup on a hot symbol name."""
+    repo = tmp_path / "repo"
+    callers_src = "\n".join(f"def caller_{i}():\n    return target()" for i in range(50))
+    _make_repo(repo, {"a.py": f"def target():\n    return 1\n\n\n{callers_src}\n"})
+    db = tmp_path / "g.duckdb"
+    _index(runner, repo, db)
+    store = GraphStore(db)
+    try:
+        target = find_entity_by_name_or_id(store.conn, "target")[0]
+        tree = find_callers(store.conn, target.entity_id, depth=3, node_cap=10)
+    finally:
+        store.close()
+    assert tree.total <= 10
+    assert tree.truncated is True
+    shown = sum(len(kids) for kids in tree.callers.values())
+    assert shown <= 10
+
+
+def test_find_callers_node_cap_does_not_affect_a_small_tree(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """Regression guard: a tree well under the cap must still report an exact,
+    untruncated total -- the cap is a ceiling for pathological cases, not a
+    default limit on ordinary results."""
+    repo = tmp_path / "repo"
+    _make_repo(repo, _CHAIN)
+    db = tmp_path / "g.duckdb"
+    _index(runner, repo, db)
+    store = GraphStore(db)
+    try:
+        helper = find_entity_by_name_or_id(store.conn, "helper")[0]
+        tree = find_callers(store.conn, helper.entity_id, depth=5, node_cap=300)
+    finally:
+        store.close()
+    assert tree.total == 3
+    assert tree.truncated is False
+
+
 def test_recursion_is_cycle_safe(runner: CliRunner, tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     # Mutual recursion: ping() calls pong(), pong() calls ping().
