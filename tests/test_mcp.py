@@ -715,6 +715,60 @@ def test_list_files_unknown_language_returns_empty(indexed_db: Path) -> None:
     assert data["files"] == []
 
 
+def test_list_files_caps_response_on_a_large_repo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Real, measured bug: an unfiltered list_files on a real 16,055-file repo
+    (Grafana) serialized to 2MB (~512,000 tokens) -- bigger than most models'
+    entire context window, from a tool whose own description is "understand
+    project layout", not "read every path in the repo". The files list must
+    stay bounded at _FILE_LIST_CAP; `total` stays the true count so the agent
+    knows how much was cut, and a warning points at `language`/`path_prefix`
+    as the way to actually narrow down instead of paying for the full list."""
+    from codegraph.server.mcp_server import _FILE_LIST_CAP
+
+    repo = tmp_path / "proj"
+    files = {f"pkg/mod_{i}.py": "def f():\n    return 1\n" for i in range(_FILE_LIST_CAP + 30)}
+    db = _index_temp_repo_multi(repo, files)
+    monkeypatch.setattr(mcp_server, "_db_path", db)
+
+    data = _call("list_files", {})
+
+    assert data["total"] == _FILE_LIST_CAP + 30
+    assert len(data["files"]) <= _FILE_LIST_CAP
+    assert any("path_prefix" in w or "language" in w for w in data.get("warnings", []))
+    assert len(json.dumps(data)) < 200_000
+
+
+def test_list_files_path_prefix_filters(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """path_prefix is the drill-down after a capped listing -- e.g. once an
+    agent knows a repo has thousands of files, it can page through one
+    directory at a time instead of the whole tree in one call."""
+    repo = tmp_path / "proj"
+    db = _index_temp_repo_multi(
+        repo,
+        {
+            "pkg/a.py": "def a():\n    return 1\n",
+            "pkg/b.py": "def b():\n    return 1\n",
+            "other/c.py": "def c():\n    return 1\n",
+        },
+    )
+    monkeypatch.setattr(mcp_server, "_db_path", db)
+
+    data = _call("list_files", {"path_prefix": "pkg/"})
+
+    assert data["total"] == 2
+    assert {f["path"] for f in data["files"]} == {"pkg/a.py", "pkg/b.py"}
+
+
+def test_list_files_no_warning_for_a_small_repo(indexed_db: Path) -> None:
+    """Regression guard: a normal-sized repo's listing must not be truncated
+    or carry a cap warning."""
+    data = _call("list_files", {})
+    assert data["total"] == len(data["files"])
+    assert "warnings" not in data
+
+
 # ---------- T12.3: index_status ----------
 
 

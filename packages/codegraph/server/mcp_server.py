@@ -47,7 +47,7 @@ from codegraph.graph.ranking import (
     significant_terms,
     split_identifier_segments,
 )
-from codegraph.graph.store import GraphStore
+from codegraph.graph.store import GraphStore, escape_like
 
 DEFAULT_DB = Path(".codegraph/graph.duckdb")
 
@@ -503,7 +503,9 @@ def tool_definitions() -> list[Tool]:
                 "Use this instead of listing the directory tree to understand project "
                 "layout from the index: every source file with its language, line count, "
                 "and entity count. Optionally filter by language name (e.g. 'python', "
-                "'typescript', 'go')."
+                "'typescript', 'go') or by a path prefix (e.g. 'src/api/') to drill into "
+                "one directory. A large repo's listing is capped -- `total` still reports "
+                "the true file count, narrow with `language`/`path_prefix` to see the rest."
             ),
             inputSchema={
                 "type": "object",
@@ -511,6 +513,11 @@ def tool_definitions() -> list[Tool]:
                     "language": {
                         "type": "string",
                         "description": "Filter to one language. Omit for all languages.",
+                    },
+                    "path_prefix": {
+                        "type": "string",
+                        "description": "Filter to files whose path starts with this prefix, "
+                        "e.g. 'src/api/'.",
                     },
                 },
                 "required": [],
@@ -645,6 +652,14 @@ _NEIGHBOR_CAP = 8
 # (meant to collapse "look up these N known names in one round-trip" into one
 # call) can't itself become an unbounded-cost round-trip.
 _MAX_BATCH_QUERIES = 5
+
+# Max per-file rows list_files returns. Measured on a real 16,055-file repo
+# (Grafana) with no filter: an unbounded flat listing serialized to 2MB
+# (~512,000 tokens) -- bigger than most models' entire context window, from a
+# tool whose own description is "understand project layout", not "read every
+# path". `total` always reports the true count; `language`/`path_prefix` are
+# the drill-down once a listing is capped.
+_FILE_LIST_CAP = 500
 
 
 def _source_preview(raw_source: str | None, max_lines: int = _SOURCE_PREVIEW_LINES) -> str:
@@ -1472,28 +1487,38 @@ def _project_brief(_args: dict[str, Any]) -> str:
 def _list_files(args: dict[str, Any]) -> str:
     """Return indexed files with language, LOC, and entity count."""
     language_filter = args.get("language")
+    path_prefix = args.get("path_prefix")
+
+    conditions: list[str] = []
+    params: list[str] = []
+    if language_filter:
+        conditions.append("f.language = ?")
+        params.append(language_filter)
+    if path_prefix:
+        conditions.append("f.path LIKE ? ESCAPE '\\'")
+        params.append(f"{escape_like(path_prefix)}%")
+    where = f"WHERE {' AND '.join(conditions)} " if conditions else ""
 
     store = _open_store()
     try:
-        if language_filter:
-            rows = store.conn.execute(
-                "SELECT f.path, f.language, f.loc, COUNT(e.entity_id) "
-                "FROM files f LEFT JOIN entities e ON e.file = f.path "
-                "WHERE f.language = ? "
-                "GROUP BY f.path, f.language, f.loc ORDER BY f.path",
-                [language_filter],
-            ).fetchall()
-        else:
-            rows = store.conn.execute(
-                "SELECT f.path, f.language, f.loc, COUNT(e.entity_id) "
-                "FROM files f LEFT JOIN entities e ON e.file = f.path "
-                "GROUP BY f.path, f.language, f.loc ORDER BY f.path"
-            ).fetchall()
+        rows = store.conn.execute(
+            "SELECT f.path, f.language, f.loc, COUNT(e.entity_id) "
+            "FROM files f LEFT JOIN entities e ON e.file = f.path "
+            f"{where}"
+            "GROUP BY f.path, f.language, f.loc ORDER BY f.path",
+            params,
+        ).fetchall()
     finally:
         store.close()
 
     files = [{"path": r[0], "language": r[1], "loc": r[2] or 0, "entity_count": r[3]} for r in rows]
-    return json.dumps({"total": len(files), "files": files})
+    result: dict[str, Any] = {"total": len(files), "files": files[:_FILE_LIST_CAP]}
+    if len(files) > _FILE_LIST_CAP:
+        result["warnings"] = [
+            f"Showing the first {_FILE_LIST_CAP} of {len(files)} files. Narrow down with "
+            "`language` or `path_prefix` instead of reading the full listing."
+        ]
+    return json.dumps(result)
 
 
 def _repo_root_for_db() -> Path:
