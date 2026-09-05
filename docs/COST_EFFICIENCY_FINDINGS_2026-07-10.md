@@ -4,6 +4,46 @@
 vs. off, across multiple codebases and dates — **newest first.** Every round reports real
 `/usage` cost, not estimated tokens, including the rounds where it came out worse.
 
+## Response-size audit (2026-09-06): six unbounded MCP responses, one measured at 512,000 tokens
+
+Different failure mode than every round above: not "does the agent call the right tool",
+but "does the tool's own response stay small on a real repo." Grafana (~97k indexed entities,
+16,055 files) makes the answer no on six separate call paths — none synthetic, all measured
+directly against the live index, no agent session needed to surface them.
+
+| Tool / path | Case | Before | After |
+|---|---|---|---|
+| `impact_analysis` / `find_callers` | 815-caller Go function | 127,569 bytes (~31,892 tok), 9.55s, 896 sequential queries | capped, bounded query count |
+| `get_entity_context` | same function | 80,840 bytes (~20,210 tok) | 20,993 bytes |
+| `get_context` (`detail="full"`) | same function | 81,010 bytes (~20,252 tok) | 20,761 bytes |
+| `list_files` (no filter) | whole repo, 16,055 files | **2,048,321 bytes (~512,080 tok)** | 64,206 bytes (~16,051 tok) |
+| `find_dependencies` (CLI `deps`) | test function, depth 3 | 2,066 nodes, 1,674 off the root alone | 200 nodes, 0.8s → 0.1s |
+| `ask_codebase`'s prompt assembly | hub entity's `Calls:` line | unbounded (105+ ids in one case) | capped at 12 + overflow count |
+
+**`list_files` is the standout finding of this pass.** A single unfiltered call — the tool's
+own description is "understand project layout", not "read every path" — cost more tokens than
+most models' entire context window, from a tool with no cap and no pagination at all. Every
+other MCP tool already had *some* size discipline (a `limit` param, a `_NEIGHBOR_CAP` sample);
+this one had none, and nobody had measured it against a repo bigger than the low-thousands.
+
+**Root cause was the same shape five times over: a response field sized by the graph's shape
+(caller count, outbound edges, file count), not by the caller's budget.** `impact_analysis`
+and `find_callers` got a real fix earlier (round 9's cap, see below) that only ever applied to
+the *inbound*-BFS half of the graph — the outbound half (`find_dependencies`), the two other
+tools reading the same uncapped lists (`get_entity_context`, `get_context` full mode), the
+repo-wide file listing, and the LLM-prompt assembly path were never audited the same way. Each
+got the same treatment: a hard cap sized to stay well inside a typical context budget, the
+*true* count still reported so nothing is silently hidden, and — where the underlying data
+structure already distinguished a depth cutoff from a size cutoff — a warning naming which one
+fired, since "go deeper" and "this is a widely-used hub, treat with care" call for different
+next actions.
+
+**Method note, consistent with every round above:** every number in the table was measured by
+calling the real function/tool against the live Grafana index, not estimated or reasoned about
+in the abstract. The `list_files` figure in particular would have been easy to miss by
+inspection alone — the code reads as a small, ordinary SQL-then-json handler; the blowup only
+shows up when you actually run it against a large repo.
+
 ## Post-round-11 (2026-08-25): the nudges were never the problem — `impact_analysis` was returning the wrong number
 
 Rounds 9-11 spent three iterations trying to get an agent to call `impact_analysis`. While

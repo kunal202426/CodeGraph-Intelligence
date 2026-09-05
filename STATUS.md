@@ -2,6 +2,21 @@
 
 ## Current
 
+- **RESOLVED 2026-09-06 — six unbounded MCP response paths found and capped, one measured at
+  512,000 tokens.** Not an agent-behavior bug like the ones below — a straight response-size
+  audit against the live Grafana index. `find_dependencies` (outbound BFS, backing the CLI
+  `deps` command) had no cap at all: a single test function's transitive imports+calls hit
+  2,066 nodes. `get_entity_context` and `get_context`'s `detail="full"` mode both returned
+  complete, uncapped caller/dependency id lists (~20,000 tokens each on an 815-caller
+  function). `list_files` with no filter serialized Grafana's 16,055 files to 2,048,321 bytes
+  (~512,080 tokens) — bigger than most models' whole context window, from a tool whose own job
+  is "understand project layout," not "read every path." `ask_codebase`'s prompt-assembly code
+  had the same unbounded neighbor-list issue in the text actually sent to the LLM. All six now
+  cap at the same `DEFAULT_CALLER_NODE_CAP`-style ceiling `find_callers` already used, report
+  the true count alongside the capped list, and (where the traversal can tell) distinguish a
+  depth cutoff from a size cutoff in the warning, since they call for different next actions.
+  Full data: [docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md](docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md)
+  (Response-size audit).
 - **Status:** ACTIVE — roadmap complete; competitive hardening (Phases 19-22, 24, 26-28) plus
   a real-world stress test (Phase 29) done; CI green, `main` fully pushed, working tree clean.
   README polished and internal build-planning docs (`AGENTS.md`, `BUILD_PLAN.md`, the source
