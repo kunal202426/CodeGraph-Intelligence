@@ -89,6 +89,24 @@ def test_block_omits_calls_line_when_no_neighbors() -> None:
     assert "Calls:" not in format_entity_block(_entity(neighbors=()))
 
 
+def test_block_caps_calls_line_for_a_hub_entity() -> None:
+    """Real bug, same class as the MCP-side ones: neighbors was assigned
+    straight from _outbound_neighbors with no cap at all. On a real Grafana
+    hub entity that list runs into the thousands -- and unlike
+    build_user_message's per-entity token budget, this single line is
+    unconditionally included for the *first* retrieved entity (the "always
+    include the first block" rule), so a hub landing at rank 0 could blow the
+    entire context budget on its Calls: line alone before any other entity is
+    even considered."""
+    from codegraph.ai.graphrag import _MAX_NEIGHBORS_IN_BLOCK
+
+    many = tuple(f"py:m.py:fn_{i}" for i in range(_MAX_NEIGHBORS_IN_BLOCK + 50))
+    block = format_entity_block(_entity(neighbors=many))
+    calls_line = next(line for line in block.splitlines() if line.startswith("Calls:"))
+    assert calls_line.count(",") <= _MAX_NEIGHBORS_IN_BLOCK
+    assert "+50 more" in calls_line
+
+
 # ---------- user message ----------
 
 

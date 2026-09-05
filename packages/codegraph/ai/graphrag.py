@@ -47,6 +47,15 @@ _SUMMARIZE_SYSTEM_PATH = _PROMPTS_DIR / "summarize_system.md"
 _BODY_PREVIEW_LINES = 20  # show signature, else first N lines of raw_source
 _CONTEXT_TOKEN_BUDGET = 3000  # repository context budget, token-based
 _CONTEXT_CHAR_BUDGET = 12000  # deprecated ~char alias (~3000 tokens); back-compat only
+
+# Cap on a single entity's "Calls: ..." line in format_entity_block. Neighbors
+# comes straight from _outbound_neighbors with no cap of its own -- on a real
+# hub entity that list runs into the thousands (measured live on Grafana).
+# build_user_message's token budget doesn't protect against this: the first
+# retrieved entity is always included unconditionally, so a hub landing at
+# rank 0 could blow the whole context budget on this one line before any
+# other entity is even considered.
+_MAX_NEIGHBORS_IN_BLOCK = 12
 _DEFAULT_PER_DIR = 10  # representative entities sampled per top-level directory
 
 
@@ -333,7 +342,12 @@ def format_entity_block(entity: RetrievedEntity) -> str:
     if entity.docstring:
         parts.append(entity.docstring.strip())
     if entity.neighbors:
-        parts.append("Calls: " + ", ".join(entity.neighbors))
+        shown = entity.neighbors[:_MAX_NEIGHBORS_IN_BLOCK]
+        calls_line = "Calls: " + ", ".join(shown)
+        extra = len(entity.neighbors) - len(shown)
+        if extra > 0:
+            calls_line += f" (+{extra} more)"
+        parts.append(calls_line)
     return "\n".join(parts)
 
 
