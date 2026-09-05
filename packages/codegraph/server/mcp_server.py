@@ -307,7 +307,11 @@ def tool_definitions() -> list[Tool]:
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "Search text or natural language."},
-                    "limit": {"type": "integer", "default": 10},
+                    "limit": {
+                        "type": "integer",
+                        "default": 10,
+                        "description": "Max results, capped at 50.",
+                    },
                 },
                 "required": ["query"],
             },
@@ -833,12 +837,21 @@ def _caller_counts(conn, entity_ids: list[str]) -> dict[str, int]:
 
 def _search_code(args: dict[str, Any]) -> str:
     query = str(args["query"])
-    limit = int(args.get("limit", 10))
+    # Real, measured bug: `limit` used to pass straight through to hybrid_search
+    # without ever scaling its internal `pool` (fixed at hybrid_search's own
+    # default of 20 regardless of `limit`) -- so limit=50 or limit=100 silently
+    # returned at most 40 real matches (two pools of 20, literal + semantic,
+    # deduped) on a repo with far more than 40 actual hits, with nothing in the
+    # response signalling the request wasn't honored. Clamp limit to a sane
+    # ceiling (so an absurd request can't force an equally absurd pool query),
+    # then scale pool to match so a legitimate request for more results
+    # actually gets more, up to however many real matches exist.
+    limit = max(1, min(int(args.get("limit", 10)), 50))
     store = _open_store()
     try:
         # Only pay the embedding cost when the index actually has vectors.
         vector = _maybe_embed(query) if store.count_embedded() > 0 else None
-        hits = hybrid_search(store.conn, query, vector, limit=limit)
+        hits = hybrid_search(store.conn, query, vector, limit=limit, pool=max(20, limit))
         # search_code shows no caller info at all (unlike get_context, which at
         # least shows a capped sample) -- so unlike get_context's "more than
         # shown" warning, this has nothing to compare against. Only worth a

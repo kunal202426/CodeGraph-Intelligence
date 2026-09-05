@@ -638,9 +638,14 @@ def search(
 
     # All three modes route through hybrid_search; the args decide which
     # retrievers actually run (empty text skips literal, None vector skips vector).
+    # hybrid_search's own `pool` defaults to 20 regardless of `limit` -- a real,
+    # measured bug: `--limit 50`/`--limit 100` silently returned at most 40
+    # results (two pools of 20, literal + semantic, deduped) on a repo with far
+    # more real matches, with nothing telling the user their limit wasn't
+    # honored. Scale pool with limit so a larger --limit actually returns more.
     text_arg = "" if mode == "semantic" else query
     with GraphStore(db) as store:
-        hits = hybrid_search(store.conn, text_arg, query_vector, limit=limit)
+        hits = hybrid_search(store.conn, text_arg, query_vector, limit=limit, pool=max(20, limit))
         # Likely indexed with --no-embed: no vectors to search semantically.
         if (
             mode == "semantic"

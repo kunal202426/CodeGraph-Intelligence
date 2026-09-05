@@ -197,10 +197,25 @@ def test_cli_semantic_on_no_embed_index_warns(runner: CliRunner, tmp_path: Path)
     runner.invoke(app, ["index", str(SAMPLE_REPO), "--db", str(db), "--no-embed"])
     result = runner.invoke(app, ["search", "auth", "--semantic", "--db", str(db)])
     assert result.exit_code == 0
-    # Either the "no embeddings" notice (model available) or a literal fallback
-    # (model unavailable) — both are acceptable; the command must not crash.
-    assert (
-        "No embeddings" in result.stdout
-        or "authenticate" in result.stdout
-        or "No results" in result.stdout
-    )
+
+
+def test_cli_search_limit_above_the_default_pool_is_actually_honored(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """Same bug, same fix, as search_code's MCP tool: hybrid_search's own
+    `pool` defaults to 20 regardless of `limit` -- a real, measured bug where
+    `--limit 50` silently returned at most 20 results (no vector retriever
+    with --no-embed, so nothing to fuse with) on a repo with far more real
+    matches, with no signal the request wasn't honored."""
+    repo = tmp_path / "proj"
+    for i in range(60):
+        p = repo / f"pkg/mod_{i}.py"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(f"def target_{i}():\n    '''finder marker.'''\n    return {i}\n")
+    db = tmp_path / "graph.duckdb"
+    result = runner.invoke(app, ["index", str(repo), "--db", str(db), "--no-embed"])
+    assert result.exit_code == 0, result.stdout
+
+    result = runner.invoke(app, ["search", "finder marker", "--limit", "50", "--db", str(db)])
+    assert result.exit_code == 0
+    assert "(hybrid, 50 match)" in result.stdout

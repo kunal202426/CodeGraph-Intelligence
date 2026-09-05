@@ -219,6 +219,31 @@ def test_search_code_hints_at_impact_analysis_for_a_high_fanout_hit(
     assert target["entity_id"] in target["hint"]
 
 
+def test_search_code_limit_above_the_default_pool_is_actually_honored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Real, measured bug: search_code's `limit` was passed straight to
+    hybrid_search without ever scaling `pool` (hybrid_search's own internal
+    candidate-pool size, fixed at its default of 20 regardless of `limit`).
+    On a real Grafana query with plenty of real matches, limit=50 and
+    limit=100 silently returned only 40 results (two pools of 20, literal +
+    semantic, deduped) -- with no error, no warning, and no field saying the
+    request wasn't honored. A caller asking for more results has no way to
+    tell "there are only 40 matches" from "you silently got fewer than you
+    asked for." Pool must scale with limit so a real request for more
+    results actually returns more, up to how many real matches exist."""
+    repo = tmp_path / "proj"
+    files = {
+        f"pkg/mod_{i}.py": f"def target_{i}():\n    '''finder marker.'''\n    return {i}\n"
+        for i in range(60)
+    }
+    db = _index_temp_repo_multi(repo, files)
+    monkeypatch.setattr(mcp_server, "_db_path", db)
+
+    results = _call("search_code", {"query": "finder marker", "limit": 50})
+    assert len(results) > 40
+
+
 def test_search_code_no_hint_for_a_normal_hit(indexed_db: Path) -> None:
     """Regression guard: the hint must not fire on ordinary, low-fanout hits --
     it would just be repeated noise on every call otherwise."""
