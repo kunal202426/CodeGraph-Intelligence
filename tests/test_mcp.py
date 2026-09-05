@@ -1245,6 +1245,48 @@ def test_get_context_full_neighbors_are_full_ids(indexed_db: Path) -> None:
     assert all(c.split(":", 1)[0] == "py" for c in auth["called_by"])
 
 
+def test_get_context_full_caps_called_by_on_a_hot_function(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same bug class as get_entity_context's and impact_analysis's, in the
+    highest-traffic tool of the three: detail='full' assigned the complete,
+    uncapped called_by/depends_on id lists with no limit at all (unlike
+    summary mode, which already caps at _NEIGHBOR_CAP a few lines above).
+    Measured 81,010 bytes (~20,252 tokens) on a real 815-caller Grafana
+    function -- and this is the tool the guide tells agents to call before
+    reading any file, so it's the mode most likely to actually hit one.
+    Full mode must still cap (at the larger DEFAULT_CALLER_NODE_CAP, since
+    full mode's whole point is being usable for acting on the graph) and
+    reuse the same truncated-callers warning summary mode already has."""
+    from codegraph.server.mcp_server import DEFAULT_CALLER_NODE_CAP
+
+    repo = tmp_path / "proj"
+    callers_src = "\n".join(
+        f"def caller_{i}():\n    return target()" for i in range(DEFAULT_CALLER_NODE_CAP + 20)
+    )
+    db = _index_temp_repo_multi(
+        repo, {"hub.py": f"def target():\n    return 1\n\n\n{callers_src}\n"}
+    )
+    monkeypatch.setattr(mcp_server, "_db_path", db)
+
+    data = _call("get_context", {"query": "target", "detail": "full"})
+    target = next(e for e in data["entities"] if e["entity_id"].endswith(":target"))
+
+    assert len(target["called_by"]) <= DEFAULT_CALLER_NODE_CAP
+    assert target["called_by_count"] == DEFAULT_CALLER_NODE_CAP + 20
+    assert any("impact_analysis" in w for w in data["warnings"])
+    assert len(json.dumps(data)) < 15_000
+
+
+def test_get_context_full_no_cap_warning_for_a_normal_entity(indexed_db: Path) -> None:
+    """Regression guard: an ordinary entity in full mode must not be truncated
+    or carry a cap warning -- the count/list should agree exactly."""
+    data = _call("get_context", {"query": "authenticate", "detail": "full"})
+    auth = next(e for e in data["entities"] if e["entity_id"].endswith(":authenticate"))
+    assert len(auth["called_by"]) == auth["called_by_count"]
+    assert not any("impact_analysis" in w for w in data["warnings"])
+
+
 def test_neighbor_label_compacts_real_ids_and_passes_pseudo_ids() -> None:
     from codegraph.server.mcp_server import _neighbor_label
 

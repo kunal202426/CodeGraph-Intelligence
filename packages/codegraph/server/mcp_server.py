@@ -1348,8 +1348,16 @@ def _get_context(args: dict[str, Any]) -> str:
             entity["depends_on_count"] = len(deps)
             entity["called_by_count"] = len(callers)
             if full:
-                entity["depends_on"] = deps
-                entity["called_by"] = callers
+                # Full mode's ids are meant to be acted on directly (fed straight
+                # into impact_analysis/get_entity_context), so it gets the larger
+                # DEFAULT_CALLER_NODE_CAP rather than summary's tighter sample
+                # cap -- but a genuinely hot function (hundreds of callers) must
+                # still be bounded here too. Same bug, same fix, as summary mode
+                # a few lines below and as get_entity_context/impact_analysis.
+                entity["depends_on"] = deps[:DEFAULT_CALLER_NODE_CAP]
+                entity["called_by"] = callers[:DEFAULT_CALLER_NODE_CAP]
+                if len(deps) > DEFAULT_CALLER_NODE_CAP or len(callers) > DEFAULT_CALLER_NODE_CAP:
+                    truncated_callers.append(eid)
             else:
                 # Qualified names, not full ids -- see _neighbor_label.
                 entity["depends_on"] = [_neighbor_label(d) for d in deps[:_NEIGHBOR_CAP]]
