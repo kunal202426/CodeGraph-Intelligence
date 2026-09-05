@@ -236,3 +236,27 @@ def test_cli_impact_missing_db_exits_nonzero(runner: CliRunner, tmp_path: Path) 
     result = runner.invoke(app, ["impact", "helper", "--db", str(db)])
     assert result.exit_code == 1
     assert "No graph database" in result.stdout
+
+
+def test_cli_impact_names_the_node_cap_distinctly_from_depth_truncation(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """A cap-hit ('at least N callers, --depth won't help') must read
+    differently from a depth-hit ('go deeper with --depth') -- they call for
+    different next actions. The CLI had the same gap the MCP server's
+    impact_analysis already fixed: both cases printed the identical 'Tree
+    truncated at depth' message."""
+    from codegraph.graph.queries import DEFAULT_CALLER_NODE_CAP
+
+    repo = tmp_path / "repo"
+    callers_src = "\n".join(
+        f"def caller_{i}():\n    return target()" for i in range(DEFAULT_CALLER_NODE_CAP + 30)
+    )
+    _make_repo(repo, {"a.py": f"def target():\n    return 1\n\n\n{callers_src}\n"})
+    db = tmp_path / "g.duckdb"
+    _index(runner, repo, db)
+
+    result = runner.invoke(app, ["impact", "target", "--db", str(db)])
+    assert result.exit_code == 0
+    assert "caller cap" in result.stdout.lower()
+    assert "go deeper" not in result.stdout.lower()

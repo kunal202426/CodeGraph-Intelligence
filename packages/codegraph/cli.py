@@ -27,6 +27,7 @@ from rich.tree import Tree
 
 from codegraph import __version__
 from codegraph.graph.queries import (
+    DEFAULT_CALLER_NODE_CAP,
     CallerNode,
     DepNode,
     DepTree,
@@ -786,7 +787,14 @@ def deps(
         tree.add("[dim](no outbound imports or calls)[/dim]")
 
     console.print(tree)
-    if tree_data.truncated:
+    total_returned = sum(len(kids) for kids in tree_data.children.values())
+    if total_returned >= DEFAULT_CALLER_NODE_CAP:
+        console.print(
+            f"[dim]Hit the {DEFAULT_CALLER_NODE_CAP}-node cap -- this entity has at "
+            "least that many outbound dependencies. Treat it as a hub/barrel file; "
+            "--depth won't reveal the rest.[/dim]"
+        )
+    elif tree_data.truncated:
         console.print(f"[dim]Tree truncated at depth {depth}. Use --depth to go deeper.[/dim]")
 
 
@@ -846,7 +854,13 @@ def impact(
     console.print(tree)
     summary = f"[bold]{impact_data.total}[/bold] entit{'y' if impact_data.total == 1 else 'ies'}"
     console.print(f"[dim]Blast radius: {summary} across {depth} hop(s).[/dim]")
-    if impact_data.truncated:
+    if impact_data.total >= DEFAULT_CALLER_NODE_CAP:
+        console.print(
+            f"[dim]Hit the {DEFAULT_CALLER_NODE_CAP}-caller cap -- there are at least "
+            f"{impact_data.total} callers, likely more. Treat this as a widely-used, "
+            "high-risk-to-change symbol; --depth won't reveal the rest.[/dim]"
+        )
+    elif impact_data.truncated:
         console.print(f"[dim]Tree truncated at depth {depth}. Use --depth to go deeper.[/dim]")
 
 

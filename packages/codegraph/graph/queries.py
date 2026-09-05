@@ -437,7 +437,15 @@ class DepTree:
 
     root: str
     children: dict[str, list[DepNode]] = field(default_factory=dict)
-    truncated: bool = False  # True when at least one branch hit the depth limit
+    truncated: bool = False  # True when at least one branch hit the depth or node limit
+    total: int = 0  # distinct real entities discovered (excluding root)
+
+
+# Shared by find_dependencies and find_callers: past this many distinct nodes
+# in one BFS, the exact count stops being the actionable part of the answer --
+# see find_callers' docstring for the full rationale and the measured case
+# that motivated it (an 815-caller function costing ~32,000 tokens).
+DEFAULT_CALLER_NODE_CAP = 200
 
 
 def find_dependencies(
@@ -445,13 +453,24 @@ def find_dependencies(
     entity_id: str,
     depth: int = 3,
     edge_types: tuple[str, ...] = ("imports", "calls"),
+    node_cap: int = DEFAULT_CALLER_NODE_CAP,
 ) -> DepTree:
     """Breadth-first walk over outbound edges of `entity_id`.
 
     - Follows only edges whose `type` is in `edge_types` (defaults to imports + calls).
     - Truncates each branch at `depth` hops.
+    - Also stops once `node_cap` DepNodes have been returned in total -- same
+      policy as find_callers' node_cap, but counting every returned node
+      (external/wildcard leaves included), not just distinct real entities.
+      Measured live on a real ~97k-entity repo: a single test function had
+      1,674 *direct* outbound edges (mostly external imports) and 2,066 nodes
+      overall at depth 3 with no cap at all -- capping only real entities
+      wouldn't have bounded this case, since most of the blowup was external
+      leaves, each cheap individually but unbounded in aggregate.
     - Cycle-safe: visits each real entity at most once.
-    - External / wildcard targets become leaves (no further traversal).
+    - External / wildcard targets become leaves (no further traversal), but
+      still count against node_cap -- they're what actually inflated the
+      measured case above.
     """
     if depth <= 0:
         return DepTree(root=entity_id, children={}, truncated=True)
@@ -459,12 +478,16 @@ def find_dependencies(
     visited: set[str] = {entity_id}
     children: dict[str, list[DepNode]] = {}
     truncated = False
+    cap_hit = False
+    returned = 0
     frontier: list[str] = [entity_id]
     type_placeholders = ",".join(["?"] * len(edge_types))
 
     for level in range(depth):
         next_frontier: list[str] = []
         for parent in frontier:
+            if cap_hit:
+                break
             rows = conn.execute(
                 f"""
                 SELECT e.dst_id, e.type, e.confidence,
@@ -479,6 +502,10 @@ def find_dependencies(
 
             kids: list[DepNode] = []
             for dst_id, etype, conf, ent_type, ent_name, ent_file, ent_line in rows:
+                if returned >= node_cap:
+                    cap_hit = True
+                    truncated = True
+                    break
                 is_external = ent_name is None
                 kids.append(
                     DepNode(
@@ -492,6 +519,7 @@ def find_dependencies(
                         is_external=is_external,
                     )
                 )
+                returned += 1
                 if not is_external and dst_id not in visited:
                     visited.add(dst_id)
                     if level < depth - 1:
@@ -502,11 +530,14 @@ def find_dependencies(
             if kids:
                 children[parent] = kids
 
+        if cap_hit:
+            break
+
         frontier = next_frontier
         if not frontier:
             break
 
-    return DepTree(root=entity_id, children=children, truncated=truncated)
+    return DepTree(root=entity_id, children=children, truncated=truncated, total=len(visited) - 1)
 
 
 def _classify_unresolved(dst_id: str) -> str:
@@ -545,9 +576,6 @@ class ImpactTree:
     callers: dict[str, list[CallerNode]] = field(default_factory=dict)
     truncated: bool = False  # True when at least one branch hit the depth limit
     total: int = 0  # distinct entities in the blast radius (excluding root)
-
-
-DEFAULT_CALLER_NODE_CAP = 200
 
 
 def find_callers(

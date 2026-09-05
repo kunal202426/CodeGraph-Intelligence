@@ -191,6 +191,48 @@ def test_find_dependencies_externals_are_leaves(indexed: Path) -> None:
                 assert kid.entity_id not in tree.children
 
 
+def test_find_dependencies_caps_total_nodes_on_a_high_fanout_entity(
+    tmp_path: Path, runner: CliRunner
+) -> None:
+    """Real, measured bug: find_dependencies had no cap at all -- on a real
+    ~97k-entity repo, a single test function's transitive imports + calls at
+    depth 3 reached 2,066 nodes, 1,674 of them direct edges off the root alone
+    (mostly external imports). Same class of blowup find_callers already had
+    on the inbound side; node_cap must bound the *total returned nodes*
+    (externals included), since a cap on distinct real entities alone
+    wouldn't have caught this case."""
+    from codegraph.graph.queries import DEFAULT_CALLER_NODE_CAP
+
+    repo = tmp_path / "repo"
+    imports = "\n".join(f"import ext_{i}" for i in range(DEFAULT_CALLER_NODE_CAP + 30))
+    _make_repo(repo, {"hub.py": f"{imports}\n\ndef hub():\n    return 1\n"})
+    db = tmp_path / "graph.duckdb"
+    runner.invoke(app, ["index", str(repo), "--db", str(db)])
+
+    store = GraphStore(db)
+    try:
+        tree = find_dependencies(store.conn, "py:hub.py:hub", depth=3)
+    finally:
+        store.close()
+
+    total_kids = sum(len(v) for v in tree.children.values())
+    assert total_kids <= DEFAULT_CALLER_NODE_CAP
+    assert tree.truncated is True
+
+
+def test_find_dependencies_node_cap_does_not_affect_a_small_tree(indexed: Path) -> None:
+    """Regression guard: an ordinary tree, well under the cap, must be
+    unaffected -- the cap is a ceiling for pathological cases."""
+    store = GraphStore(indexed)
+    try:
+        tree = find_dependencies(store.conn, "py:main.py:main", depth=3)
+    finally:
+        store.close()
+    total_kids = sum(len(v) for v in tree.children.values())
+    assert total_kids < 200
+    assert tree.truncated is False
+
+
 def test_find_dependencies_cycle_safe(tmp_path: Path, runner: CliRunner) -> None:
     """A → B → A: BFS visits each node once, doesn't infinite-loop."""
     repo = tmp_path / "repo"
@@ -285,3 +327,23 @@ def test_cli_deps_by_entity_id_works(runner: CliRunner, indexed: Path) -> None:
     result = runner.invoke(app, ["deps", "py:auth/login.py:LoginForm", "--db", str(indexed)])
     assert result.exit_code == 0
     assert "LoginForm" in result.stdout
+
+
+def test_cli_deps_names_the_node_cap_distinctly_from_depth_truncation(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """A cap-hit ('this entity is a hub, --depth won't help') must read
+    differently from a depth-hit ('go deeper with --depth') -- they call for
+    different next actions."""
+    from codegraph.graph.queries import DEFAULT_CALLER_NODE_CAP
+
+    repo = tmp_path / "repo"
+    imports = "\n".join(f"import ext_{i}" for i in range(DEFAULT_CALLER_NODE_CAP + 30))
+    _make_repo(repo, {"hub.py": f"{imports}\n\ndef hub():\n    return 1\n"})
+    db = tmp_path / "graph.duckdb"
+    runner.invoke(app, ["index", str(repo), "--db", str(db)])
+
+    result = runner.invoke(app, ["deps", "py:hub.py:hub", "--db", str(db)])
+    assert result.exit_code == 0
+    assert "node cap" in result.stdout.lower()
+    assert "go deeper" not in result.stdout.lower()
