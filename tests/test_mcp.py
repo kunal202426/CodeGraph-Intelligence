@@ -240,6 +240,46 @@ def test_get_entity_context_unknown(indexed_db: Path) -> None:
     assert "error" in ctx
 
 
+def test_get_entity_context_caps_called_by_on_a_hot_function(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same bug class as impact_analysis's, found the same way: get_entity_context's
+    depends_on/called_by lists were unbounded full-entity-id lists -- measured
+    80,840 bytes (~20,210 tokens) for one call on a real 815-caller Grafana
+    function, entirely from called_by. Must stay bounded, report the true
+    count, and point to impact_analysis (itself now safely capped) rather than
+    silently truncate with no signal."""
+    from codegraph.server.mcp_server import DEFAULT_CALLER_NODE_CAP
+
+    repo = tmp_path / "proj"
+    callers_src = "\n".join(
+        f"def caller_{i}():\n    return target()" for i in range(DEFAULT_CALLER_NODE_CAP + 20)
+    )
+    db = _index_temp_repo_multi(
+        repo, {"hub.py": f"def target():\n    return 1\n\n\n{callers_src}\n"}
+    )
+    monkeypatch.setattr(mcp_server, "_db_path", db)
+
+    target_id = next(
+        r["entity_id"] for r in _call("search_code", {"query": "target"}) if r["name"] == "target"
+    )
+    ctx = _call("get_entity_context", {"entity_id": target_id})
+
+    assert len(ctx["called_by"]) <= DEFAULT_CALLER_NODE_CAP
+    assert ctx["called_by_count"] == DEFAULT_CALLER_NODE_CAP + 20
+    assert any("impact_analysis" in w for w in ctx.get("warnings", []))
+    assert len(json.dumps(ctx)) < 15_000
+
+
+def test_get_entity_context_no_cap_warning_for_a_normal_entity(indexed_db: Path) -> None:
+    """Regression guard: an ordinary entity's called_by must not be truncated
+    or carry a cap warning -- the count/list should agree exactly."""
+    eid = next(r["entity_id"] for r in _call("search_code", {"query": "authenticate"}))
+    ctx = _call("get_entity_context", {"entity_id": eid})
+    assert len(ctx["called_by"]) == ctx["called_by_count"]
+    assert "warnings" not in ctx
+
+
 def test_impact_analysis_tool(indexed_db: Path) -> None:
     eid = next(r["entity_id"] for r in _call("search_code", {"query": "authenticate"}))
     data = _call("impact_analysis", {"entity_id": eid})

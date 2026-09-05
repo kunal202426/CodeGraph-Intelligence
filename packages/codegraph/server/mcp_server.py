@@ -317,7 +317,9 @@ def tool_definitions() -> list[Tool]:
             description="Use this instead of opening a file when you already know the "
             "entity_id and need its full source plus immediate graph neighbours "
             "(callers, callees, imports). Returns exactly one entity's body and its "
-            "links -- cheaper and more precise than reading the whole file.",
+            "links -- cheaper and more precise than reading the whole file. A "
+            "*_count field exceeding the shown list means this is a widely-used "
+            "symbol -- use impact_analysis for the full picture, not this list alone.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -878,17 +880,32 @@ def _get_entity_context(args: dict[str, Any]) -> str:
         store.close()
     # The caller passed the entity_id, which already encodes lang/file/qname --
     # echoing them back as fields is context weight re-paid every later turn.
-    # Neighbour lists stay full ids here: this is the acting-on-the-graph tool.
+    # Neighbour lists stay full ids here (not names, unlike get_context's
+    # summary mode): this is the acting-on-the-graph tool.
     for derivable in ("name", "qualified_name", "language", "file"):
         entity.pop(derivable, None)
     entity = {k: v for k, v in entity.items() if v not in (None, "")}
-    return json.dumps(
-        {
-            "entity": entity,
-            "depends_on": [r[0] for r in calls_out],
-            "called_by": [r[0] for r in called_by],
-        }
-    )
+
+    depends_on_ids = [r[0] for r in calls_out]
+    called_by_ids = [r[0] for r in called_by]
+    warnings: list[str] = []
+    for label, ids in (("depends_on", depends_on_ids), ("called_by", called_by_ids)):
+        if len(ids) > DEFAULT_CALLER_NODE_CAP:
+            warnings.append(
+                f"{label} has {len(ids)} entries, showing the first "
+                f"{DEFAULT_CALLER_NODE_CAP}. Call impact_analysis({entity_id!r}) for "
+                "the complete blast radius instead of assuming this list is exhaustive."
+            )
+    result: dict[str, Any] = {
+        "entity": entity,
+        "depends_on": depends_on_ids[:DEFAULT_CALLER_NODE_CAP],
+        "depends_on_count": len(depends_on_ids),
+        "called_by": called_by_ids[:DEFAULT_CALLER_NODE_CAP],
+        "called_by_count": len(called_by_ids),
+    }
+    if warnings:
+        result["warnings"] = warnings
+    return json.dumps(result)
 
 
 def _resolve_query_to_entity(store: GraphStore, query: str) -> tuple[str | None, str | None]:
