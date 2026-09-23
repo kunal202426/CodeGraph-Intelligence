@@ -433,6 +433,9 @@ def tool_definitions() -> list[Tool]:
                 "batch related lookups into one call instead of several round-trips "
                 "(merged, deduped). Summary mode's depends_on/called_by are qualified "
                 "NAMES not entity_ids -- get an id via impact_analysis or search_code; "
+                "each hit's file_context is a one-line summary of what its containing "
+                "file is for (agent-written if one exists, otherwise free/structural) -- "
+                "use it to judge relevance without a separate list_files/open call. "
                 "entity_id format is {lang}:{file}:{qname}. "
                 "tokens_estimated/tokens_if_read/savings_ratio measure response size vs. "
                 "a full-file-read, not $ cost (round-trip count matters too and isn't "
@@ -1268,6 +1271,23 @@ def _merge_query_hits(conn, queries: list[str], limit: int, has_vectors: bool) -
     return merged
 
 
+def _resolve_file_summary(store: GraphStore, path: str) -> str | None:
+    """NL-preferred, else free structural, one-line summary of `path` -- the
+    same "cache preferred, else derive" rule list_files/project_brief use.
+    Single-file, not batched: fine for get_context's handful of hits, but
+    list_files (up to 500 shown) does its own bulk version to avoid N+1
+    queries -- don't reuse this there."""
+    from codegraph.analysis.rollup import build_file_rollup
+
+    row = store.conn.execute("SELECT hash FROM files WHERE path = ?", [path]).fetchone()
+    current_hash = row[0] if row else None
+    cached = store.get_context_summaries("file", [path])
+    nl = cached.get(path)
+    if nl and nl[1] == current_hash:
+        return nl[0]
+    return build_file_rollup(store.conn, path) or None
+
+
 def _get_context(args: dict[str, Any]) -> str:
     """Hybrid search packed with callers/callees in one response.
 
@@ -1350,6 +1370,7 @@ def _get_context(args: dict[str, Any]) -> str:
         used_tokens = 0
         truncated = False
         col_select = ", ".join(columns)
+        file_summary_cache: dict[str, str | None] = {}
         for hit in hits:
             eid = hit.entity_id
             row = store.conn.execute(
@@ -1371,6 +1392,12 @@ def _get_context(args: dict[str, Any]) -> str:
                 ).fetchone()
                 entity["source_preview"] = _source_preview(preview_row[0] if preview_row else None)
                 entity["docstring"] = _first_line(entity.get("docstring"))
+                if entity_file:
+                    if entity_file not in file_summary_cache:
+                        file_summary_cache[entity_file] = _resolve_file_summary(store, entity_file)
+                    file_context = file_summary_cache[entity_file]
+                    if file_context:
+                        entity["file_context"] = file_context
 
             # Outbound: imports + calls (what this entity depends on)
             deps = [

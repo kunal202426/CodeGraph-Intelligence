@@ -1355,6 +1355,36 @@ def test_get_context_returns_packed_result(indexed_db: Path) -> None:
     assert auth["called_by_count"] >= len(auth["called_by"])
 
 
+def test_get_context_summary_hit_carries_a_file_context(indexed_db: Path) -> None:
+    """The other half of the "no dead-end round-trip" fix: a get_context hit
+    already tells an agent about the ENTITY, but not the FILE it lives in --
+    an agent judging relevance across several hits had to open each file or
+    call list_files separately to see what else is there. file_context
+    answers that inline, for free (structural fallback works with no
+    agent-written summary at all)."""
+    data = _call("get_context", {"query": "authenticate"})
+    auth = next(e for e in data["entities"] if e["entity_id"].endswith(":authenticate"))
+    assert auth["file_context"]
+    assert isinstance(auth["file_context"], str)
+
+
+def test_get_context_file_context_prefers_agent_written_summary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "proj"
+    db = _index_temp_repo_multi(repo, {"auth/login.py": "def authenticate():\n    return True\n"})
+    monkeypatch.setattr(mcp_server, "_db_path", db)
+
+    _call(
+        "store_summaries",
+        {"scope": "file", "items": [{"scope_id": "auth/login.py", "summary": "Login logic."}]},
+    )
+
+    data = _call("get_context", {"query": "authenticate"})
+    auth = next(e for e in data["entities"] if e["entity_id"].endswith(":authenticate"))
+    assert auth["file_context"] == "Login logic."
+
+
 def test_get_context_strips_fields_derivable_from_entity_id(indexed_db: Path) -> None:
     """entity_id is {lang}:{file}:{qname}, so name/qualified_name/language/file
     are pure duplication. Every response byte stays in the agent's context for
