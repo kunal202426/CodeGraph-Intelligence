@@ -1959,6 +1959,90 @@ def test_store_summaries_ignores_blank_items(indexed_db: Path) -> None:
     assert data["stored"] == 0
 
 
+def test_get_unsummarized_entities_scope_file_lists_files(indexed_db: Path) -> None:
+    data = _call("get_unsummarized_entities", {"scope": "file", "limit": 50})
+    assert data["scope"] == "file"
+    assert data["count"] > 0
+    item = data["entities"][0]
+    assert "scope_id" in item
+    assert "structural_summary" in item
+    assert item["scope_id"].endswith(".py")
+
+
+def test_get_unsummarized_entities_scope_dir_lists_top_level_dirs(indexed_db: Path) -> None:
+    data = _call("get_unsummarized_entities", {"scope": "dir", "limit": 50})
+    assert data["scope"] == "dir"
+    ids = {e["scope_id"] for e in data["entities"]}
+    assert "auth" in ids
+
+
+def test_store_summaries_scope_file_round_trips_through_get_context(
+    indexed_db: Path,
+) -> None:
+    """The whole point: write once, then it comes back out via
+    get_unsummarized_entities immediately (no re-embed needed -- files aren't
+    searched) and drops out of the unsummarized batch on the next call."""
+    batch = _call("get_unsummarized_entities", {"scope": "file", "limit": 1})
+    target = batch["entities"][0]
+
+    result = _call(
+        "store_summaries",
+        {"scope": "file", "items": [{"scope_id": target["scope_id"], "summary": "Handles auth."}]},
+    )
+    assert result["stored"] == 1
+
+    again = _call("get_unsummarized_entities", {"scope": "file", "limit": 50})
+    assert target["scope_id"] not in {e["scope_id"] for e in again["entities"]}
+
+
+def test_store_summaries_scope_dir_persists(indexed_db: Path) -> None:
+    result = _call(
+        "store_summaries",
+        {"scope": "dir", "items": [{"scope_id": "auth", "summary": "Login and session logic."}]},
+    )
+    assert result["stored"] == 1
+
+    again = _call("get_unsummarized_entities", {"scope": "dir", "limit": 50})
+    assert "auth" not in {e["scope_id"] for e in again["entities"]}
+
+
+def test_store_summaries_scope_file_skips_unknown_scope_id(indexed_db: Path) -> None:
+    result = _call(
+        "store_summaries",
+        {"scope": "file", "items": [{"scope_id": "does_not_exist.py", "summary": "x"}]},
+    )
+    assert result["stored"] == 0
+    assert result["skipped"] == 1
+
+
+def test_store_summaries_scope_dir_stale_hash_resurfaces_after_reparse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A directory summary written once must come back as unsummarized after
+    real content underneath it changes -- exactly the staleness discipline
+    entities.summary/embedding already follow, applied one level up."""
+    repo = tmp_path / "proj"
+    db = _index_temp_repo_multi(repo, {"pkg/a.py": "def a():\n    return 1\n"})
+    monkeypatch.setattr(mcp_server, "_db_path", db)
+
+    result = _call(
+        "store_summaries", {"scope": "dir", "items": [{"scope_id": "pkg", "summary": "desc"}]}
+    )
+    assert result["stored"] == 1
+    fresh = _call("get_unsummarized_entities", {"scope": "dir", "limit": 50})
+    assert "pkg" not in {e["scope_id"] for e in fresh["entities"]}
+
+    # Real edit underneath the summarized directory.
+    (repo / "pkg" / "a.py").write_text("def a():\n    return 2\n\ndef b():\n    return 3\n")
+    reindex_result = CliRunner().invoke(
+        cli_app, ["index", str(repo), "--db", str(db), "--no-embed"]
+    )
+    assert reindex_result.exit_code == 0, reindex_result.output
+
+    stale = _call("get_unsummarized_entities", {"scope": "dir", "limit": 50})
+    assert "pkg" in {e["scope_id"] for e in stale["entities"]}
+
+
 # ---------- stale-index warning in get_context ----------
 
 

@@ -573,7 +573,11 @@ def tool_definitions() -> list[Tool]:
                 "enough to summarize without opening files. Pair with store_summaries: "
                 "call this, write a one-line summary per entity, store them, and repeat "
                 "until 'remaining' reaches 0. This enriches the index using your own "
-                "reasoning (no API key needed) and improves later semantic search."
+                "reasoning (no API key needed) and improves later semantic search. Pass "
+                "scope='file' or scope='dir' instead to describe whole files or "
+                "top-level directories -- once written, list_files/project_brief/"
+                "get_context serve that description to every later session (even a "
+                "cheap model) instead of forcing it to open files to find out."
             ),
             inputSchema={
                 "type": "object",
@@ -581,7 +585,16 @@ def tool_definitions() -> list[Tool]:
                     "limit": {
                         "type": "integer",
                         "default": 20,
-                        "description": "Max entities to return this batch (1-200, default 20).",
+                        "description": "Max items to return this batch (1-200, default 20).",
+                    },
+                    "scope": {
+                        "type": "string",
+                        "enum": ["entity", "file", "dir"],
+                        "default": "entity",
+                        "description": (
+                            "What to summarize: individual code entities (default), whole "
+                            "files, or top-level directories."
+                        ),
                     },
                 },
                 "required": [],
@@ -591,25 +604,30 @@ def tool_definitions() -> list[Tool]:
             name="store_summaries",
             description=(
                 "Call this after get_unsummarized_entities to write the summaries you "
-                "wrote back into the index; it persists them and re-embeds just those "
-                "entities so semantic search improves immediately. Input is a list of "
-                "{entity_id, summary}. Use one short, information-dense sentence per "
-                "entity describing what it does and why."
+                "wrote back into the index. Default scope='entity': input is a list of "
+                "{entity_id, summary}; persists them and re-embeds just those entities "
+                "so semantic search improves immediately. scope='file'/'dir' (match "
+                "whichever you called get_unsummarized_entities with): input is a list "
+                "of {scope_id, summary} -- scope_id is the file path or top-level "
+                "directory name get_unsummarized_entities returned. Use one short, "
+                "information-dense sentence per item describing what it does and why."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "items": {
                         "type": "array",
-                        "description": "List of {entity_id, summary} objects to persist.",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "entity_id": {"type": "string"},
-                                "summary": {"type": "string"},
-                            },
-                            "required": ["entity_id", "summary"],
-                        },
+                        "description": (
+                            "List of {entity_id, summary} objects (scope='entity'), or "
+                            "{scope_id, summary} objects (scope='file'/'dir')."
+                        ),
+                        "items": {"type": "object"},
+                    },
+                    "scope": {
+                        "type": "string",
+                        "enum": ["entity", "file", "dir"],
+                        "default": "entity",
+                        "description": "Must match the scope used in get_unsummarized_entities.",
                     },
                 },
                 "required": ["items"],
@@ -1736,9 +1754,63 @@ def _placeholders(n: int) -> str:
     return ", ".join(["?"] * n)
 
 
+def _top_level_dirs_with_hash(conn) -> list[tuple[str, str]]:
+    """Every top-level directory (same population as project_brief's top_dirs)
+    paired with a content hash derived from its files' own hashes -- changes
+    exactly when a file is added, removed, or edited anywhere in that dir."""
+    from codegraph.uir import hash_source
+
+    rows = conn.execute(
+        "SELECT split_part(path, '/', 1) AS dir, string_agg(hash, '|' ORDER BY path) "
+        "FROM files WHERE path LIKE '%/%' GROUP BY dir ORDER BY dir"
+    ).fetchall()
+    return [(d, hash_source(h or "")) for d, h in rows]
+
+
+def _get_unsummarized_scope(scope: str, limit: int) -> str:
+    """file/dir variant of get_unsummarized_entities: candidates are files or
+    top-level directories with no cached context_summaries row yet, or whose
+    cached content_hash no longer matches the current content (a real edit
+    happened underneath a stale summary)."""
+    from codegraph.analysis.rollup import build_dir_rollup, build_file_rollup
+
+    store = _open_store()
+    try:
+        if scope == "file":
+            candidates = store.conn.execute("SELECT path, hash FROM files ORDER BY path").fetchall()
+            rollup_fn = build_file_rollup
+        else:
+            candidates = _top_level_dirs_with_hash(store.conn)
+            rollup_fn = build_dir_rollup
+
+        cached = store.get_context_summaries(scope, [c[0] for c in candidates])
+        stale_or_missing = [
+            (scope_id, content_hash)
+            for scope_id, content_hash in candidates
+            if scope_id not in cached or cached[scope_id][1] != content_hash
+        ]
+        shown = stale_or_missing[:limit]
+        items = [
+            {"scope_id": scope_id, "structural_summary": rollup}
+            for scope_id, _hash in shown
+            if (rollup := rollup_fn(store.conn, scope_id))
+        ]
+    finally:
+        store.close()
+    remaining = max(len(stale_or_missing) - len(shown), 0)
+    return json.dumps(
+        {"count": len(items), "remaining": remaining, "scope": scope, "entities": items}
+    )
+
+
 def _get_unsummarized_entities(args: dict[str, Any]) -> str:
-    """Return a batch of entities with no summary yet, for the agent to describe."""
+    """Return a batch of entities (or, with scope='file'/'dir', files/top-level
+    directories) with no summary yet, for the agent to describe."""
+    scope = str(args.get("scope", "entity")).lower()
     limit = max(1, min(int(args.get("limit", 20)), _SUMMARIZE_BATCH_CAP))
+    if scope in ("file", "dir"):
+        return _get_unsummarized_scope(scope, limit)
+
     where = (
         f"(summary IS NULL OR summary = '') AND type IN ({_placeholders(len(_SUMMARIZABLE_TYPES))})"
     )
@@ -1807,11 +1879,60 @@ def _reembed_entities(store: GraphStore, entity_ids: list[str]) -> int:
     return len(pending)
 
 
+def _store_context_summaries(scope: str, raw_items: list[Any]) -> str:
+    """file/dir variant of _store_summaries: no embeddings involved (files and
+    directories aren't searched), so this is just an upsert into
+    context_summaries. content_hash is computed here from the current index,
+    never trusted from the caller -- an agent that writes a summary against
+    stale context shouldn't get to mark it fresh."""
+    pairs: list[tuple[str, str]] = []
+    for it in raw_items:
+        if not isinstance(it, dict):
+            continue
+        scope_id = str(it.get("scope_id", "")).strip()
+        summary = str(it.get("summary", "")).strip()
+        if scope_id and summary:
+            pairs.append((scope_id, summary))
+    if not pairs:
+        return json.dumps({"stored": 0, "message": "No valid {scope_id, summary} items."})
+
+    db = get_db_path()
+    if not db.exists():
+        return json.dumps({"error": f"No graph database at {db}. Run `codegraph index <repo>`."})
+
+    store = GraphStore(db, read_only=False)
+    try:
+        current_hashes = (
+            dict(store.conn.execute("SELECT path, hash FROM files").fetchall())
+            if scope == "file"
+            else dict(_top_level_dirs_with_hash(store.conn))
+        )
+        rows = [
+            (scope, scope_id, summary, current_hashes[scope_id])
+            for scope_id, summary in pairs
+            if scope_id in current_hashes
+        ]
+        skipped = len(pairs) - len(rows)
+        store.set_context_summaries(rows)
+    finally:
+        store.close()
+    result: dict[str, Any] = {"stored": len(rows)}
+    if skipped:
+        result["skipped"] = skipped
+        result["message"] = f"{skipped} scope_id(s) not found in the current index."
+    return json.dumps(result)
+
+
 def _store_summaries(args: dict[str, Any]) -> str:
-    """Persist agent-written summaries and re-embed those entities (write tool)."""
+    """Persist agent-written summaries (write tool). Entity summaries (the
+    default scope) re-embed so semantic search picks up the new description;
+    file/dir summaries (scope='file'/'dir') don't feed embeddings -- they
+    only back the context_summaries cache list_files/project_brief/get_context
+    read from."""
+    scope = str(args.get("scope", "entity")).lower()
     raw_items = args.get("items")
     if not isinstance(raw_items, list):
-        return json.dumps({"error": "items must be a list of {entity_id, summary} objects."})
+        return json.dumps({"error": "items must be a list of objects."})
     if len(raw_items) > _SUMMARIZE_BATCH_CAP:
         return json.dumps(
             {
@@ -1821,6 +1942,9 @@ def _store_summaries(args: dict[str, Any]) -> str:
                 )
             }
         )
+
+    if scope in ("file", "dir"):
+        return _store_context_summaries(scope, raw_items)
 
     pairs: list[tuple[str, str]] = []
     for it in raw_items:
