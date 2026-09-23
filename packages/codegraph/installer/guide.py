@@ -29,33 +29,33 @@ _END = "<!-- END CODEGRAPH -->"
 _BLOCK_BODY = """\
 ## CodeGraph -- REQUIRED workflow (code intelligence over MCP)
 
-This repo is indexed by CodeGraph -- tools return far fewer tokens than reading files and
-surface cross-file edges files can't show. Use them by default.
+This repo is indexed by CodeGraph -- fewer tokens than reading files, plus cross-file edges.
+Use by default.
 
 **Rules (every task):**
 1. First message? Skim README/docs for a broad question -- often already answers it. Then
    `project_brief()` once. For anything deeper, `get_context(...)` before a file/grep/skill/
    explore-subagent -- skip `index_status`; `get_context` reports staleness via `warnings`,
    run `reindex` if it appears.
-2. Use `detail="full"` when you'll need real code -- a second round-trip costs more than the
-   larger response. Summary mode is for browsing.
+2. Use `detail="full"` for real code -- a second round-trip costs more than the larger
+   response. Summary mode is for browsing.
 3. Editing? Locate via `get_context`/`search_code` for EACH symbol, not just the first
    -- then Read + Edit.
 4. After `get_context`, report: `CodeGraph: ~<tokens_estimated> vs ~<tokens_if_read> tokens
    (<savings_ratio>x less)` -- response size, not $ cost.
 
 **Which tool:**
-- `project_brief()` -- ONCE, first: layers, hot paths, entry points.
-- `get_context(query)` -- signatures + callers/callees + staleness; `detail="full"` = source.
-  2+ names? pass a list (max 5).
+- `project_brief()` -- ONCE, first: layers, hot paths, top_dirs.
+- `get_context(query)` -- signatures + callers/callees + file_context; `detail="full"` =
+  source. 2+ names? pass a list (max 5).
+- `list_files(path_prefix)` -- per-file `summary`, skip opening to check.
 - `get_entity_context(id)` -- full source + neighbours.
 - `impact_analysis(id)` -- what breaks.
 - `trace_path(from_id, to_id)` -- shortest call chain A to B.
 - `search_code(query)` -- id lookup.
 
 **entity_id:** `{lang}:{rel_path}:{qualified_name}`, e.g. `py:auth/login.py:authenticate`.
-`detail="full"` on many entities at once still costs tokens -- fine for 1-5, not a whole
-search."""
+`detail="full"` on many entities costs tokens -- fine for 1-5, not a whole search"""
 
 # The full managed block including markers.
 _MANAGED_BLOCK = f"{_BEGIN}\n{_BLOCK_BODY}\n{_END}"
