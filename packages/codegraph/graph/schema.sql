@@ -52,3 +52,18 @@ CREATE TABLE IF NOT EXISTS edges (
 CREATE INDEX IF NOT EXISTS idx_edges_src  ON edges(src_id);
 CREATE INDEX IF NOT EXISTS idx_edges_dst  ON edges(dst_id);
 CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(type);
+
+-- Agent-written natural-language summaries for a file or directory (scope_id
+-- is a file path or a directory path, '.' for the repo root). Separate from
+-- `entities.summary` because files/directories aren't rows in `entities` --
+-- this is the same "write once, cache forever" idea one level up. content_hash
+-- records what the summary described so a later reparse can tell a caller the
+-- text may be stale without having to guess or silently trust it.
+CREATE TABLE IF NOT EXISTS context_summaries (
+  scope_type    VARCHAR NOT NULL,  -- 'file' | 'dir'
+  scope_id      VARCHAR NOT NULL,
+  summary       TEXT NOT NULL,
+  content_hash  VARCHAR NOT NULL,
+  updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (scope_type, scope_id)
+);

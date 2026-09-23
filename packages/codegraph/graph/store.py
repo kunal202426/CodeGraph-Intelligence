@@ -360,6 +360,49 @@ class GraphStore:
         return int(row[0]) if row else 0
 
     # ------------------------------------------------------------------
+    # File/directory context summaries (agent-written, cached across sessions)
+
+    def set_context_summaries(self, rows: list[tuple[str, str, str, str]]) -> None:
+        """Upsert `(scope_type, scope_id, summary, content_hash)` rows.
+
+        An existing row for the same (scope_type, scope_id) is overwritten in
+        place, matching `content_hash` fresh -- an ON CONFLICT DO UPDATE, not
+        the delete-then-insert or INSERT OR REPLACE patterns elsewhere in this
+        file, both of which have burned this project before (a full-row
+        replace silently nulling `entities.embedding` on reparse).
+        """
+        if not rows:
+            return
+        self.conn.executemany(
+            """
+            INSERT INTO context_summaries (scope_type, scope_id, summary, content_hash)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT (scope_type, scope_id) DO UPDATE SET
+                summary = excluded.summary,
+                content_hash = excluded.content_hash
+            """,
+            rows,
+        )
+
+    def get_context_summaries(
+        self, scope_type: str, scope_ids: list[str]
+    ) -> dict[str, tuple[str, str]]:
+        """Return `{scope_id: (summary, content_hash)}` for cached rows among `scope_ids`.
+
+        A `scope_id` with no cached summary is simply absent from the result --
+        callers fall back to the always-available structural rollup.
+        """
+        if not scope_ids:
+            return {}
+        placeholders = ", ".join(["?"] * len(scope_ids))
+        rows = self.conn.execute(
+            f"SELECT scope_id, summary, content_hash FROM context_summaries "
+            f"WHERE scope_type = ? AND scope_id IN ({placeholders})",
+            [scope_type, *scope_ids],
+        ).fetchall()
+        return {r[0]: (r[1], r[2]) for r in rows}
+
+    # ------------------------------------------------------------------
     # Per-file lookups + cleanup (T2.3 incremental)
 
     def get_file_hash(self, path: str) -> str | None:
