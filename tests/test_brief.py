@@ -133,3 +133,29 @@ def test_brief_caps_dirs_per_layer_and_reports_overflow(tmp_path: Path) -> None:
         store.close()
     assert len(brief.layers.get("service", [])) <= 6
     assert brief.layer_more.get("service", 0) == len(service_dirs) - 6
+
+
+def test_brief_top_dirs_ranks_by_entity_count(tmp_path: Path) -> None:
+    """services/ has two files (auth.py, other.py) worth of entities; models/
+    has one -- services should rank first, and each entry carries a non-empty
+    structural summary of that subtree."""
+    db = _index(tmp_path, _REPO)
+    store = GraphStore(db)
+    try:
+        brief = build_project_brief(store.conn)
+    finally:
+        store.close()
+    dirs = [d.dir for d in brief.top_dirs]
+    assert "services" in dirs
+    assert dirs.index("services") < dirs.index("models")
+    assert all(d.summary for d in brief.top_dirs)
+
+
+def test_brief_top_dirs_empty_when_everything_is_at_repo_root(tmp_path: Path) -> None:
+    db = _index(tmp_path, {"only.py": "def f():\n    return 1\n"})
+    store = GraphStore(db)
+    try:
+        brief = build_project_brief(store.conn)
+    finally:
+        store.close()
+    assert brief.top_dirs == []

@@ -490,10 +490,11 @@ def tool_definitions() -> list[Tool]:
                 "before get_context, before anything else. Returns a small orientation "
                 "summary: language/file counts, architectural layers (presentation/"
                 "service/data directories), the highest fan-in entities (the functions "
-                "most of the codebase calls into -- likely the core abstractions), and "
-                "HTTP entry points (route -> handler). One cheap call replaces the "
-                "several exploratory get_context calls a fresh session would otherwise "
-                "need just to find its bearings. Takes no arguments."
+                "most of the codebase calls into -- likely the core abstractions), HTTP "
+                "entry points (route -> handler), and a one-line summary of what each "
+                "top-level directory is for. One cheap call replaces the several "
+                "exploratory get_context/list_files calls a fresh session would "
+                "otherwise need just to find its bearings. Takes no arguments."
             ),
             inputSchema={
                 "type": "object",
@@ -1493,6 +1494,9 @@ def _project_brief(_args: dict[str, Any]) -> str:
                     {"route": e.route, "handler": e.handler, "file": e.file}
                     for e in brief.entry_points
                 ],
+                "top_dirs": [
+                    {"dir": d.dir, "summary": d.summary} for d in brief.top_dirs if d.summary
+                ],
             }
         )
     finally:
@@ -1500,7 +1504,11 @@ def _project_brief(_args: dict[str, Any]) -> str:
 
 
 def _list_files(args: dict[str, Any]) -> str:
-    """Return indexed files with language, LOC, and entity count."""
+    """Return indexed files with language, LOC, entity count, and a one-line
+    structural summary of what each file contains -- so a bare path doesn't
+    force a separate open-and-guess round-trip just to learn its purpose."""
+    from codegraph.analysis.rollup import build_file_rollup
+
     language_filter = args.get("language")
     path_prefix = args.get("path_prefix")
 

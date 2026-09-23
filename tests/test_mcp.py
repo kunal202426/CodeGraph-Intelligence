@@ -1241,6 +1241,32 @@ def test_project_brief_hot_path_has_caller_count(indexed_db: Path) -> None:
     assert auth["callers"] >= 1
 
 
+def test_project_brief_top_dirs_summarizes_each_directory(indexed_db: Path) -> None:
+    """The real fix: project_brief already told the agent WHICH directories
+    exist (via layers) but never what's in them -- an agent still had to
+    call list_files/get_context per directory to find out. top_dirs answers
+    that in the same first call, for free (no LLM, no extra round-trip)."""
+    data = _call("project_brief", {})
+    assert data["top_dirs"]
+    auth_dir = next((d for d in data["top_dirs"] if d["dir"] == "auth"), None)
+    assert auth_dir is not None
+    assert auth_dir["summary"]
+    assert isinstance(auth_dir["summary"], str)
+
+
+def test_project_brief_top_dirs_omits_root_level_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A file with no directory component (repo-root) shouldn't produce a
+    bogus top_dirs entry keyed on the filename itself."""
+    repo = tmp_path / "proj"
+    db = _index_temp_repo_multi(repo, {"root_only.py": "def f():\n    return 1\n"})
+    monkeypatch.setattr(mcp_server, "_db_path", db)
+
+    data = _call("project_brief", {})
+    assert data["top_dirs"] == []
+
+
 def test_get_context_returns_packed_result(indexed_db: Path) -> None:
     data = _call("get_context", {"query": "authenticate"})
     assert data["total"] >= 1

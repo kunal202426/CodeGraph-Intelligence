@@ -25,10 +25,12 @@ from dataclasses import dataclass, field
 import duckdb
 
 from codegraph.analysis.patterns import analyze_layers
+from codegraph.analysis.rollup import build_dir_rollup
 
 _HOT_PATH_LIMIT = 8
 _ENTRY_POINT_LIMIT = 8
 _DIRS_PER_LAYER = 6
+_TOP_DIRS_LIMIT = 8
 
 
 @dataclass(frozen=True)
@@ -49,6 +51,14 @@ class EntryPoint:
     file: str
 
 
+@dataclass(frozen=True)
+class DirSummary:
+    """What a top-level directory is for, in one line."""
+
+    dir: str
+    summary: str
+
+
 @dataclass
 class ProjectBrief:
     file_count: int
@@ -58,6 +68,7 @@ class ProjectBrief:
     layer_more: dict[str, int] = field(default_factory=dict)  # layer -> dirs omitted
     hot_paths: list[HotPath] = field(default_factory=list)
     entry_points: list[EntryPoint] = field(default_factory=list)
+    top_dirs: list[DirSummary] = field(default_factory=list)
 
 
 def build_project_brief(conn: duckdb.DuckDBPyConnection) -> ProjectBrief:
@@ -115,6 +126,19 @@ def build_project_brief(conn: duckdb.DuckDBPyConnection) -> ProjectBrief:
         EntryPoint(route=r[0].removeprefix("route:"), handler=r[1], file=r[2]) for r in entry_rows
     ]
 
+    top_dir_rows = conn.execute(
+        """
+        SELECT split_part(file, '/', 1) AS dir, count(*) AS n
+        FROM entities
+        WHERE file LIKE '%/%'
+        GROUP BY dir
+        ORDER BY n DESC
+        LIMIT ?
+        """,
+        [_TOP_DIRS_LIMIT],
+    ).fetchall()
+    top_dirs = [DirSummary(dir=d, summary=build_dir_rollup(conn, d)) for d, _n in top_dir_rows]
+
     return ProjectBrief(
         file_count=file_count,
         entity_count=entity_count,
@@ -123,4 +147,5 @@ def build_project_brief(conn: duckdb.DuckDBPyConnection) -> ProjectBrief:
         layer_more=layer_more,
         hot_paths=hot_paths,
         entry_points=entry_points,
+        top_dirs=top_dirs,
     )
