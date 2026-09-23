@@ -2,6 +2,21 @@
 
 ## Current
 
+- **NEW 2026-09-06 — context_summaries: a free structural + optional cached NL summary layer
+  for files/directories.** Architectural addition, not another response-size trim (that work
+  is the entry directly below this one). The real cost a capped response doesn't fix: a bare
+  path or entity_id still costs a round-trip to understand, every session, forever.
+  `list_files`, `project_brief`'s new `top_dirs`, and `get_context`'s new per-hit
+  `file_context` now all serve a one-line purpose summary automatically -- free/structural
+  (computed on demand from indexed entities, no LLM, works on a cold index) by default,
+  upgraded to an agent-written description when one has been cached via
+  `store_summaries(scope="file"|"dir")` and its `content_hash` still matches the current
+  content (a stale write falls back rather than showing prose that no longer applies).
+  Measured live on Grafana: `list_files` with summaries answered "what does this directory
+  do" in 1 call / 1,733 tokens vs. a realistic 4-call / 2,868-token workflow (list, then open
+  a 3-file sample) without them. Full writeup:
+  [docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md](docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md)
+  (Context-cache architecture).
 - **RESOLVED 2026-09-06 — six unbounded MCP response paths found and capped, one measured at
   512,000 tokens.** Not an agent-behavior bug like the ones below — a straight response-size
   audit against the live Grafana index. `find_dependencies` (outbound BFS, backing the CLI

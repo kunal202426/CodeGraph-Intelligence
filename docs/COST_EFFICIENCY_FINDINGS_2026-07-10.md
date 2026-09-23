@@ -4,6 +4,51 @@
 vs. off, across multiple codebases and dates — **newest first.** Every round reports real
 `/usage` cost, not estimated tokens, including the rounds where it came out worse.
 
+## Context-cache architecture (2026-09-06 later): the response-size audit fixed the wrong number
+
+Every fix in the round directly below this one caps what a tool returns when it already knows
+the answer. None of them touch the actual bottleneck on a first-touch directory: **a bare path
+or entity_id costs a round-trip to understand, every time, for every session, forever, no
+matter how small the response carrying it is.** `list_files` capped at 500 files still returns
+500 bare paths with no idea what any of them do; `get_context` capped at 8 neighbours still
+returns 8 ids with no purpose attached. Capping bytes doesn't cap decisions.
+
+This round adds a second, orthogonal layer instead of another cap: a **free, always-on
+structural tier** (one-line summaries of a file/directory's contents, computed on demand from
+already-indexed entities via plain SQL — same "no new storage, no caching layer" philosophy
+`project_brief.py` already documents) plus an **optional, cached natural-language tier**
+(`context_summaries` table, written once via `store_summaries(scope="file"|"dir")` by any
+agent, read by every later session including a cheap one — the exact "write once, cache
+forever" idea `entities.summary` already proved works, extended one level up). `list_files`,
+`project_brief`'s new `top_dirs`, and `get_context`'s new per-hit `file_context` all serve this
+automatically; the NL tier is preferred over the structural one only when its `content_hash`
+still matches the current content, so a stale write falls back rather than showing prose that
+no longer describes the code.
+
+**Measured live against the same Grafana index**, `pkg/services/ngalert/accesscontrol/`
+(21 files) — a realistic "what does this directory do" question:
+
+| Approach | Tokens | Round-trips |
+|---|---|---|
+| `list_files(path_prefix=...)` with the free structural summaries (this round) | 1,733 | 1 |
+| Same call *without* summaries, then opening a 3-file sample to guess purpose | 2,868 | 4 |
+| Opening all 21 files in full (the honest upper bound, not a realistic workflow) | 125,036 | 22 |
+
+The realistic comparison is the middle row, not the bottom one — 1.7x fewer tokens, and more
+importantly 3 fewer round-trips, which the round-8 finding below already established matters
+more than per-call size (Claude Code's cache-read cost compounds per turn, not per byte). The
+bottom row is reported for completeness, not claimed as typical: no real agent opens every file
+in a directory just to learn its purpose, and presenting it as the headline number would be
+exactly the kind of unearned "10x savings" claim this log exists to catch, not repeat.
+
+**Honest gap, not yet closed:** the NL tier only helps once something has been written into it.
+A cold index (nobody has called `store_summaries(scope="file"/"dir")` yet) gets the free
+structural tier only — real, measured above, but the richer "why", not just "what", still
+requires an agent to spend tokens writing it first. That's an intentional design tradeoff (no
+server-side LLM call is possible without an API key — see `project_no-separate-api-tokens` in
+memory), not an oversight, but it means this round's ceiling is unmeasured until some session
+actually populates the cache on a real repo and a later session is measured reading it back.
+
 ## Response-size audit (2026-09-06): six unbounded MCP responses, one measured at 512,000 tokens
 
 Different failure mode than every round above: not "does the agent call the right tool",
