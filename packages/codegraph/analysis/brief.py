@@ -25,7 +25,8 @@ from dataclasses import dataclass, field
 import duckdb
 
 from codegraph.analysis.patterns import analyze_layers
-from codegraph.analysis.rollup import build_dir_rollup
+from codegraph.analysis.rollup import build_dir_rollup, top_level_dirs_with_hash
+from codegraph.graph.store import read_context_summaries
 
 _HOT_PATH_LIMIT = 8
 _ENTRY_POINT_LIMIT = 8
@@ -137,7 +138,14 @@ def build_project_brief(conn: duckdb.DuckDBPyConnection) -> ProjectBrief:
         """,
         [_TOP_DIRS_LIMIT],
     ).fetchall()
-    top_dirs = [DirSummary(dir=d, summary=build_dir_rollup(conn, d)) for d, _n in top_dir_rows]
+    dir_names = [d for d, _n in top_dir_rows]
+    current_hash = dict(top_level_dirs_with_hash(conn))
+    cached = read_context_summaries(conn, "dir", dir_names)
+    top_dirs = []
+    for d, _n in top_dir_rows:
+        nl = cached.get(d)
+        summary = nl[0] if nl and nl[1] == current_hash.get(d) else build_dir_rollup(conn, d)
+        top_dirs.append(DirSummary(dir=d, summary=summary))
 
     return ProjectBrief(
         file_count=file_count,

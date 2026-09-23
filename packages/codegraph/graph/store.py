@@ -392,15 +392,7 @@ class GraphStore:
         A `scope_id` with no cached summary is simply absent from the result --
         callers fall back to the always-available structural rollup.
         """
-        if not scope_ids:
-            return {}
-        placeholders = ", ".join(["?"] * len(scope_ids))
-        rows = self.conn.execute(
-            f"SELECT scope_id, summary, content_hash FROM context_summaries "
-            f"WHERE scope_type = ? AND scope_id IN ({placeholders})",
-            [scope_type, *scope_ids],
-        ).fetchall()
-        return {r[0]: (r[1], r[2]) for r in rows}
+        return read_context_summaries(self.conn, scope_type, scope_ids)
 
     # ------------------------------------------------------------------
     # Per-file lookups + cleanup (T2.3 incremental)
@@ -490,3 +482,19 @@ class GraphStore:
     def count_edges(self) -> int:
         row = self.conn.execute("SELECT COUNT(*) FROM edges").fetchone()
         return int(row[0]) if row else 0
+
+
+def read_context_summaries(
+    conn: duckdb.DuckDBPyConnection, scope_type: str, scope_ids: list[str]
+) -> dict[str, tuple[str, str]]:
+    """Free-function twin of `GraphStore.get_context_summaries`, for callers
+    (like `analysis/brief.py`) that only hold a raw connection, not a store."""
+    if not scope_ids:
+        return {}
+    placeholders = ", ".join(["?"] * len(scope_ids))
+    rows = conn.execute(
+        f"SELECT scope_id, summary, content_hash FROM context_summaries "
+        f"WHERE scope_type = ? AND scope_id IN ({placeholders})",
+        [scope_type, *scope_ids],
+    ).fetchall()
+    return {r[0]: (r[1], r[2]) for r in rows}

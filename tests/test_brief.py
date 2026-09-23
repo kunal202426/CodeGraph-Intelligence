@@ -159,3 +159,32 @@ def test_brief_top_dirs_empty_when_everything_is_at_repo_root(tmp_path: Path) ->
     finally:
         store.close()
     assert brief.top_dirs == []
+
+
+def test_brief_top_dirs_uses_cached_summary_when_fresh(tmp_path: Path) -> None:
+    from codegraph.analysis.rollup import top_level_dirs_with_hash
+
+    db = _index(tmp_path, _REPO)
+    store = GraphStore(db)
+    try:
+        current_hash = dict(top_level_dirs_with_hash(store.conn))
+        store.set_context_summaries(
+            [("dir", "services", "Auth + business logic.", current_hash["services"])]
+        )
+        brief = build_project_brief(store.conn)
+    finally:
+        store.close()
+    services = next(d for d in brief.top_dirs if d.dir == "services")
+    assert services.summary == "Auth + business logic."
+
+
+def test_brief_top_dirs_ignores_a_stale_cached_summary(tmp_path: Path) -> None:
+    db = _index(tmp_path, _REPO)
+    store = GraphStore(db)
+    try:
+        store.set_context_summaries([("dir", "services", "Stale description.", "wrong-hash")])
+        brief = build_project_brief(store.conn)
+    finally:
+        store.close()
+    services = next(d for d in brief.top_dirs if d.dir == "services")
+    assert services.summary != "Stale description."

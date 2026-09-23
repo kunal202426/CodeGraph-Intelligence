@@ -1523,8 +1523,10 @@ def _project_brief(_args: dict[str, Any]) -> str:
 
 def _list_files(args: dict[str, Any]) -> str:
     """Return indexed files with language, LOC, entity count, and a one-line
-    structural summary of what each file contains -- so a bare path doesn't
-    force a separate open-and-guess round-trip just to learn its purpose."""
+    summary of what each file contains -- so a bare path doesn't force a
+    separate open-and-guess round-trip just to learn its purpose. Prefers an
+    agent-written description (store_summaries, scope='file') when one is
+    cached and still fresh; falls back to the free structural rollup."""
     from codegraph.analysis.rollup import build_file_rollup
 
     language_filter = args.get("language")
@@ -1543,19 +1545,25 @@ def _list_files(args: dict[str, Any]) -> str:
     store = _open_store()
     try:
         rows = store.conn.execute(
-            "SELECT f.path, f.language, f.loc, COUNT(e.entity_id) "
+            "SELECT f.path, f.language, f.loc, COUNT(e.entity_id), f.hash "
             "FROM files f LEFT JOIN entities e ON e.file = f.path "
             f"{where}"
-            "GROUP BY f.path, f.language, f.loc ORDER BY f.path",
+            "GROUP BY f.path, f.language, f.loc, f.hash ORDER BY f.path",
             params,
         ).fetchall()
         files = [
             {"path": r[0], "language": r[1], "loc": r[2] or 0, "entity_count": r[3]} for r in rows
         ]
         shown = files[:_FILE_LIST_CAP]
+        current_hash = {r[0]: r[4] for r in rows}
+        cached = store.get_context_summaries("file", [e["path"] for e in shown])
         for entry in shown:
-            if entry["entity_count"]:
-                rollup = build_file_rollup(store.conn, entry["path"])
+            path = entry["path"]
+            nl = cached.get(path)
+            if nl and nl[1] == current_hash.get(path):
+                entry["summary"] = nl[0]
+            elif entry["entity_count"]:
+                rollup = build_file_rollup(store.conn, path)
                 if rollup:
                     entry["summary"] = rollup
     finally:
@@ -1754,25 +1762,16 @@ def _placeholders(n: int) -> str:
     return ", ".join(["?"] * n)
 
 
-def _top_level_dirs_with_hash(conn) -> list[tuple[str, str]]:
-    """Every top-level directory (same population as project_brief's top_dirs)
-    paired with a content hash derived from its files' own hashes -- changes
-    exactly when a file is added, removed, or edited anywhere in that dir."""
-    from codegraph.uir import hash_source
-
-    rows = conn.execute(
-        "SELECT split_part(path, '/', 1) AS dir, string_agg(hash, '|' ORDER BY path) "
-        "FROM files WHERE path LIKE '%/%' GROUP BY dir ORDER BY dir"
-    ).fetchall()
-    return [(d, hash_source(h or "")) for d, h in rows]
-
-
 def _get_unsummarized_scope(scope: str, limit: int) -> str:
     """file/dir variant of get_unsummarized_entities: candidates are files or
     top-level directories with no cached context_summaries row yet, or whose
     cached content_hash no longer matches the current content (a real edit
     happened underneath a stale summary)."""
-    from codegraph.analysis.rollup import build_dir_rollup, build_file_rollup
+    from codegraph.analysis.rollup import (
+        build_dir_rollup,
+        build_file_rollup,
+        top_level_dirs_with_hash,
+    )
 
     store = _open_store()
     try:
@@ -1780,7 +1779,7 @@ def _get_unsummarized_scope(scope: str, limit: int) -> str:
             candidates = store.conn.execute("SELECT path, hash FROM files ORDER BY path").fetchall()
             rollup_fn = build_file_rollup
         else:
-            candidates = _top_level_dirs_with_hash(store.conn)
+            candidates = top_level_dirs_with_hash(store.conn)
             rollup_fn = build_dir_rollup
 
         cached = store.get_context_summaries(scope, [c[0] for c in candidates])
@@ -1902,11 +1901,12 @@ def _store_context_summaries(scope: str, raw_items: list[Any]) -> str:
 
     store = GraphStore(db, read_only=False)
     try:
-        current_hashes = (
-            dict(store.conn.execute("SELECT path, hash FROM files").fetchall())
-            if scope == "file"
-            else dict(_top_level_dirs_with_hash(store.conn))
-        )
+        if scope == "file":
+            current_hashes = dict(store.conn.execute("SELECT path, hash FROM files").fetchall())
+        else:
+            from codegraph.analysis.rollup import top_level_dirs_with_hash
+
+            current_hashes = dict(top_level_dirs_with_hash(store.conn))
         rows = [
             (scope, scope_id, summary, current_hashes[scope_id])
             for scope_id, summary in pairs

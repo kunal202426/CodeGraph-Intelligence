@@ -836,7 +836,57 @@ def test_list_files_omits_summary_field_when_entity_count_is_zero(
     data = _call("list_files", {})
     untracked = next(f for f in data["files"] if f["path"] == "untracked.py")
     assert untracked["entity_count"] == 0
-    assert "summary" not in untracked
+
+
+def test_list_files_prefers_a_fresh_agent_written_summary_over_the_structural_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Once an agent has bothered to write a real description via
+    store_summaries(scope='file'), list_files should serve THAT instead of
+    the auto-generated entity-name rollup -- the whole point of the cache."""
+    repo = tmp_path / "proj"
+    db = _index_temp_repo_multi(repo, {"auth/login.py": "def authenticate():\n    return True\n"})
+    monkeypatch.setattr(mcp_server, "_db_path", db)
+
+    _call(
+        "store_summaries",
+        {
+            "scope": "file",
+            "items": [{"scope_id": "auth/login.py", "summary": "Login/session handling."}],
+        },
+    )
+
+    data = _call("list_files", {})
+    login = next(f for f in data["files"] if f["path"] == "auth/login.py")
+    assert login["summary"] == "Login/session handling."
+
+
+def test_list_files_falls_back_to_structural_when_cached_summary_is_stale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cached NL summary written against old content must not be served as
+    if it still describes the current file -- fall back to the (always
+    accurate) structural rollup instead of showing stale prose."""
+    repo = tmp_path / "proj"
+    db = _index_temp_repo_multi(repo, {"auth/login.py": "def authenticate():\n    return True\n"})
+    monkeypatch.setattr(mcp_server, "_db_path", db)
+
+    _call(
+        "store_summaries",
+        {"scope": "file", "items": [{"scope_id": "auth/login.py", "summary": "Old description."}]},
+    )
+    (repo / "auth" / "login.py").write_text(
+        "def authenticate():\n    return True\n\ndef refresh_token():\n    return None\n"
+    )
+    reindex_result = CliRunner().invoke(
+        cli_app, ["index", str(repo), "--db", str(db), "--no-embed"]
+    )
+    assert reindex_result.exit_code == 0, reindex_result.output
+
+    data = _call("list_files", {})
+    login = next(f for f in data["files"] if f["path"] == "auth/login.py")
+    assert login["summary"] != "Old description."
+    assert "refresh_token" in login["summary"]
 
 
 # ---------- T12.3: index_status ----------
@@ -1265,6 +1315,29 @@ def test_project_brief_top_dirs_omits_root_level_files(
 
     data = _call("project_brief", {})
     assert data["top_dirs"] == []
+
+
+def test_project_brief_top_dirs_prefers_agent_written_summary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "proj"
+    db = _index_temp_repo_multi(
+        repo,
+        {
+            "auth/login.py": "def authenticate():\n    return True\n",
+            "auth/other.py": "def other():\n    return authenticate()\n",
+        },
+    )
+    monkeypatch.setattr(mcp_server, "_db_path", db)
+
+    _call(
+        "store_summaries",
+        {"scope": "dir", "items": [{"scope_id": "auth", "summary": "Login and session logic."}]},
+    )
+
+    data = _call("project_brief", {})
+    auth_dir = next(d for d in data["top_dirs"] if d["dir"] == "auth")
+    assert auth_dir["summary"] == "Login and session logic."
 
 
 def test_get_context_returns_packed_result(indexed_db: Path) -> None:

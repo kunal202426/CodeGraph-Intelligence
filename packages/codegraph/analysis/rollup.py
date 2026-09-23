@@ -25,6 +25,7 @@ from __future__ import annotations
 import duckdb
 
 from codegraph.graph.store import escape_like
+from codegraph.uir import hash_source
 
 _FILE_ROLLUP_NAME_CAP = 8
 _DIR_ROLLUP_TOP_ENTITIES = 5
@@ -102,3 +103,16 @@ def build_dir_rollup(conn: duckdb.DuckDBPyConnection, dir_path: str) -> str:
         top_desc = ", ".join(f"{name} ({n} callers)" for name, n in top_rows)
         summary += f". Most-used: {top_desc}"
     return summary
+
+
+def top_level_dirs_with_hash(conn: duckdb.DuckDBPyConnection) -> list[tuple[str, str]]:
+    """Every top-level directory (same population `project_brief`'s top_dirs
+    uses) paired with a content hash derived from its files' own hashes --
+    changes exactly when a file is added, removed, or edited anywhere in that
+    directory. Used to decide whether a cached `context_summaries` NL
+    description of a directory is still fresh."""
+    rows = conn.execute(
+        "SELECT split_part(path, '/', 1) AS dir, string_agg(hash, '|' ORDER BY path) "
+        "FROM files WHERE path LIKE '%/%' GROUP BY dir ORDER BY dir"
+    ).fetchall()
+    return [(d, hash_source(h or "")) for d, h in rows]
