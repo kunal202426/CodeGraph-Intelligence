@@ -506,10 +506,12 @@ def tool_definitions() -> list[Tool]:
             description=(
                 "Use this instead of listing the directory tree to understand project "
                 "layout from the index: every source file with its language, line count, "
-                "and entity count. Optionally filter by language name (e.g. 'python', "
-                "'typescript', 'go') or by a path prefix (e.g. 'src/api/') to drill into "
-                "one directory. A large repo's listing is capped -- `total` still reports "
-                "the true file count, narrow with `language`/`path_prefix` to see the rest."
+                "entity count, and a one-line summary of what's in it -- read that before "
+                "opening the file, not after. Optionally filter by language name (e.g. "
+                "'python', 'typescript', 'go') or by a path prefix (e.g. 'src/api/') to "
+                "drill into one directory. A large repo's listing is capped -- `total` "
+                "still reports the true file count, narrow with `language`/`path_prefix` "
+                "to see the rest."
             ),
             inputSchema={
                 "type": "object",
@@ -1521,11 +1523,19 @@ def _list_files(args: dict[str, Any]) -> str:
             "GROUP BY f.path, f.language, f.loc ORDER BY f.path",
             params,
         ).fetchall()
+        files = [
+            {"path": r[0], "language": r[1], "loc": r[2] or 0, "entity_count": r[3]} for r in rows
+        ]
+        shown = files[:_FILE_LIST_CAP]
+        for entry in shown:
+            if entry["entity_count"]:
+                rollup = build_file_rollup(store.conn, entry["path"])
+                if rollup:
+                    entry["summary"] = rollup
     finally:
         store.close()
 
-    files = [{"path": r[0], "language": r[1], "loc": r[2] or 0, "entity_count": r[3]} for r in rows]
-    result: dict[str, Any] = {"total": len(files), "files": files[:_FILE_LIST_CAP]}
+    result: dict[str, Any] = {"total": len(files), "files": shown}
     if len(files) > _FILE_LIST_CAP:
         result["warnings"] = [
             f"Showing the first {_FILE_LIST_CAP} of {len(files)} files. Narrow down with "

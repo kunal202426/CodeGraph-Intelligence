@@ -794,6 +794,51 @@ def test_list_files_no_warning_for_a_small_repo(indexed_db: Path) -> None:
     assert "warnings" not in data
 
 
+def test_list_files_includes_a_structural_summary_per_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The real fix: a bare path/language/loc row tells an agent nothing about
+    what a file is for -- it still has to open the file (or grep, or guess)
+    to find out. Each shown file now carries a free, always-available
+    structural one-liner (entity counts + names) built from the graph, no
+    extra round-trip, no LLM cost."""
+    repo = tmp_path / "proj"
+    db = _index_temp_repo_multi(
+        repo, {"auth/login.py": "def authenticate(user):\n    return True\n"}
+    )
+    monkeypatch.setattr(mcp_server, "_db_path", db)
+
+    data = _call("list_files", {})
+    login = next(f for f in data["files"] if f["path"] == "auth/login.py")
+    assert "authenticate" in login["summary"]
+
+
+def test_list_files_omits_summary_field_when_entity_count_is_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A file with zero indexed entities has nothing to summarize -- omit the
+    field rather than send an empty string. Every real parsed source file
+    carries at least a module entity (see test_rollup.py's direct coverage of
+    build_file_rollup's own empty case), so this exercises the same "skip an
+    empty rollup" branch via a file that's tracked but never parsed."""
+    repo = tmp_path / "proj"
+    db = _index_temp_repo_multi(repo, {"auth/login.py": "def authenticate():\n    return True\n"})
+    monkeypatch.setattr(mcp_server, "_db_path", db)
+    from codegraph.graph.store import GraphStore
+    from codegraph.uir import Language
+
+    store = GraphStore(db, read_only=False)
+    try:
+        store.upsert_file("untracked.py", Language.PYTHON, "h", loc=0)
+    finally:
+        store.close()
+
+    data = _call("list_files", {})
+    untracked = next(f for f in data["files"] if f["path"] == "untracked.py")
+    assert untracked["entity_count"] == 0
+    assert "summary" not in untracked
+
+
 # ---------- T12.3: index_status ----------
 
 
