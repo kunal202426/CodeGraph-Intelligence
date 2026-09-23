@@ -30,6 +30,15 @@ from codegraph.uir import hash_source
 _FILE_ROLLUP_NAME_CAP = 8
 _DIR_ROLLUP_TOP_ENTITIES = 5
 
+# Entity type names that don't pluralize by just appending "s" (EntityType in
+# uir.py: module/function/method/interface/type_alias/variable all do; class
+# is the one exception -- "classs" is what a naive `f"{t}s"` produces).
+_IRREGULAR_PLURALS = {"class": "classes"}
+
+
+def _pluralize(entity_type: str) -> str:
+    return _IRREGULAR_PLURALS.get(entity_type, f"{entity_type}s")
+
 
 def build_file_rollup(conn: duckdb.DuckDBPyConnection, path: str) -> str:
     """One-line structural summary of a file: entity counts by type + names.
@@ -52,7 +61,8 @@ def build_file_rollup(conn: duckdb.DuckDBPyConnection, path: str) -> str:
         names.append(name)
 
     type_desc = ", ".join(
-        f"{n} {t}{'s' if n != 1 else ''}" for t, n in sorted(counts.items(), key=lambda kv: -kv[1])
+        f"{n} {t if n == 1 else _pluralize(t)}"
+        for t, n in sorted(counts.items(), key=lambda kv: -kv[1])
     )
     shown = names[:_FILE_ROLLUP_NAME_CAP]
     names_desc = ", ".join(shown)

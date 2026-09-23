@@ -65,6 +65,26 @@ def test_build_file_rollup_lists_entity_counts_and_names(runner: CliRunner, tmp_
     assert "class" in summary
 
 
+def test_build_file_rollup_pluralizes_class_correctly(runner: CliRunner, tmp_path: Path) -> None:
+    """Real bug, caught live on Grafana: naively appending 's' to 'class'
+    produces 'classs'. Needs 2+ classes to exercise the plural branch at
+    all -- a single class stays grammatically singular."""
+    from codegraph.analysis.rollup import build_file_rollup
+    from codegraph.graph.store import GraphStore
+
+    repo = tmp_path / "repo"
+    _make_repo(repo, {"models.py": "class Foo:\n    pass\n\nclass Bar:\n    pass\n"})
+    db = tmp_path / "g.duckdb"
+    _index(runner, repo, db)
+    store = GraphStore(db)
+    try:
+        summary = build_file_rollup(store.conn, "models.py")
+    finally:
+        store.close()
+    assert "classes" in summary
+    assert "classs" not in summary
+
+
 def test_build_file_rollup_empty_for_a_file_with_no_entities(
     runner: CliRunner, tmp_path: Path
 ) -> None:
