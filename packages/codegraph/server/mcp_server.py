@@ -1369,28 +1369,56 @@ def _get_context(args: dict[str, Any]) -> str:
         truncated_callers: list[str] = []
         used_tokens = 0
         truncated = False
-        col_select = ", ".join(columns)
         file_summary_cache: dict[str, str | None] = {}
+
+        # Batched, not per-hit: the same shape _caller_counts already uses (one
+        # IN (...) query per need, instead of one query per hit). This loop used to
+        # run up to 4 sequential single-row queries per hit (entity row, a second
+        # raw_source-only fetch for the preview, deps, callers), measured at 18 total
+        # DB round trips for a 4-hit summary-mode response. raw_source is always
+        # fetched here (needed for the preview in summary mode too), so summary mode
+        # no longer pays a redundant second query just to re-fetch the same row.
+        hit_ids = [h.entity_id for h in hits]
+        entity_rows: dict[str, dict[str, Any]] = {}
+        deps_by_id: dict[str, list[str]] = {}
+        callers_by_id: dict[str, list[str]] = {}
+        if hit_ids:
+            placeholders = _placeholders(len(hit_ids))
+            for row in store.conn.execute(
+                f"SELECT {', '.join(_ENTITY_COLUMNS)} FROM entities "
+                f"WHERE entity_id IN ({placeholders})",
+                hit_ids,
+            ).fetchall():
+                full_row = dict(zip(_ENTITY_COLUMNS, row, strict=True))
+                entity_rows[full_row["entity_id"]] = full_row
+            for src_id, dst_id in store.conn.execute(
+                f"SELECT DISTINCT src_id, dst_id FROM edges "
+                f"WHERE src_id IN ({placeholders}) AND type IN ('calls', 'imports') "
+                "ORDER BY src_id, dst_id",
+                hit_ids,
+            ).fetchall():
+                deps_by_id.setdefault(src_id, []).append(dst_id)
+            for dst_id, src_id in store.conn.execute(
+                f"SELECT DISTINCT dst_id, src_id FROM edges "
+                f"WHERE dst_id IN ({placeholders}) AND type = 'calls' "
+                "ORDER BY dst_id, src_id",
+                hit_ids,
+            ).fetchall():
+                callers_by_id.setdefault(dst_id, []).append(src_id)
+
         for hit in hits:
             eid = hit.entity_id
-            row = store.conn.execute(
-                f"SELECT {col_select} FROM entities WHERE entity_id = ?",
-                [eid],
-            ).fetchone()
-            if row is None:
+            full_row = entity_rows.get(eid)
+            if full_row is None:
                 continue
-            entity: dict[str, Any] = dict(zip(columns, row, strict=True))
+            entity: dict[str, Any] = {k: full_row[k] for k in columns}
             entity_file = entity.get("file")
 
             # In summary mode, attach a short preview instead of the full body,
             # and cut the docstring to its first line (the preview usually shows
             # the docstring's opening anyway; detail='full' has the whole thing).
             if not full:
-                preview_row = store.conn.execute(
-                    "SELECT raw_source FROM entities WHERE entity_id = ?",
-                    [eid],
-                ).fetchone()
-                entity["source_preview"] = _source_preview(preview_row[0] if preview_row else None)
+                entity["source_preview"] = _source_preview(full_row.get("raw_source"))
                 entity["docstring"] = _first_line(entity.get("docstring"))
                 if entity_file:
                     if entity_file not in file_summary_cache:
@@ -1400,22 +1428,9 @@ def _get_context(args: dict[str, Any]) -> str:
                         entity["file_context"] = file_context
 
             # Outbound: imports + calls (what this entity depends on)
-            deps = [
-                r[0]
-                for r in store.conn.execute(
-                    "SELECT DISTINCT dst_id FROM edges "
-                    "WHERE src_id = ? AND type IN ('calls', 'imports')",
-                    [eid],
-                ).fetchall()
-            ]
+            deps = deps_by_id.get(eid, [])
             # Inbound: direct callers of this entity
-            callers = [
-                r[0]
-                for r in store.conn.execute(
-                    "SELECT DISTINCT src_id FROM edges WHERE dst_id = ? AND type = 'calls'",
-                    [eid],
-                ).fetchall()
-            ]
+            callers = callers_by_id.get(eid, [])
 
             # Always report the true neighbour counts. In summary mode cap the
             # actual id lists so a hub function (many callers) can't bloat the
