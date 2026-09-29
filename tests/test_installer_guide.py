@@ -111,6 +111,24 @@ def test_guide_tells_agent_to_use_codegraph_for_every_new_symbol_not_just_the_fi
     assert "not just the first" in text
 
 
+def test_guide_each_symbol_rule_applies_to_exploration_not_just_editing(
+    tmp_path: Path,
+) -> None:
+    """Real finding, live on Grafana (2026-09-29, controlled A/B: baseline vs. no
+    codegraph, same task, three variants): a pure repository-exploration question
+    ("find and explain where session/auth handling is implemented", not an edit)
+    called `get_context`/`project_brief` two or three times, then ran 14-18 native
+    reads/searches for every other symbol anyway. Total native call count barely
+    changed with or without codegraph connected (14, then 18, then 20 with zero
+    codegraph calls at all), while the with-codegraph runs paid for the tool calls
+    on top -- additive, not substitutive, confirming round 8's historical finding
+    was never editing-specific. The old EACH-symbol rule above was gated behind
+    "Editing?", so it never applied to this exact failure mode. It must say EACH
+    symbol matters in any task, not only editing."""
+    text = write_agent_guide(tmp_path).read_text(encoding="utf-8")
+    assert "any task, not only editing" in text
+
+
 def test_guide_is_strong_mandate_with_savings_instruction(tmp_path: Path) -> None:
     """The guide must (a) require CodeGraph before reading files and (b) tell the
     agent to report the token savings — the two levers behind 'auto-use'."""

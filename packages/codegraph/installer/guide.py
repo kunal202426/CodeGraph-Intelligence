@@ -30,32 +30,31 @@ _BLOCK_BODY = """\
 ## CodeGraph -- REQUIRED workflow (code intelligence over MCP)
 
 This repo is indexed by CodeGraph -- fewer tokens than reading files, plus cross-file edges.
-Use by default.
+Use INSTEAD of grep/Read, not alongside them.
 
 **Rules (every task):**
-1. First message? Skim README/docs for a broad question -- often already answers it. Then
+1. First message? Skim README/docs for a broad question -- often answers it. Then
    `project_brief()` once. For anything deeper, `get_context(...)` before a file/grep/skill/
    explore-subagent -- skip `index_status`; `get_context` reports staleness via `warnings`,
-   run `reindex` if it appears.
-2. Use `detail="full"` for real code -- a second round-trip costs more than the larger
-   response. Summary mode is for browsing.
-3. Editing? Locate via `get_context`/`search_code` for EACH symbol, not just the first
-   -- then Read + Edit.
+   reindex if it appears.
+2. Locate via `get_context`/`search_code`/`impact_analysis` for EACH symbol, not just the first
+   -- any task, not only editing. Grep only when a tool call returns nothing for that symbol.
+3. Use `detail="full"` for real code, summary mode for browsing -- a second round-trip costs
+   more than the larger response. Editing? Read + Edit after locating via rule 2.
 4. After `get_context`, report: `CodeGraph: ~<tokens_estimated> vs ~<tokens_if_read> tokens
    (<savings_ratio>x less)` -- response size, not $ cost.
 
 **Which tool:**
 - `project_brief()` -- ONCE, first: layers, hot paths, top_dirs.
-- `get_context(query)` -- signatures + callers/callees + file_context; `detail="full"` =
-  source. 2+ names? pass a list (max 5).
-- `list_files(path_prefix)` -- per-file `summary`, skip opening to check.
+- `get_context(query)` -- signatures/callers/callees/file_context; `detail="full"` = source.
+  2+ names? pass a list (max 5).
+- `list_files(path_prefix)` -- per-file summary.
 - `get_entity_context(id)` -- full source + neighbours.
 - `impact_analysis(id)` -- what breaks.
-- `trace_path(from_id, to_id)` -- shortest call chain A to B.
+- `trace_path(from_id, to_id)` -- shortest path A to B.
 - `search_code(query)` -- id lookup.
 
-**entity_id:** `{lang}:{rel_path}:{qualified_name}`, e.g. `py:auth/login.py:authenticate`.
-`detail="full"` on many entities costs tokens -- fine for 1-5, not a whole search"""
+**entity_id:** `{lang}:{rel_path}:{qualified_name}`."""
 
 # The full managed block including markers.
 _MANAGED_BLOCK = f"{_BEGIN}\n{_BLOCK_BODY}\n{_END}"
