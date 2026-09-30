@@ -37,8 +37,9 @@
   README polished and internal build-planning docs (`AGENTS.md`, `BUILD_PLAN.md`, the source
   spec, `plan/`) moved out of the public repo into a local, gitignored `.internal/` folder.
 - **Phase:** Wrapped. The last phase was maintenance and hardening (post-audit fixes,
-  usability, repo hygiene). No further work is planned, and the unmerged experiment
-  branches (`baseline/cost-control`, `exp/*`, `combo/turn-reduction`) remain on origin.
+  usability, repo hygiene). No further work is planned. The last three changes (batched
+  `get_context` queries, a non-fatal over-limit query batch, and the guide's each-symbol
+  rule applying to every task) are merged to `main`; the experiment branches were deleted.
   Safe to start a new session cold from this file.
 - **Tests:** 1300 passing, 1 live-skip (needs `ANTHROPIC_API_KEY`), 0 failing. Verified both
   locally and on GitHub Actions (`gh run list`) as of the last commit below. (This file's
