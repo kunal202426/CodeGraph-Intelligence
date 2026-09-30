@@ -32,12 +32,14 @@
   depth cutoff from a size cutoff in the warning, since they call for different next actions.
   Full data: [docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md](docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md)
   (Response-size audit).
-- **Status:** ACTIVE — roadmap complete; competitive hardening (Phases 19-22, 24, 26-28) plus
+- **Status:** WRAPPED as of 2026-09-30 (no longer under active development); roadmap complete; competitive hardening (Phases 19-22, 24, 26-28) plus
   a real-world stress test (Phase 29) done; CI green, `main` fully pushed, working tree clean.
   README polished and internal build-planning docs (`AGENTS.md`, `BUILD_PLAN.md`, the source
   spec, `plan/`) moved out of the public repo into a local, gitignored `.internal/` folder.
-- **Phase:** Maintenance & hardening (post-audit fixes, usability, repo hygiene). No phase
-  currently in progress — safe to start a new session cold from this file.
+- **Phase:** Wrapped. The last phase was maintenance and hardening (post-audit fixes,
+  usability, repo hygiene). No further work is planned, and the unmerged experiment
+  branches (`baseline/cost-control`, `exp/*`, `combo/turn-reduction`) remain on origin.
+  Safe to start a new session cold from this file.
 - **Tests:** 1300 passing, 1 live-skip (needs `ANTHROPIC_API_KEY`), 0 failing. Verified both
   locally and on GitHub Actions (`gh run list`) as of the last commit below. (This file's
   "Next task" list and phase history below predate the 2026-08-11 Grafana stress test and its
@@ -156,8 +158,8 @@
   careful. None of the four MCP tools currently answer "what existing test fixtures would violate
   a constraint I'm about to tighten," a materially different question from "who calls this."
   Full data: [docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md](docs/COST_EFFICIENCY_FINDINGS_2026-07-10.md)
-  (Round 9). Not yet fixed — this is the next thing being worked.
-- **Next task (all optional, none blocking):**
+  (Round 9). Not yet fixed; the project is wrapped, so this will not be worked on.
+- **Next tasks (all optional, none blocking, none planned since the project is wrapped):**
   - JSX/React component usage (`<Component />`) isn't a call edge — confirmed the
     second-largest dead-code false-positive source on a real React frontend, see
     [docs/REAL_WORLD_STRESS_TEST_2026-07-06.md](docs/REAL_WORLD_STRESS_TEST_2026-07-06.md)
@@ -371,7 +373,7 @@ Full interactive manual test of every user-facing surface (CLI, web UI, watch, M
 
 **Phase 2 result: fastapi (1122 files) → 6057 entities, 4405 edges. Cold index 38.6s, warm re-index 0.8s. `search get_swagger_ui_html` and `deps APIRouter` work. 195 tests passing in ~21s.**
 
-### Phase 3 — Local Embeddings + Semantic Search [IN PROGRESS 1/5]
+### Phase 3 — Local Embeddings + Semantic Search [NOT CONTINUED 1/5]
 - [x] T3.1 — sentence-transformers wrapper (all-MiniLM-L6-v2, 384d, 6 tests)
 - [x] T3.2 — Embedding storage + cosine vector_search (10 tests; real-embedding round-trip)
 - [x] T3.3 — Chunking + auto-embed during index (8 tests; --no-embed flag, graceful skip)
@@ -399,7 +401,7 @@ Full interactive manual test of every user-facing surface (CLI, web UI, watch, M
 **Phase 5 result: AI layer complete. `ask` streams grounded, citation-style answers via hybrid GraphRAG retrieval over claude-sonnet-4-6 (prompt-cached system); `summarize` writes a multi-pass architecture overview. All AI wiring is testable without a live key or the embedding model (injected fakes + one-hot vectors). 325 tests passing, 1 live-skip.**
 - [ ] T5.5 — Repo architecture summary (`summarize`)
 
-### Phase 6 — Minimal Web UI [IN PROGRESS 1/6]
+### Phase 6 — Minimal Web UI [NOT CONTINUED 1/6]
 - [x] T6.1 — FastAPI skeleton: create_app(db) with /api health/graph(module+entity)/search/entity/impact + SSE /api/ask; per-request read-only DuckDB conn; CORS for Vite; GraphStore read_only flag added (12 tests via TestClient, no model/API)
 - [x] T6.2 — Vite+React 19+TS 6 scaffold under packages/web; Tailwind v4 via @tailwindcss/vite; d3 + @types/d3; typed api client (src/api); App shell (search/graph/chat/entity regions + /api/health indicator); vite build → packages/codegraph/server/static (gitignored), dev proxy /api→:8765. `npm run build` + `npm run lint` green
 - [x] T6.3 — D3 force-directed module graph (components/Graph.tsx): /api/graph?type=module → forceManyBody+forceLink+forceCenter, drag + zoom, click→onSelect; callback-ref avoids sim rebuild; error/empty states; wired into App left pane, selection shown in footer. build+lint green
@@ -411,7 +413,7 @@ Full interactive manual test of every user-facing surface (CLI, web UI, watch, M
 - [ ] T6.4 — Search bar + entity details panel
 - [ ] T6.5 — AI chat panel with SSE streaming + citation links
 - [ ] T6.6 — `codegraph serve` packages frontend + opens browser
-### Phase 7 — MCP Server (killer demo) [IN PROGRESS 1/3]
+### Phase 7 — MCP Server (killer demo) [NOT CONTINUED 1/3]
 - [x] T7.1 — MCP server skeleton (mcp 1.27 low-level Server): 4 tools declared (search_code/get_entity_context/impact_analysis/ask_codebase) via tool_definitions(); stdio runner `python -m codegraph.server.mcp_server --db ...`; get_db_path (--db > CODEGRAPH_DB > default). 7 tests + live stdio client roundtrip listed all 4 tools
 - [x] T7.2 — call_tool wired: search_code→hybrid_search (embeds only if vectors exist), get_entity_context→entity+depends_on/called_by, impact_analysis→find_callers, ask_codebase→GraphRAG.ask_stream; sync handlers via anyio.to_thread, per-call read-only store, errors→{"error":...} JSON. 14 tests + live client roundtrip (search_code→authenticate, impact→3)
 - [x] T7.3 — README MCP section (quickstart + `claude mcp add codegraph -- uv run python -m codegraph.server.mcp_server --db ...`, CODEGRAPH_DB, 4-tool table, demo placeholder docs/demo.gif). Entry point verified (`python -m ... --help`). GIF is a manual recording step (left to repo owner)
@@ -424,13 +426,13 @@ Full interactive manual test of every user-facing surface (CLI, web UI, watch, M
 
 **Phase 8 result: MVP shipped. README has hero/quickstart/examples/architecture/MCP/benchmarks; STATUS marked SHIPPED. 354 tests passing, 1 live-skip. All 9 CLI commands + web UI + MCP server working on fixtures and real repos (fastapi).**
 
-### Phase 9 — Stretch (optional, post-ship) [IN PROGRESS]
+### Phase 9 — Stretch (optional, post-ship) [NOT CONTINUED]
 - [x] T9.6 — Dead-code detection: analysis/refactor.py find_dead_code (functions/classes never an edge dst; excludes main/test_/dunders; methods opt-in) + `codegraph deadcode` command. 7 tests + live demo (sample_repo flags fetch_user/make_token/_PrivateForm/etc.). Feature-envy half deferred (needs attribute-access data)
 - [x] T9.1 — Git-blame ownership: analysis/ownership.py entity_ownership (git blame --line-porcelain, per-line author tally) + `codegraph owner <entity> --repo <root>` (table + primary owner). 8 tests (throwaway repo, no global config touched) + live demo. --repo must match indexed root; web panel deferred
 - [x] T9.3 — Layered-architecture analysis: analysis/patterns.py classify_layer + analyze_layers (file import graph → cross-layer flows + violations where lower imports higher) + `codegraph layers` command. 7 tests (layered fixture: data→presentation violation flagged, downward clean)
 - [ ] T9.2/T9.4/T9.5/T9.7/T9.8 — backlog (see plan/09-stretch.md)
 
-### Phase 10 — Language breadth [IN PROGRESS 1/7]
+### Phase 10 — Language breadth [NOT CONTINUED 1/7]
 - [x] T10.1 — Go parser: Language.GO enum + .go walker ext + parsers/go.py (function/method/struct/interface/imports/calls via tree-sitter) + queries/go.scm + sample_repo_go fixture + 24 tests. 401 tests passing.
 - [x] T10.2 — Rust parser: Language.RUST enum + .rs walker ext + parsers/rust.py (fn/struct/enum/impl/trait/use/calls via tree-sitter) + queries/rust.scm + sample_repo_rust fixture + 24 tests. 426 tests passing.
 - [x] T10.3 — Java parser: Language.JAVA enum + .java walker ext + parsers/java.py (class/enum/interface/method/constructor/imports/calls via tree-sitter) + queries/java.scm + sample_repo_java fixture + 24 tests. 451 tests passing.
@@ -452,7 +454,7 @@ Full interactive manual test of every user-facing surface (CLI, web UI, watch, M
 
 **Phase 12 result: MCP surface grew from 4 to 8 tools; 3 new CLI subcommands mirror the most useful tools for standalone use without an MCP client. 623 tests passing.**
 
-### Phase 13 — Multi-agent installer [IN PROGRESS 1/4]
+### Phase 13 — Multi-agent installer [NOT CONTINUED 1/4]
 - [x] T13.1 — Installer core + target registry: `codegraph/installer/` subpackage with `Target` ABC, `McpEntry` dataclass, JSON read-modify-write helpers (`_write_entry`/`_remove_entry`/`is_configured`), `_make_entry(db)` default entry builder (uses `sys.executable`), and registry (`register_target`/`get_target`/`list_targets`). Smoke importability list updated. 25 tests. 648 tests passing.
 - [x] T13.2 — Claude Code, Cursor, Codex, Gemini targets: `installer/targets/` subpackage with 4 classes auto-registered on `import codegraph.installer`. ClaudeCode: `~/.claude.json` / `.mcp.json`. Cursor: `~/.cursor/mcp.json` / `.cursor/mcp.json`. Codex: `~/.codex/config.json`. Gemini: `~/.gemini/settings.json`. `is_available()` checks `shutil.which` + dir heuristic. Smoke importability list updated. 42 tests. 690 tests passing.
 - [x] T13.3 — `codegraph install`/`uninstall` CLI: `install <target> [--db] [--location global|local] [--yes/-y] [--print-config]`; `uninstall <target> [--location] [--yes/-y]`. `--print-config` dry-run uses `_emit()` to avoid Rich line-wrapping JSON. Registry patched via fixture for tests (never touches real agent configs). Smoke expected-set updated. 15 tests. 705 tests passing.

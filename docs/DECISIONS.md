@@ -201,6 +201,8 @@ re-test). Nothing swept under the rug.
 
 ## Roadmap
 
+> Wrapped 2026-09-30: no further work is planned, and the deferred items below will not be worked on.
+
 Phases 10-13 ("best of both"), 14-18 ("actually usable"), and the 19-22/24/26-28 competitive
 hardening pass are complete:
 

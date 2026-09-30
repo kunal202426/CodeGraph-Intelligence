@@ -66,7 +66,7 @@ get more cross-cutting. [Full data + the honest story behind these numbers →](
 <br>
 
 > [!NOTE]
-> **Status: active development.** Core indexing, search, and MCP tools are stable.
+> **Status: no longer under active development.** Core indexing, search, and MCP tools are stable.
 > 1300 tests passing. Every user-facing surface manually tested: 21/21 passed, 6 issues fixed.
 > [Manual test →](docs/MANUAL_TEST_REPORT.md) · [Bench notes →](docs/QUALITY_REPORT_2026-07-01.md)
 > The MCP server works but is still preview, not production-ready.
