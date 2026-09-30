@@ -1972,10 +1972,32 @@ def test_get_context_batch_dedupes_repeated_target(indexed_db: Path) -> None:
 
 
 def test_get_context_batch_caps_at_five_queries(indexed_db: Path) -> None:
-    """More than 5 queries must not error -- extras are silently dropped."""
+    """More than 5 queries must not error -- extras are dropped, with a warning."""
     many = ["authenticate", "run_server", "boot", "User", "Session", "UserController", "LoginForm"]
     data = _call("get_context", {"query": many, "limit": 10})
     assert data["total"] >= 1
+
+
+def test_get_context_batch_overflow_names_the_dropped_queries(indexed_db: Path) -> None:
+    many = ["authenticate", "run_server", "boot", "User", "Session", "UserController", "LoginForm"]
+    data = _call("get_context", {"query": many, "limit": 10})
+    overflow = [w for w in data["warnings"] if "not run" in w]
+    assert len(overflow) == 1
+    assert "UserController" in overflow[0] and "LoginForm" in overflow[0]
+    assert "authenticate" not in overflow[0]
+
+
+def test_get_context_schema_accepts_more_than_five_queries() -> None:
+    """Real finding, live on Grafana (2026-09-30): the agent sent 6 queries, the MCP
+    layer rejected the call against the schema's maxItems before the handler ever ran
+    ("is too long"), and the retry cost a whole extra model turn (~108k cache-read
+    tokens, about 11% of the session). The handler-level test above calls the
+    function directly and so never saw the schema. The advertised schema itself must
+    accept an over-long list, since the handler already truncates it gracefully."""
+    import jsonschema
+
+    schema = next(t for t in mcp_server.tool_definitions() if t.name == "get_context").inputSchema
+    jsonschema.validate({"query": ["a", "b", "c", "d", "e", "f"]}, schema)
 
 
 def test_get_context_batch_respects_limit_across_all_queries(indexed_db: Path) -> None:

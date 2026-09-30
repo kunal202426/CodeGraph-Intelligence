@@ -451,7 +451,6 @@ def tool_definitions() -> list[Tool]:
                                 "type": "array",
                                 "items": {"type": "string"},
                                 "minItems": 1,
-                                "maxItems": 5,
                             },
                         ],
                         "description": (
@@ -1300,11 +1299,9 @@ def _get_context(args: dict[str, Any]) -> str:
     from codegraph.ai.tokens import estimate_tokens
 
     raw_query = args["query"]
-    queries = (
-        [str(q) for q in raw_query][:_MAX_BATCH_QUERIES]
-        if isinstance(raw_query, list)
-        else [str(raw_query)]
-    )
+    all_queries = [str(q) for q in raw_query] if isinstance(raw_query, list) else [str(raw_query)]
+    queries = all_queries[:_MAX_BATCH_QUERIES]
+    dropped_queries = all_queries[_MAX_BATCH_QUERIES:]
     if not queries:
         queries = [""]
     batched = len(queries) > 1
@@ -1327,6 +1324,11 @@ def _get_context(args: dict[str, Any]) -> str:
         # Skipped in batch mode: the low-confidence heuristic is tuned for a
         # single prose query, not a list of already-known symbol names.
         warnings: list[str] = []
+        if dropped_queries:
+            warnings.append(
+                f"Only the first {_MAX_BATCH_QUERIES} queries ran; not run: "
+                f"{dropped_queries}. Send those in a follow-up call if still needed."
+            )
         if (
             not batched
             and hits
