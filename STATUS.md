@@ -40,6 +40,10 @@
   usability, repo hygiene). No further work is planned. The last three changes (batched
   `get_context` queries, a non-fatal over-limit query batch, and the guide's each-symbol
   rule applying to every task) are merged to `main`; the experiment branches were deleted.
+  Project context and logs: [docs/PROJECT_CONTEXT.md](docs/PROJECT_CONTEXT.md),
+  [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/ONBOARDING.md](docs/ONBOARDING.md),
+  [docs/PROJECT_RULES.md](docs/PROJECT_RULES.md) and the experiment logs in
+  [docs/experiments/](docs/experiments/README.md).
   Safe to start a new session cold from this file.
 - **Tests:** 1300 passing, 1 live-skip (needs `ANTHROPIC_API_KEY`), 0 failing. Verified both
   locally and on GitHub Actions (`gh run list`) as of the last commit below. (This file's
